@@ -1,0 +1,3 @@
+interface:
+  display_name: "Break Free: GitHub flow"
+  short_description: "Track every task in a GitHub issue, verify with real results, watch CI and deployments, troubleshoot failures to root cause."

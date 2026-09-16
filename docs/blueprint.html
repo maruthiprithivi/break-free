@@ -1,0 +1,411 @@
+<title>Break Free Blueprint</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #F2F5F7;
+    --panel: #FFFFFF;
+    --ink: #17212B;
+    --muted: #5B6B7A;
+    --rule: #D3DBE2;
+    --lead: #D9531E;      /* frontier / lead */
+    --crew: #1F8A7E;      /* worker models */
+    --guard: #B8860B;     /* guards & policy */
+    --shadow: #6B4FBB;    /* ledger overlay */
+    --soft-lead: #FBE9E1;
+    --soft-crew: #DDF1EE;
+    --soft-guard: #F6EDCF;
+    --soft-shadow: #E8E2F7;
+    --code-bg: #E9EEF2;
+    --display: "Familjen Grotesk", "Helvetica Neue", Arial, sans-serif;
+    --body: "IBM Plex Sans", "Segoe UI", Roboto, sans-serif;
+    --mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0F161D; --panel: #161F28; --ink: #E7EDF2; --muted: #9AA9B6; --rule: #2C3944;
+      --lead: #F0774A; --crew: #3FB8A9; --guard: #D9AA2B; --shadow: #A08CE6;
+      --soft-lead: #3A2419; --soft-crew: #133330; --soft-guard: #352C10; --soft-shadow: #2A2340; --code-bg: #1F2A35;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0F161D; --panel: #161F28; --ink: #E7EDF2; --muted: #9AA9B6; --rule: #2C3944;
+    --lead: #F0774A; --crew: #3FB8A9; --guard: #D9AA2B; --shadow: #A08CE6;
+    --soft-lead: #3A2419; --soft-crew: #133330; --soft-guard: #352C10; --soft-shadow: #2A2340; --code-bg: #1F2A35;
+  }
+  body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15.5px; line-height: 1.55; padding-inline: 20px; padding-block: 40px 80px; }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  h1 { font-family: var(--display); font-weight: 700; font-size: clamp(30px, 5vw, 44px); line-height: 1.05; letter-spacing: -0.01em; margin: 0 0 10px; text-wrap: balance; }
+  h2 { font-family: var(--display); font-weight: 600; font-size: 24px; margin: 56px 0 8px; letter-spacing: -0.005em; text-wrap: balance; }
+  h3 { font-family: var(--display); font-weight: 600; font-size: 17px; margin: 24px 0 6px; }
+  p { max-width: 68ch; margin: 0 0 14px; }
+  .lede { color: var(--muted); font-size: 17px; max-width: 62ch; }
+  .eyebrow { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+  code, .mono { font-family: var(--mono); font-size: 0.9em; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+  figure { margin: 18px 0 26px; }
+  .fig { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 14px; overflow-x: auto; }
+  .fig svg { display: block; max-width: 100%; height: auto; min-width: 640px; color: var(--ink); font-family: var(--body); }
+  figcaption { color: var(--muted); font-size: 13.5px; margin-top: 8px; max-width: 72ch; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px 22px; font-size: 13px; color: var(--muted); margin: 0 0 8px; }
+  .legend span::before { content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  .legend .l::before { background: var(--lead); } .legend .c::before { background: var(--crew); } .legend .g::before { background: var(--guard); } .legend .s::before { background: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 12px 0 18px; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 10px; border-bottom: 1px solid var(--rule); }
+  th { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  .tablewrap { overflow-x: auto; }
+  .tier { display: inline-block; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; padding: 2px 7px; border-radius: 3px; white-space: nowrap; }
+  .now { background: var(--soft-lead); color: var(--lead); } .next { background: var(--soft-crew); color: var(--crew); } .later { background: var(--soft-shadow); color: var(--shadow); } .risk { background: var(--soft-guard); color: var(--guard); }
+  .roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin: 14px 0 6px; }
+  .role { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; }
+  .role h3 { margin: 0 0 4px; }
+  .role p { font-size: 14px; margin: 0 0 8px; color: var(--muted); }
+  .role ul { margin: 0; padding-left: 18px; font-size: 14px; }
+  .role li { margin: 4px 0; }
+  .role li b { font-weight: 600; }
+  .done { color: var(--crew); font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; }
+  .gap { color: var(--lead); font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; }
+  .callout { border-left: 3px solid var(--guard); background: var(--soft-guard); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 16px 0; font-size: 14.5px; max-width: 76ch; }
+  @media (max-width: 480px) { body { font-size: 15px; } .fig svg { min-width: 560px; } }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">break-free · v3.3 · cross-harness, cross-model coordination</p>
+  <h1>Break Free Blueprint</h1>
+  <p class="lede">How the pieces fit today — lead harness, crew models, the gateway between them, and the ledger that survives sessions, worktrees and merges — and what is still missing before it can act as facilitator, consigliere, coordinator, knowledge keeper and maintainer for all your coding work.</p>
+
+  <h2>1 · The system in one picture</h2>
+  <p>Everything runs on your machine. Any harness on the left is the <em>lead</em>: it talks to you, decomposes, decides, reviews. The gateway hands execution to any model on the right, holds the keys, enforces the guardrails, and writes everything durable into the ledger.</p>
+  <div class="legend"><span class="l">lead / frontier</span><span class="c">crew / worker models</span><span class="g">guards &amp; policy</span><span class="s">shared state</span></div>
+  <figure>
+    <div class="fig">
+    <svg viewBox="0 0 960 560" role="img" aria-label="Lead harnesses on the left connect over MCP to the break-free gateway in the middle, which routes to worker model providers on the right with fallback, and reads and writes the ledger, worktree registry and runtime log below it.">
+      <defs>
+        <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker>
+        <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#1F8A7E"/></marker>
+      </defs>
+      <!-- Lead harnesses -->
+      <text x="20" y="28" font-size="11" letter-spacing="1.5" fill="currentColor" opacity="0.6">LEAD HARNESS (any of)</text>
+      <g font-size="12.5" fill="currentColor">
+        <rect x="20" y="40" width="190" height="34" rx="4" fill="#FBE9E1" stroke="#D9531E"/><text x="32" y="62" fill="#17212B">Claude Code</text>
+        <rect x="20" y="82" width="190" height="34" rx="4" fill="#FBE9E1" stroke="#D9531E"/><text x="32" y="104" fill="#17212B">Codex  <tspan font-size="11" opacity="0.7">(via Responses shim)</tspan></text>
+        <rect x="20" y="124" width="190" height="34" rx="4" fill="#FBE9E1" stroke="#D9531E"/><text x="32" y="146" fill="#17212B">opencode · kiro · kimi</text>
+        <rect x="20" y="166" width="190" height="34" rx="4" fill="#FBE9E1" stroke="#D9531E"/><text x="32" y="188" fill="#17212B">agy · pi · omp</text>
+      </g>
+      <text x="20" y="226" font-size="11" fill="currentColor" opacity="0.7">each gets: MCP registration,</text>
+      <text x="20" y="241" font-size="11" fill="currentColor" opacity="0.7">2 skills, standing rules</text>
+      <!-- Bus from leads to gateway -->
+      <path d="M210 57 H250 V120 H300" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#a1)"/>
+      <path d="M210 99 H250" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <path d="M210 141 H250" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <path d="M210 183 H250 V120" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <text x="255" y="112" font-size="11" fill="currentColor">MCP (stdio)</text>
+      <!-- Gateway -->
+      <rect x="300" y="40" width="330" height="270" rx="6" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <text x="316" y="64" font-family="Familjen Grotesk, sans-serif" font-size="15" font-weight="600" fill="currentColor">break-free-gateway</text>
+      <text x="316" y="80" font-size="11" fill="currentColor" opacity="0.7">node · one process per checkout · holds the keys</text>
+      <g font-size="12" fill="currentColor">
+        <rect x="316" y="94" width="140" height="26" rx="3" fill="#FBE9E1" stroke="#D9531E" stroke-width="1"/><text x="324" y="111" fill="#17212B">run_plan · delegate</text>
+        <rect x="464" y="94" width="150" height="26" rx="3" fill="#FBE9E1" stroke="#D9531E" stroke-width="1"/><text x="472" y="111" fill="#17212B">supervise · review · panel</text>
+        <rect x="316" y="128" width="298" height="26" rx="3" fill="#F6EDCF" stroke="#B8860B" stroke-width="1"/><text x="324" y="145" fill="#17212B">verify runner · capability jail · deny lists · protected branches</text>
+        <rect x="316" y="162" width="144" height="26" rx="3" fill="#DDF1EE" stroke="#1F8A7E" stroke-width="1"/><text x="324" y="179" fill="#17212B">router + fallback</text>
+        <rect x="468" y="162" width="146" height="26" rx="3" fill="#DDF1EE" stroke="#1F8A7E" stroke-width="1"/><text x="476" y="179" fill="#17212B">MCP bridge (lends tools)</text>
+        <rect x="316" y="196" width="144" height="26" rx="3" fill="#E8E2F7" stroke="#6B4FBB" stroke-width="1"/><text x="324" y="213" fill="#17212B">ledger + worktrees</text>
+        <rect x="468" y="196" width="146" height="26" rx="3" fill="#E8E2F7" stroke="#6B4FBB" stroke-width="1"/><text x="476" y="213" fill="#17212B">jobs · sessions · log</text>
+        <rect x="316" y="230" width="298" height="26" rx="3" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="3 3"/><text x="324" y="247" fill="currentColor">--serve: Responses-API shim for Codex profiles (:18790)</text>
+        <rect x="316" y="264" width="298" height="26" rx="3" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="3 3"/><text x="324" y="281" fill="currentColor">harness profiles: run the whole lead harness ON a crew model</text>
+      </g>
+      <!-- Crew -->
+      <text x="690" y="28" font-size="11" letter-spacing="1.5" fill="currentColor" opacity="0.6">CREW (any of, with fallback)</text>
+      <g font-size="12.5">
+        <rect x="690" y="40" width="250" height="30" rx="4" fill="#DDF1EE" stroke="#1F8A7E"/><text x="702" y="60" fill="#17212B">DeepSeek · Kimi · Z.AI/GLM · MiniMax</text>
+        <rect x="690" y="78" width="250" height="30" rx="4" fill="#DDF1EE" stroke="#1F8A7E"/><text x="702" y="98" fill="#17212B">OpenRouter · OpenCode Zen · Ollama Cloud</text>
+        <rect x="690" y="116" width="250" height="30" rx="4" fill="#DDF1EE" stroke="#1F8A7E"/><text x="702" y="136" fill="#17212B">Ollama (local or LAN) · vLLM · LM Studio</text>
+      </g>
+      <path d="M630 175 H660 V93 H690" fill="none" stroke="#1F8A7E" stroke-width="1.6" marker-end="url(#a2)"/>
+      <text x="636" y="168" font-size="11" fill="#1F8A7E">chat/completions</text>
+      <text x="700" y="166" font-size="11" fill="currentColor" opacity="0.75">worker gets: jailed read/write/run/git/gh tools,</text>
+      <text x="700" y="181" font-size="11" fill="currentColor" opacity="0.75">CLAUDE.md/AGENTS.md, skills, ledger gotchas,</text>
+      <text x="700" y="196" font-size="11" fill="currentColor" opacity="0.75">worktree map, lent MCP tools — never keys</text>
+      <!-- Your other MCP servers -->
+      <rect x="690" y="222" width="250" height="34" rx="4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3"/>
+      <text x="702" y="243" font-size="12.5" fill="currentColor">your other MCP servers (postgres, browser…)</text>
+      <path d="M690 239 H641 V190" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#a1)"/>
+      <text x="646" y="230" font-size="11" fill="currentColor" opacity="0.8">lent per call,</text>
+      <text x="646" y="243" font-size="11" fill="currentColor" opacity="0.8">destructive</text>
+      <text x="646" y="256" font-size="11" fill="currentColor" opacity="0.8">tools filtered</text>
+      <!-- Durable state -->
+      <text x="20" y="360" font-size="11" letter-spacing="1.5" fill="currentColor" opacity="0.6">DURABLE STATE (plain files on disk)</text>
+      <g font-size="12" fill="currentColor">
+        <rect x="20" y="372" width="290" height="170" rx="4" fill="#E8E2F7" stroke="#6B4FBB"/>
+        <text x="32" y="392" font-weight="600" fill="#17212B">&lt;repo&gt;/.break-free/  <tspan font-weight="400" opacity="0.7">committed from main only</tspan></text>
+        <text x="32" y="412" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#17212B">tasks/T-001.md   notes/*.md   journal/*.md</text>
+        <text x="32" y="428" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#17212B">PLAN.md  HANDOFF.md  WORKTREES.md  CODE-MAP.md</text>
+        <text x="32" y="450" fill="#17212B" opacity="0.8">Obsidian-openable · read by every harness</text>
+        <text x="32" y="478" font-weight="600" fill="#17212B">&lt;repo&gt;/.git/break-free/  <tspan font-weight="400" opacity="0.7">shared, never committed</tspan></text>
+        <text x="32" y="496" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#17212B">worktrees.json   shadow/&lt;branch&gt;/…</text>
+        <text x="32" y="514" fill="#17212B" opacity="0.8">registry + per-worktree ledger overlays</text>
+        <text x="32" y="530" fill="#17212B" opacity="0.8">hooks/pre-commit (ledger guard)</text>
+
+        <rect x="330" y="372" width="300" height="170" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="342" y="392" font-weight="600">~/.config/model-gateway/</text>
+        <text x="342" y="412" font-family="IBM Plex Mono, monospace" font-size="11.5">config.json (0600: keys, aliases, chains)</text>
+        <text x="342" y="428" font-family="IBM Plex Mono, monospace" font-size="11.5">gateway.log (JSONL, redacted, rotated)</text>
+        <text x="342" y="444" font-family="IBM Plex Mono, monospace" font-size="11.5">sessions/   sessions/jobs/</text>
+        <text x="342" y="460" font-family="IBM Plex Mono, monospace" font-size="11.5">harness/*.env   break-free.sh</text>
+        <text x="342" y="484" opacity="0.8">+ &lt;repo&gt;/.model-gateway.json — project overrides</text>
+        <text x="342" y="500" opacity="0.8">  (models, aliases, fallback; never keys)</text>
+
+        <rect x="650" y="372" width="290" height="170" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="662" y="392" font-weight="600">GitHub</text>
+        <text x="662" y="412" opacity="0.85">issues / PRs / Actions via gh (fine-grained PAT)</text>
+        <text x="662" y="428" opacity="0.85">no delete · no force · merge only if told</text>
+        <text x="662" y="452" opacity="0.85">break-free-ledger-guard.yml fails any PR</text>
+        <text x="662" y="468" opacity="0.85">that touches .break-free/</text>
+        <text x="662" y="492" opacity="0.85">break-free-github-flow: every task has an</text>
+        <text x="662" y="508" opacity="0.85">issue; Actions watched to root cause</text>
+      </g>
+      <path d="M400 310 V372" fill="none" stroke="#6B4FBB" stroke-width="1.6" marker-end="url(#a1)" marker-start="url(#a1)"/>
+      <path d="M480 310 V372" fill="none" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <path d="M560 310 V340 H760 V372" fill="none" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <text x="408" y="345" font-size="11" fill="currentColor">read/write</text>
+      <text x="488" y="345" font-size="11" fill="currentColor">log · jobs</text>
+      <text x="600" y="335" font-size="11" fill="currentColor">gh</text>
+    </svg>
+    </div>
+    <figcaption>One gateway process per checkout. Leads only ever see the gateway's tools; crew models only ever see the jailed tools and context the gateway assembles for them. Keys never leave the gateway.</figcaption>
+  </figure>
+
+  <h2>2 · What gets installed where</h2>
+  <p>Every harness receives the same three things in its own conventions, so the doctrine, the tools and the ledger are identical no matter which lead you open.</p>
+  <div class="tablewrap">
+  <table>
+    <tr><th>harness</th><th>MCP server</th><th>skills (both)</th><th>standing rules</th></tr>
+    <tr><td>Claude Code</td><td><code>claude mcp add-json</code> (user) · <code>.mcp.json</code> (project)</td><td><code>~/.claude/skills/</code> · <code>.claude/skills/</code> + <code>/break-free-*</code> commands</td><td><code>~/.claude/CLAUDE.md</code> · <code>CLAUDE.md</code></td></tr>
+    <tr><td>Codex</td><td><code>~/.codex/config.toml [mcp_servers]</code> + <code>break_free_*</code> profiles via shim</td><td><code>~/.agents/skills/</code> · <code>.agents/skills/</code></td><td><code>~/.codex/AGENTS.md</code> · <code>AGENTS.md</code></td></tr>
+    <tr><td>opencode</td><td><code>~/.config/opencode/opencode.json mcp.*</code> · <code>opencode.json</code></td><td><code>~/.config/opencode/skills/</code> (+ reads <code>.agents/skills</code>)</td><td><code>~/.config/opencode/AGENTS.md</code> · <code>AGENTS.md</code></td></tr>
+    <tr><td>Kiro CLI</td><td><code>~/.kiro/settings/mcp.json</code> · <code>.kiro/settings/mcp.json</code></td><td><code>~/.kiro/skills/</code> · <code>.kiro/skills/</code></td><td><code>~/.kiro/steering/break-free.md</code> · <code>.kiro/steering/</code></td></tr>
+    <tr><td>Kimi Code CLI</td><td><code>~/.kimi/mcp.json</code></td><td><code>~/.kimi/skills/</code> (+ <code>.agents/skills</code>)</td><td><code>AGENTS.md</code> (project only)</td></tr>
+    <tr><td>Antigravity (agy)</td><td><code>~/.gemini/config/mcp_config.json</code> · <code>.agents/mcp_config.json</code></td><td><code>~/.gemini/config/skills/</code></td><td><code>~/.gemini/GEMINI.md</code> · <code>.agents/rules/break-free.md</code></td></tr>
+    <tr><td>pi / oh-my-pi</td><td><code>~/.pi/agent/mcp.json</code> (adapter) · <code>~/.omp/agent/mcp.json</code> · <code>.omp/mcp.json</code></td><td><code>~/.pi/agent/skills/</code> · <code>~/.omp/agent/skills/</code></td><td><code>~/.pi/agent/AGENTS.md</code> · <code>~/.omp/agent/AGENTS.md</code></td></tr>
+  </table>
+  </div>
+
+  <h2>3 · Worktrees, the ledger, and why a merge can't overwrite main</h2>
+  <p>Several leads work at once, each in its own worktree. Knowledge is layered so that git only ever sees the ledger change on <code>main</code>; a branch PR carries code and nothing else.</p>
+  <figure>
+    <div class="fig">
+    <svg viewBox="0 0 960 470" role="img" aria-label="Main checkout writes the committed ledger; linked worktrees read main's live ledger through a local shadow overlay and write only to the overlay; the gateway absorbs overlays into main with ledger_merge_from; a pre-commit hook and a PR workflow block any .break-free change on feature branches; the code PR merges cleanly.">
+      <defs>
+        <marker id="b1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker>
+        <marker id="b2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6B4FBB"/></marker>
+        <marker id="b3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#B8860B"/></marker>
+      </defs>
+      <!-- main checkout -->
+      <rect x="20" y="30" width="300" height="200" rx="6" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <text x="34" y="54" font-family="Familjen Grotesk, sans-serif" font-size="15" font-weight="600" fill="currentColor">main checkout</text>
+      <text x="34" y="70" font-size="11" fill="currentColor" opacity="0.7">lead: Claude Code · branch main</text>
+      <rect x="34" y="84" width="272" height="60" rx="4" fill="#E8E2F7" stroke="#6B4FBB"/>
+      <text x="46" y="104" font-size="12.5" font-weight="600" fill="#17212B">.break-free/  (committed)</text>
+      <text x="46" y="122" font-size="11.5" fill="#17212B">tasks T-001… · notes · journal · HANDOFF</text>
+      <text x="46" y="137" font-size="11.5" fill="#17212B">the only copy git ever sees change</text>
+      <rect x="34" y="154" width="272" height="60" rx="4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3"/>
+      <text x="46" y="174" font-size="12.5" font-weight="600" fill="currentColor">.git/break-free/  (shared, local)</text>
+      <text x="46" y="192" font-size="11.5" fill="currentColor">worktrees.json — who is where, doing what,</text>
+      <text x="46" y="207" font-size="11.5" fill="currentColor">status + reason, issues, PRs, hand-offs</text>
+
+      <!-- worktree A -->
+      <rect x="380" y="30" width="270" height="140" rx="6" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <text x="394" y="54" font-family="Familjen Grotesk, sans-serif" font-size="15" font-weight="600" fill="currentColor">worktree feat/api</text>
+      <text x="394" y="70" font-size="11" fill="currentColor" opacity="0.7">lead: Codex · owns T-feat-api-001…</text>
+      <rect x="394" y="84" width="242" height="34" rx="4" fill="#E8E2F7" stroke="#6B4FBB"/>
+      <text x="406" y="106" font-size="12" fill="#17212B">overlay: .git/break-free/shadow/feat-api/</text>
+      <rect x="394" y="126" width="242" height="30" rx="4" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="3 3"/>
+      <text x="406" y="145" font-size="11.5" fill="currentColor">.break-free/ as inherited — never modified</text>
+      <!-- worktree B -->
+      <rect x="380" y="190" width="270" height="140" rx="6" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <text x="394" y="214" font-family="Familjen Grotesk, sans-serif" font-size="15" font-weight="600" fill="currentColor">worktree feat/docs</text>
+      <text x="394" y="230" font-size="11" fill="currentColor" opacity="0.7">lead: kiro · owns T-feat-docs-001…</text>
+      <rect x="394" y="244" width="242" height="34" rx="4" fill="#E8E2F7" stroke="#6B4FBB"/>
+      <text x="406" y="266" font-size="12" fill="#17212B">overlay: .git/break-free/shadow/feat-docs/</text>
+      <rect x="394" y="286" width="242" height="30" rx="4" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="3 3"/>
+      <text x="406" y="305" font-size="11.5" fill="currentColor">.break-free/ as inherited — never modified</text>
+
+      <!-- reads: main live ledger -> worktrees -->
+      <path d="M306 114 H350 V101 H394" fill="none" stroke="#6B4FBB" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#b2)"/>
+      <path d="M350 114 V261 H394" fill="none" stroke="#6B4FBB" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#b2)"/>
+      <text x="322" y="97" font-size="10.5" fill="#6B4FBB">reads live</text>
+      <!-- absorb: worktrees -> main -->
+      <path d="M636 101 H680 V350 H170 V230" fill="none" stroke="#6B4FBB" stroke-width="1.8" marker-end="url(#b2)"/>
+      <path d="M636 261 H680" fill="none" stroke="#6B4FBB" stroke-width="1.8"/>
+      <text x="300" y="366" font-size="12" font-weight="600" fill="#6B4FBB">ledger_merge_from (auto on ledger_resume / worktree_remove)</text>
+      <text x="300" y="382" font-size="11" fill="currentColor" opacity="0.8">tasks by id, newer wins, logs unioned · notes: divergent text kept + "From feat/api" · journal unioned · idempotent · commit:true</text>
+
+      <!-- guards -->
+      <rect x="700" y="30" width="240" height="140" rx="6" fill="#F6EDCF" stroke="#B8860B" stroke-width="1.4"/>
+      <text x="712" y="54" font-family="Familjen Grotesk, sans-serif" font-size="15" font-weight="600" fill="#17212B">guards</text>
+      <text x="712" y="76" font-size="11.5" fill="#17212B">1 · git_commit strips .break-free/ in a</text>
+      <text x="712" y="90" font-size="11.5" fill="#17212B">    linked worktree</text>
+      <text x="712" y="110" font-size="11.5" fill="#17212B">2 · pre-commit hook (common hooks dir,</text>
+      <text x="712" y="124" font-size="11.5" fill="#17212B">    all worktrees) refuses such commits</text>
+      <text x="712" y="144" font-size="11.5" fill="#17212B">3 · GitHub workflow fails any PR whose</text>
+      <text x="712" y="158" font-size="11.5" fill="#17212B">    diff touches .break-free/</text>
+      <path d="M700 100 H660" fill="none" stroke="#B8860B" stroke-width="1.4" marker-end="url(#b3)"/>
+      <path d="M700 120 H690 V260 H660" fill="none" stroke="#B8860B" stroke-width="1.4" marker-end="url(#b3)"/>
+
+      <!-- PR flow -->
+      <rect x="700" y="200" width="240" height="130" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="712" y="224" font-family="Familjen Grotesk, sans-serif" font-size="15" font-weight="600" fill="currentColor">GitHub PR: feat/api → main</text>
+      <text x="712" y="246" font-size="11.5" fill="currentColor">carries code only; .break-free/ unchanged</text>
+      <text x="712" y="264" font-size="11.5" fill="currentColor">lead on main: ledger_resume (absorbs) →</text>
+      <text x="712" y="280" font-size="11.5" fill="currentColor">review what came in → merge_from commit →</text>
+      <text x="712" y="296" font-size="11.5" fill="currentColor">merge the PR → worktree shows "merged" →</text>
+      <text x="712" y="312" font-size="11.5" fill="currentColor">worktree_remove {reason} · branch kept</text>
+
+      <!-- registry lines -->
+      <path d="M306 184 H360 V420 H520 V330" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 3"/>
+      <path d="M520 420 V170" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 3"/>
+      <text x="380" y="438" font-size="11" fill="currentColor" opacity="0.8">every checkout reads/writes the same registry: worktree_register · _update · _handoff · heartbeat</text>
+    </svg>
+    </div>
+    <figcaption>Worktrees see main's knowledge live and write only to a local overlay. Main pulls overlays in with conservative merge rules; three independent guards make sure a branch never carries ledger changes into a PR. A merge therefore has nothing to overwrite.</figcaption>
+  </figure>
+
+  <h2>4 · One task, end to end</h2>
+  <p>The doctrine in motion: the frontier lead spends its tokens on judgement, the crew on execution, and the gateway on proof.</p>
+  <figure>
+    <div class="fig">
+    <svg viewBox="0 0 960 250" role="img" aria-label="Flow from lead decomposing and writing instructions, to run_plan dispatching parallel workers, to gateway-run verify commands and independent review, back to the lead judging and committing, with the ledger updated at each step.">
+      <defs><marker id="c1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+      <g font-size="12" fill="currentColor">
+        <rect x="20" y="40" width="170" height="90" rx="5" fill="#FBE9E1" stroke="#D9531E"/>
+        <text x="32" y="62" font-weight="600" fill="#17212B">LEAD decides</text>
+        <text x="32" y="80" font-size="11.5" fill="#17212B">ledger_resume · code_map</text>
+        <text x="32" y="95" font-size="11.5" fill="#17212B">decompose · acceptance</text>
+        <text x="32" y="110" font-size="11.5" fill="#17212B">criteria · verify cmd · model</text>
+        <text x="32" y="125" font-size="11.5" fill="#17212B">per task · caps · deps</text>
+
+        <rect x="240" y="40" width="170" height="90" rx="5" fill="#DDF1EE" stroke="#1F8A7E"/>
+        <text x="252" y="62" font-weight="600" fill="#17212B">CREW executes</text>
+        <text x="252" y="80" font-size="11.5" fill="#17212B">run_plan: N workers in</text>
+        <text x="252" y="95" font-size="11.5" fill="#17212B">parallel, deps honoured,</text>
+        <text x="252" y="110" font-size="11.5" fill="#17212B">prereq reports handed down,</text>
+        <text x="252" y="125" font-size="11.5" fill="#17212B">run_command to self-test</text>
+
+        <rect x="460" y="40" width="170" height="90" rx="5" fill="#F6EDCF" stroke="#B8860B"/>
+        <text x="472" y="62" font-weight="600" fill="#17212B">GATEWAY proves</text>
+        <text x="472" y="80" font-size="11.5" fill="#17212B">runs verify itself (real exit</text>
+        <text x="472" y="95" font-size="11.5" fill="#17212B">code) · review by another</text>
+        <text x="472" y="110" font-size="11.5" fill="#17212B">vendor · supervisor can't</text>
+        <text x="472" y="125" font-size="11.5" fill="#17212B">accept a failing verify</text>
+
+        <rect x="680" y="40" width="170" height="90" rx="5" fill="#FBE9E1" stroke="#D9531E"/>
+        <text x="692" y="62" font-weight="600" fill="#17212B">LEAD owns</text>
+        <text x="692" y="80" font-size="11.5" fill="#17212B">reads report + diff · pushes</text>
+        <text x="692" y="95" font-size="11.5" fill="#17212B">back via session_id · commits</text>
+        <text x="692" y="110" font-size="11.5" fill="#17212B">or has worker open PR ·</text>
+        <text x="692" y="125" font-size="11.5" fill="#17212B">tells you which model did it</text>
+      </g>
+      <path d="M190 85 H240" fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#c1)"/>
+      <path d="M410 85 H460" fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#c1)"/>
+      <path d="M630 85 H680" fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#c1)"/>
+      <text x="196" y="78" font-size="10.5" fill="currentColor">instructions</text>
+      <text x="418" y="78" font-size="10.5" fill="currentColor">reports</text>
+      <text x="636" y="78" font-size="10.5" fill="currentColor">verdicts</text>
+      <!-- failure loop -->
+      <path d="M545 130 V160 H325 V130" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#c1)"/>
+      <text x="355" y="174" font-size="10.5" fill="currentColor">fail → dependants skipped · supervise loops with feedback</text>
+      <!-- ledger bar -->
+      <rect x="20" y="196" width="830" height="36" rx="4" fill="#E8E2F7" stroke="#6B4FBB"/>
+      <text x="32" y="218" font-size="12" fill="#17212B"><tspan font-weight="600">ledger, throughout:</tspan> task created → in_progress → outcome + verify result + review verdict → journal line → HANDOFF.md regenerated · worker gotchas via ledger_note</text>
+      <path d="M105 130 V196" fill="none" stroke="#6B4FBB" stroke-width="1.2"/><path d="M325 130 V196" fill="none" stroke="#6B4FBB" stroke-width="1.2"/><path d="M765 130 V196" fill="none" stroke="#6B4FBB" stroke-width="1.2"/>
+    </svg>
+    </div>
+    <figcaption>Verification is specified by the lead, executed by the gateway and workers, never narrated. Every step leaves a trace in the ledger, so a new session — in any harness — can pick up mid-flight.</figcaption>
+  </figure>
+
+  <h2>5 · What's still missing</h2>
+  <p>Mapped to the roles you named. <span class="done">DONE</span> marks what v3.2 already covers; <span class="gap">GAP</span> is what it would take to be complete. Priorities: <span class="tier now">now</span> unblocks daily use or closes a risk, <span class="tier next">next</span> makes it richer, <span class="tier later">later</span> is scale-out.</p>
+
+  <div class="callout"><strong>One risk to close first.</strong> Notes written by workers (<code>ledger_note</code>) are injected into every later worker's prompt. A model that reads a poisoned README can write a note that instructs the next model. Worker-written notes should land in quarantine (<code>source: worker</code>, not injected) until the lead promotes them. Small change, real attack surface.</div>
+
+  <div class="roles">
+    <div class="role">
+      <h3>Facilitator / concierge</h3>
+      <p>Gets the right work to the right model with minimal ceremony.</p>
+      <ul>
+        <li><span class="done">DONE</span> aliases + fallback chains, live model menus, chat-driven model switching (user/project), Codex shim, harness profiles, six extra harnesses.</li>
+        <li><span class="gap">GAP</span> <span class="tier now">now</span> <b>Cost &amp; budget:</b> price table per model, $ per task/plan/day in <code>gateway_logs</code>, budget caps that stop a plan instead of silently draining a key.</li>
+        <li><span class="gap">GAP</span> <span class="tier next">next</span> <b>Evidence-based routing:</b> keep a per-task-type scorecard (review verdicts, verify pass rate, latency, cost) and let <code>route</code> recommend model + caps + verify for a new task; <code>run_plan</code> uses it when <code>model</code> is omitted.</li>
+        <li><span class="gap">GAP</span> <span class="tier next">next</span> <b>Intake:</b> a <code>plan_from_issue</code> that turns a GitHub issue or a paragraph into a proposed <code>run_plan</code> (tasks, deps, verify) for the lead to edit — the concierge desk.</li>
+      </ul>
+    </div>
+    <div class="role">
+      <h3>Consigliere</h3>
+      <p>Judgement and oversight the lead can trust without babysitting.</p>
+      <ul>
+        <li><span class="done">DONE</span> gateway-run verify, review by another vendor, supervise loop, panels, least-privilege caps, destructive-tool filtering.</li>
+        <li><span class="gap">GAP</span> <span class="tier now">now</span> <b>Note quarantine</b> (above) and <b>untrusted-content labelling</b> of worker output before it enters the ledger.</li>
+        <li><span class="gap">GAP</span> <span class="tier now">now</span> <b>Risk tiers as policy, not prose:</b> <code>.model-gateway.json</code> rules such as "paths matching auth/** require review:true and a different vendor", "never delegate files matching secrets" — enforced by the gateway, not by the skill text.</li>
+        <li><span class="gap">GAP</span> <span class="tier next">next</span> <b>Escalation ladder:</b> after N failed rounds, auto-escalate to <code>strong</code>, then to the lead with a one-paragraph brief and the diff; record why in the task.</li>
+        <li><span class="gap">GAP</span> <span class="tier next">next</span> <b>Vendor scorecards:</b> which model's work gets rejected most, per task type — feeds routing and your buying decisions.</li>
+      </ul>
+    </div>
+    <div class="role">
+      <h3>Coordinator</h3>
+      <p>Keeps many agents and worktrees from stepping on each other.</p>
+      <ul>
+        <li><span class="done">DONE</span> shared worktree registry, statuses with reasons, hand-offs, overlay ledger + absorb, three merge guards, run_plan dependency graph, async jobs.</li>
+        <li><span class="gap">GAP</span> <span class="tier now">now</span> <b>Module claims &amp; conflict warning:</b> tasks/worktrees declare the paths they own (from <code>code_map</code>); the gateway warns when two active worktrees claim overlapping modules and shows it in <code>worktree_list</code>.</li>
+        <li><span class="gap">GAP</span> <span class="tier next">next</span> <b>Events instead of polling:</b> a tiny local event log (<code>.git/break-free/events.jsonl</code>) + <code>bf watch</code> / desktop notification when a worktree is blocked, hands off, or a job finishes; harness hooks (Claude hooks, Codex notify) auto-register the worktree and heartbeat at session start.</li>
+        <li><span class="gap">GAP</span> <span class="tier next">next</span> <b>Cross-harness live hand-off:</b> "continue this in Codex" — a <code>handoff_pack</code> that bundles task, overlay, session transcript summary and the exact command to launch the other harness in the right worktree.</li>
+        <li><span class="gap">GAP</span> <span class="tier later">later</span> <b>Multi-machine:</b> registry and overlays synced through a git ref (<code>refs/break-free/*</code>) or a small shared store, so a teammate's worktree on another laptop appears in your map.</li>
+      </ul>
+    </div>
+    <div class="role">
+      <h3>Knowledge keeper</h3>
+      <p>Makes what was learned findable, current and reusable.</p>
+      <ul>
+        <li><span class="done">DONE</span> tasks / notes / journal / handoff / code map as Markdown, worker injection of decisions &amp; gotchas, Obsidian-compatible, survives sessions and merges.</li>
+        <li><span class="gap">GAP</span> <span class="tier now">now</span> <b>Staleness &amp; hygiene:</b> flag notes that reference files no longer in <code>code_map</code>, tasks done &gt;30 days → archive, journal rotation, size caps; a <code>ledger_doctor</code>.</li>
+        <li><span class="gap">GAP</span> <span class="tier next">next</span> <b>Real search:</b> local embeddings (Ollama) over notes + journal + task outcomes; <code>note_search</code> becomes semantic; workers get the 5 most relevant notes for <em>their</em> task, not the 12 newest.</li>
+        <li><span class="gap">GAP</span> <span class="tier next">next</span> <b>Decisions as ADRs</b> with <code>supersedes</code> links and a generated CHANGELOG from the journal; <b>automatic session digests</b> (what a worker learned) proposed as notes for the lead to accept.</li>
+        <li><span class="gap">GAP</span> <span class="tier later">later</span> <b>User-level knowledge:</b> conventions that hold across all your repos (<code>~/.config/model-gateway/knowledge/</code>) layered under every project ledger.</li>
+      </ul>
+    </div>
+    <div class="role">
+      <h3>Maintainer</h3>
+      <p>Keeps the repo, the crew and Break Free itself healthy.</p>
+      <ul>
+        <li><span class="done">DONE</span> installer with preflight/postflight, doctor (model drift, log analysis, shim, extra agents), uninstall, selftest with fake CLIs, 40 e2e tests.</li>
+        <li><span class="gap">GAP</span> <span class="tier now">now</span> <b>Steward routine:</b> a scheduled <code>bf steward</code> that absorbs overlays, prunes merged worktrees (proposes, doesn't delete), re-runs the verify suite on main after merges, refreshes the code map, and writes a morning brief into HANDOFF.md.</li>
+        <li><span class="gap">GAP</span> <span class="tier next">next</span> <b>Repo vitals in the ledger:</b> tests/lint/coverage/dependency freshness per commit, so "is main green?" is a ledger read.</li>
+        <li><span class="gap">GAP</span> <span class="tier next">next</span> <b>Self-update &amp; versioning:</b> <code>setup.mjs --update</code> from a release, pinned versions in the answers file, migration notes; tests against the real CLIs in CI.</li>
+        <li><span class="gap">GAP</span> <span class="tier later">later</span> <b>Dashboard:</b> a local HTML view generated from ledger + registry + log — the picture on this page, live.</li>
+      </ul>
+    </div>
+    <div class="role">
+      <h3>Cross-harness parity</h3>
+      <p>Same behaviour whichever lead you open.</p>
+      <ul>
+        <li><span class="done">DONE</span> one skill body for all harnesses, marker-based rules, generic MCP registration, shared ledger and registry.</li>
+        <li><span class="gap">GAP</span> <span class="tier next">next</span> <b>Harness capability matrix</b> in doctor: which harness supports hooks, skills auto-load, MCP prompts — and per-harness adapters where the rule text isn't enough (e.g. Kimi has no global instructions file).</li>
+        <li><span class="gap">GAP</span> <span class="tier later">later</span> <b>Other transports:</b> MCP over HTTP for remote/IDE harnesses (Zed, JetBrains via ACP), so the gateway can sit on one box and serve several.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>6 · Suggested order</h2>
+  <div class="tablewrap">
+  <table>
+    <tr><th>step</th><th>what</th><th>why first</th><th>size</th></tr>
+    <tr><td>1</td><td>Note quarantine + untrusted-content labels</td><td>closes a prompt-injection path between workers</td><td>small</td></tr>
+    <tr><td>2</td><td>Cost/budget accounting</td><td>you'll run many parallel crews; spend must be visible and capped</td><td>small–medium</td></tr>
+    <tr><td>3</td><td>Policy rules (risk tiers) in <code>.model-gateway.json</code></td><td>turns the doctrine into enforcement</td><td>medium</td></tr>
+    <tr><td>4</td><td>Module claims + conflict warnings</td><td>the next multi-worktree pain after merges</td><td>medium</td></tr>
+    <tr><td>5</td><td>Steward routine + ledger hygiene</td><td>keeps main "always updated" without a human remembering to</td><td>medium</td></tr>
+    <tr><td>6</td><td>Events + harness hooks + hand-off packs</td><td>coordination stops depending on the agent reading the rule</td><td>medium</td></tr>
+    <tr><td>7</td><td>Scorecards → evidence-based routing → semantic search</td><td>the system starts learning which crew to trust for what</td><td>larger</td></tr>
+  </table>
+  </div>
+  <p class="lede" style="font-size:14px">Items marked DONE ship in the current release; each remaining step is scoped to ship as its own tested increment.</p>
+</div>

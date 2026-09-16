@@ -1,0 +1,4 @@
+node_modules
+dist
+.model-gateway.json
+*.local.json

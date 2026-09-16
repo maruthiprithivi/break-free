@@ -1,0 +1,22 @@
+{
+  "$comment": "Project-scoped registration for Claude Code: save as <repo>/.mcp.json. ${VAR} expands from your shell env. Alternatively: claude mcp add --scope user break-free-gateway -- node /ABS/PATH/model-gateway/dist/index.js",
+  "mcpServers": {
+    "break-free-gateway": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/ABS/PATH/model-gateway/dist/index.js"],
+      "env": {
+        "MODEL_GATEWAY_WORKSPACE": "${CLAUDE_PROJECT_DIR}",
+        "DEEPSEEK_API_KEY": "${DEEPSEEK_API_KEY:-}",
+        "MOONSHOT_API_KEY": "${MOONSHOT_API_KEY:-}",
+        "MINIMAX_API_KEY": "${MINIMAX_API_KEY:-}",
+        "ZAI_API_KEY": "${ZAI_API_KEY:-}",
+        "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY:-}",
+        "OPENCODE_API_KEY": "${OPENCODE_API_KEY:-}",
+        "OLLAMA_API_KEY": "${OLLAMA_API_KEY:-}",
+        "GH_TOKEN": "${GH_TOKEN:-}"
+      },
+      "timeout": 900000
+    }
+  }
+}

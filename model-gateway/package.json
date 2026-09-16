@@ -1,0 +1,46 @@
+{
+  "name": "break-free-gateway",
+  "version": "3.3.0",
+  "description": "break-free-gateway: MCP server that lets Claude Code / Codex lead while other models (DeepSeek, Ollama local/cloud, Kimi, MiniMax, Z.AI, OpenRouter, OpenCode Zen, vLLM) execute \u2014 parallel plans, verification gates, review, supervision, async jobs, MCP bridge and a durable Markdown ledger, with configurable fallback chains.",
+  "type": "module",
+  "bin": {
+    "break-free-gateway": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "smoke": "node dist/index.js --selftest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/<you>/break-free.git"
+  },
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "codex",
+    "opencode",
+    "multi-agent",
+    "deepseek",
+    "kimi",
+    "ollama",
+    "orchestration",
+    "worktrees"
+  ]
+}

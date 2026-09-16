@@ -1,0 +1,28 @@
+# --- private hand-over material (research, build notes, personal answers) — never published
+.private/
+
+# --- build & deps
+model-gateway/node_modules/
+model-gateway/dist/
+node_modules/
+*.tsbuildinfo
+
+# --- installer artefacts
+*.bak
+setup-report.json
+answers.json
+answers-*.json
+!setup/answers.example.json
+
+# --- gateway runtime state (lives in ~/.config/model-gateway, but just in case)
+gateway.log*
+serve.log
+serve.pid
+sessions/
+
+# --- OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

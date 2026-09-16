@@ -1,0 +1,78 @@
+{
+  "$comment": "Copy to ~/.config/model-gateway/config.json (user-wide) or <repo>/.model-gateway.json (project). Keys can be literal or \"${ENV_VAR}\" references. Everything here is optional; built-in defaults cover the rest.",
+
+  "defaults": {
+    "model": "fast",
+    "reviewer": "reviewer",
+    "supervisor": "strong",
+    "temperature": 0.2,
+    "maxTokens": 8192,
+    "timeoutMs": 180000,
+    "maxToolIterations": 25
+  },
+
+  "fallback": {
+    "enabled": true,
+    "chain": ["openrouter/deepseek/deepseek-v4-flash", "ollama/qwen3:8b"],
+    "retryOn": ["rate_limit", "server_error", "timeout", "network", "no_key", "not_found", "auth"],
+    "retriesPerCandidate": 1,
+    "retryDelayMs": 1500
+  },
+
+  "providers": {
+    "deepseek":     { "apiKey": "${DEEPSEEK_API_KEY}" },
+    "kimi":         { "apiKey": "${MOONSHOT_API_KEY}" },
+    "minimax":      { "apiKey": "${MINIMAX_API_KEY}" },
+    "zai":          { "apiKey": "${ZAI_API_KEY}" },
+    "openrouter":   { "apiKey": "${OPENROUTER_API_KEY}" },
+    "opencode":     { "apiKey": "${OPENCODE_API_KEY}" },
+    "ollama-cloud": { "apiKey": "${OLLAMA_API_KEY}" },
+    "ollama":       { "baseUrl": "http://localhost:11434/v1", "defaultModel": "qwen3-coder:30b" },
+    "lmstudio":     { "baseUrl": "http://localhost:1234/v1", "requiresKey": false, "defaultModel": "local-model" }
+  },
+
+  "aliases": {
+    "fast":     { "description": "cheap worker", "candidates": ["deepseek/deepseek-v4-flash", "zai/glm-5.3-flash", "opencode/deepseek-v4-flash", "ollama/qwen3-coder:30b"] },
+    "strong":   { "description": "hard tasks / supervision", "candidates": ["deepseek/deepseek-v4-pro", "kimi/kimi-k3", "zai/glm-5.3", "minimax/MiniMax-M3"] },
+    "reviewer": { "description": "different vendor than the worker", "candidates": ["kimi/kimi-k2.7-code", "zai/glm-5.3", "minimax/MiniMax-M2.7", "deepseek/deepseek-v4-pro"], "temperature": 0.1 },
+    "local":    ["ollama/qwen3-coder:30b", "ollama/qwen3:8b", "lmstudio"],
+    "thinker":  { "description": "DeepSeek with thinking on", "candidates": ["deepseek/deepseek-v4-pro"], "maxTokens": 16000 }
+  },
+
+  "github": {
+    "protectedBranches": ["main", "master", "production", "release"],
+    "allowPush": true,
+    "allowMerge": true
+  },
+
+  "workers": {
+    "projectInstructions": true,
+    "maxContextChars": 40000,
+    "maxConcurrency": 4,
+    "allowedCommands": ["npm test", "npm run", "npx vitest", "pytest", "go test", "cargo test", "make test"],
+    "commandTimeoutMs": 600000,
+    "mcp": {
+      "discover": true,
+      "denyTools": ["*delete*", "*remove*", "*drop*", "*destroy*", "*purge*", "*wipe*", "*truncate*"],
+      "servers": {
+        "postgres":   { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-postgres", "${DATABASE_URL}"], "allowTools": ["query"] },
+        "docs":       { "url": "https://mcp.example.com/mcp", "headers": { "Authorization": "Bearer ${DOCS_MCP_TOKEN}" } }
+      }
+    }
+  },
+
+  "budget": { "perTaskUsd": 1, "perPlanUsd": 10, "perDayUsd": 40, "warnAt": 0.8 },
+  "pricing": { "deepseek/deepseek-v4-pro": { "input": 0.55, "output": 2.19 } },
+  "policy": {
+    "rules": [
+      { "match": ["infra/prod/**", "**/*.pem"], "action": "deny", "reason": "never delegated" },
+      { "match": "src/auth/**", "action": "review", "reason": "auth changes need a second vendor's review" }
+    ]
+  },
+  "steward": { "verify": "npm test", "archiveDoneAfterDays": 30, "journalKeepDays": 90 },
+
+  "workspace": {
+    "denyPatterns": ["**/*.sqlite", "infra/secrets/**"],
+    "maxFileBytes": 200000
+  }
+}

@@ -1,0 +1,15 @@
+# Append to ~/.codex/config.toml  (or run: codex mcp add break_free_gateway -- node /ABS/PATH/model-gateway/dist/index.js)
+# Replace /ABS/PATH with the absolute path of the model-gateway folder.
+
+[mcp_servers.break_free_gateway]
+command = "node"
+args = ["/ABS/PATH/model-gateway/dist/index.js"]
+startup_timeout_sec = 20
+tool_timeout_sec = 900          # supervise/panel runs can take many minutes
+# Forward API keys from your shell instead of writing them here:
+env_vars = ["DEEPSEEK_API_KEY", "MOONSHOT_API_KEY", "MINIMAX_API_KEY", "ZAI_API_KEY", "OPENROUTER_API_KEY", "OPENCODE_API_KEY", "OLLAMA_API_KEY", "GH_TOKEN"]
+
+# Or set values inline (file should be chmod 600):
+# [mcp_servers.break_free_gateway.env]
+# DEEPSEEK_API_KEY = "sk-..."
+# MODEL_GATEWAY_CONFIG = "/Users/you/.config/model-gateway/config.json"

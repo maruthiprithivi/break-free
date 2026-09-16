@@ -1,0 +1,8 @@
+interface:
+  display_name: "Break Free: model gateway"
+  short_description: "Lead with the frontier model, execute with the crew: delegate, run parallel plans, review, supervise and keep a durable ledger via the break_free_gateway MCP server (DeepSeek, Kimi, GLM, MiniMax, Ollama, OpenRouter, OpenCode)."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "break_free_gateway"
+      description: "Registered by setup.mjs (codex mcp add break_free_gateway -- node /ABS/PATH/model-gateway/dist/index.js)"
