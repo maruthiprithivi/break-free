@@ -30,8 +30,9 @@ case "$1 $2" in
   *) echo "unknown $*" >&2; exit 1;;
 esac
 EOF
-for b in opencode kiro-cli kiro kimi kimi-cli agy antigravity pi omp gemini copilot hermes aider cline adal openclaw; do printf '#!/usr/bin/env bash\necho "fake $0"\n' > "$T/bin/$b"; done
+for b in opencode kiro-cli kiro kimi kimi-cli agy antigravity pi omp gemini copilot hermes aider cline adal openclaw goose amp; do printf '#!/usr/bin/env bash\necho "fake $0"\n' > "$T/bin/$b"; done
 mkdir -p "$T/home/.config/opencode" && printf '{ "$schema": "https://opencode.ai/config.json", "model": "x/y", "mcp": { "other": { "type": "remote", "url": "https://x" } } }\n' > "$T/home/.config/opencode/opencode.json"
+mkdir -p "$T/home/.cursor"
 chmod +x "$T/bin/"*
 
 ( cd "$ROOT/model-gateway" && [ -d node_modules ] || npm install --silent --no-audit --no-fund )
@@ -123,6 +124,10 @@ grep -q "Delegating to other models" "$T/home/.adal/AGENTS.md" || fail "adal AGE
 grep -q "Delegating to other models" "$T/home/.openclaw/AGENTS.md" || fail "openclaw AGENTS.md rule missing"
 [ -f "$T/proj/.aider.conf.yml" ] || fail "aider project config missing"
 [ -f "$T/proj/.clinerules" ] || fail "cline project .clinerules missing"
+node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if(!j.mcpServers["break-free-gateway"].args)process.exit(1)' "$T/home/.cursor/mcp.json" || fail "cursor global mcp.json missing"
+[ -f "$T/proj/.cursor/mcp.json" ] || fail "cursor project mcp.json missing"
+[ -f "$T/home/.config/goose/skills/break-free-model-gateway/SKILL.md" ] || fail "goose skill missing"
+[ -f "$T/home/.config/agents/skills/break-free-model-gateway/SKILL.md" ] || fail "amp skill missing"
 echo "ok"
 
 echo "### harness profiles"
@@ -180,6 +185,7 @@ grep -q "Delegating to other models" "$T/home/.config/opencode/AGENTS.md" && fai
 [ ! -f "$T/home/.gemini/settings.json" ] || fail "gemini settings.json not removed"
 [ ! -f "$T/home/.clinerules" ] || fail "cline .clinerules not removed"
 grep -q "read:" "$T/home/.aider.conf.yml" && fail "aider read: not removed"
+[ ! -f "$T/home/.cursor/mcp.json" ] || fail "cursor mcp.json not removed"
 echo "ok"
 
 echo "### doctor after uninstall (expect RED, exit 1)"

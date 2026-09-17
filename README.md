@@ -188,7 +188,7 @@ The obvious failure: every worktree commits its own `.break-free/` on its branch
 
 So a PR from a worktree branch carries code only; main's knowledge is never overwritten by a merge, and main is always the freshest view because it absorbs on every `ledger_resume`. Verified end to end in the test-suite: overlay isolation, hook refusal, `git_commit` stripping, absorb + idempotency, divergent-note merge, a real `git merge` of the branch leaving `.break-free/` untouched, workflow install.
 
-### Other coding agents: Gemini CLI, Copilot CLI, Hermes, Aider, Cline, AdaL, OpenClaw, opencode, Kiro CLI, Kimi Code CLI, Antigravity (agy), pi, oh-my-pi (omp)
+### Other coding agents: Gemini CLI, Copilot CLI, Cursor, Goose, Amp, Hermes, Aider, Cline, AdaL, OpenClaw, opencode, Kiro CLI, Kimi Code CLI, Antigravity (agy), pi, oh-my-pi (omp)
 The installer detects these (binary on PATH or config dir present), lets you pick which to wire (`extra_agents` in the answers file: list, `"detected"` or `"all"`; `extra_scope`: user / project / both), and installs the MCP server, both `break-free-*` skills, and the standing rules — in each tool's own conventions. Where a tool's MCP servers can't be edited by file (or its MCP support is experimental), the installer prints the exact one-line registration command instead:
 
 | agent | MCP server | skills | standing rules |
@@ -206,10 +206,13 @@ The installer detects these (binary on PATH or config dir present), lets you pic
 | Cline | manual (editor settings `cline_mcp_settings.json`) | — | `~/.clinerules`; project `.clinerules` |
 | AdaL CLI | manual (AdaL UI) | — | `~/.adal/AGENTS.md`; project `AGENTS.md` |
 | OpenClaw | manual: `openclaw mcp add break-free-gateway` | — | `~/.openclaw/AGENTS.md`; project `AGENTS.md` |
+| Cursor | `~/.cursor/mcp.json`; project `.cursor/mcp.json` | (reads `.agents/skills`) | reads `AGENTS.md` + `.cursor/rules` |
+| Goose (Block) | manual: `extensions` in `~/.config/goose/config.yaml` (or `goose configure`) | `~/.config/goose/skills/` | project `AGENTS.md` |
+| Amp (Sourcegraph) | manual: skill `mcpServers` / Amp MCP config | `~/.config/agents/skills/` | project `AGENTS.md` |
 
 Existing entries in those files are preserved (JSON is merged, rules are marker-based and self-updating), `--doctor` reports each agent, `--uninstall` removes only what was added. All of them then share the same ledger and worktree registry, so a hand-off written by kiro in one worktree is what Claude Code reads on main.
 
-Everything else that reads `AGENTS.md` + `.mcp.json` + `.agents/skills` — Goose, Amp, Droid, Kilo Code, Roo Code, Qoder, Crush, Cursor, Windsurf, Zed, Trae, JetBrains Junie, Warp, Devin — is covered automatically at project scope by the files `installProject` writes, with no per-tool config needed.
+Everything else that reads `AGENTS.md` + `.mcp.json` + `.agents/skills` — Droid, Kilo Code, Roo Code, Qoder, Crush, Windsurf, Zed, Trae, JetBrains Junie, Warp, Continue.dev, Augment, Freebuff, Devin — is covered automatically at project scope by the files `installProject` writes, with no per-tool config needed.
 
 ### Guardrails the gateway enforces
 | what | how |
