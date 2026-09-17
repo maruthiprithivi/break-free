@@ -5,10 +5,6 @@
 .higgsfield/
 .higgsfield*
 
-# --- remotion (scenario video source) — keep source + assets, drop build output
-videos/node_modules/
-videos/out/
-
 # --- build & deps
 model-gateway/node_modules/
 model-gateway/dist/
