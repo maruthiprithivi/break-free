@@ -1,6 +1,10 @@
 # --- private hand-over material (research, build notes, personal answers) — never published
 .private/
 
+# --- higgsfield (AI image/video CLI) — never commit credentials, cache, or generated media
+.higgsfield/
+.higgsfield*
+
 # --- build & deps
 model-gateway/node_modules/
 model-gateway/dist/

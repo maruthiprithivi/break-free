@@ -2,6 +2,23 @@
 
 Thanks for helping. Break Free is a small, deliberately dependency-light codebase (Node ≥ 20, TypeScript, `@modelcontextprotocol/sdk`, `zod`, nothing else at runtime). The bar for a change is: it keeps the guardrails honest, it is covered by a test, and the installer selftest still passes.
 
+## Reporting issues
+
+Found a bug or have a feature in mind? Open a GitHub issue — no template ceremony, just be specific:
+
+- **Bug** — what you ran (command / tool call), what you expected, what actually happened, and the smallest repro. Include the version (`node setup.mjs --doctor`), OS, and any error text.
+- **Feature request** — what you want to do, why it matters, and how you'd expect it to behave; sketch the shape (tool, flag, config key) if you can.
+
+## Submitting a pull request
+
+Fork the repo, make your change on a branch, then open a PR against `main`. In the PR body, state three things clearly:
+
+1. **Feature** — what the change does, concretely (files, tools, config keys, behaviour).
+2. **Impact** — who/what it affects and why it is safe: guardrails preserved, no secrets or keys in the repo, backward-compatible or a clean cutover.
+3. **Purpose** — the problem it solves and the motivation; link the issue if there is one.
+
+Keep it focused: one change per PR, the tests that prove it (`cd model-gateway && npm test`, `bash setup/selftest.sh`), and a `CHANGELOG.md` line. A PR that isn't clear on feature / impact / purpose will be asked for it — that's the bar, not bureaucracy.
+
 ## Set up
 
 ```bash

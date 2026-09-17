@@ -1,5 +1,7 @@
 # Break Free — the frontier model leads, other models execute
 
+![Break Free](docs/assets/banner.png)
+
 Claude Code / Codex (with their first-class harness: memory, skills, MCP, tools, and a frontier model) stay the **lead**: they understand the user, decompose, design, write acceptance criteria and verification, review, coordinate and own the outcome. The **crew** — DeepSeek, Kimi/Moonshot, MiniMax, Z.AI/GLM, Ollama local + cloud, OpenRouter, OpenCode Zen, any vLLM/LM Studio endpoint — does the execution: in parallel, verified by commands the gateway runs itself, reviewed by a different vendor, and recorded in a durable Markdown ledger that survives sessions.
 
 Everything installs under the `break-free-*` prefix: skills `break-free-model-gateway` and `break-free-github-flow`, commands `/break-free-plan` `/break-free-resume` `/break-free-delegate` `/break-free-review` `/break-free-panel` `/break-free-supervise` `/break-free-issue` `/break-free-ci` `/break-free-wrap-up`, MCP server `break-free-gateway` (Claude Code) / `break_free_gateway` (Codex). Re-running `setup.mjs` removes any earlier unprefixed install automatically.
