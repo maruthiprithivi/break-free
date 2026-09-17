@@ -93,6 +93,8 @@ It asks for: install scope per tool (user / project / both / skip, and the proje
 | `node setup.mjs --uninstall [--project DIR] [--purge]` | remove registrations, skills and commands; `--purge` also deletes config, keys and sessions |
 | `node setup.mjs --yes` | **hands-free re-install / upgrade**: no prompts; keeps and re-verifies everything already in `~/.config/model-gateway/config.json` (keys, default models, aliases, chains, disabled providers), refreshes skills/commands/registrations, cleans up old names |
 | `node setup.mjs --update` | **self-update**: `git pull --ff-only` the source, then re-run hands-free reusing the scope/agents saved in `last-install.json` (also `/break-free-update` inside Claude Code) |
+| `node setup.mjs --stats [--project DIR]` | read-only storage footprint (sessions, jobs, logs, harness) + project ledger/worktree stats |
+| `node setup.mjs --clean [--days N]` | reclaim disk: delete sessions/jobs older than N days (default 30) and old log generations |
 | `node setup.mjs --answers my.json` | non-interactive with explicit answers (CI, dotfiles); template in `setup/answers.example.json` |
 | `node setup.mjs --project DIR` | pre-select the project directory for project-level scope |
 | `node setup.mjs --skip-tests` | skip the 20-test suite after building |
@@ -188,7 +190,7 @@ The obvious failure: every worktree commits its own `.break-free/` on its branch
 
 So a PR from a worktree branch carries code only; main's knowledge is never overwritten by a merge, and main is always the freshest view because it absorbs on every `ledger_resume`. Verified end to end in the test-suite: overlay isolation, hook refusal, `git_commit` stripping, absorb + idempotency, divergent-note merge, a real `git merge` of the branch leaving `.break-free/` untouched, workflow install.
 
-### Other coding agents: Gemini CLI, Copilot CLI, Cursor, Goose, Amp, Hermes, Aider, Cline, AdaL, OpenClaw, opencode, Kiro CLI, Kimi Code CLI, Antigravity (agy), pi, oh-my-pi (omp)
+### Other coding agents: Gemini CLI, Copilot CLI, Cursor, Goose, Amp, Hermes, Aider, Cline, AdaL, OpenClaw, Droid, Kilo Code, Roo Code, Qoder, Zed, opencode, Kiro CLI, Kimi Code CLI, Antigravity (agy), pi, oh-my-pi (omp)
 The installer detects these (binary on PATH or config dir present), lets you pick which to wire (`extra_agents` in the answers file: list, `"detected"` or `"all"`; `extra_scope`: user / project / both), and installs the MCP server, both `break-free-*` skills, and the standing rules — in each tool's own conventions. Where a tool's MCP servers can't be edited by file (or its MCP support is experimental), the installer prints the exact one-line registration command instead:
 
 | agent | MCP server | skills | standing rules |
@@ -209,10 +211,15 @@ The installer detects these (binary on PATH or config dir present), lets you pic
 | Cursor | `~/.cursor/mcp.json`; project `.cursor/mcp.json` | (reads `.agents/skills`) | reads `AGENTS.md` + `.cursor/rules` |
 | Goose (Block) | manual: `extensions` in `~/.config/goose/config.yaml` (or `goose configure`) | `~/.config/goose/skills/` | project `AGENTS.md` |
 | Amp (Sourcegraph) | manual: skill `mcpServers` / Amp MCP config | `~/.config/agents/skills/` | project `AGENTS.md` |
+| Droid (Factory) | reads project `.mcp.json` | `~/.agents/skills/`; `.agents/skills/` | project `AGENTS.md` |
+| Kilo Code | manual | `~/.agents/skills/`; `.agents/skills/` | project `AGENTS.md` |
+| Roo Code | manual | `~/.agents/skills/`; `.agents/skills/` | project `AGENTS.md` |
+| Qoder | manual | `~/.agents/skills/`; `.agents/skills/` | project `AGENTS.md` |
+| Zed | reads project `.mcp.json` | `~/.agents/skills/`; `.agents/skills/` | project `AGENTS.md` |
 
 Existing entries in those files are preserved (JSON is merged, rules are marker-based and self-updating), `--doctor` reports each agent, `--uninstall` removes only what was added. All of them then share the same ledger and worktree registry, so a hand-off written by kiro in one worktree is what Claude Code reads on main.
 
-Everything else that reads `AGENTS.md` + `.mcp.json` + `.agents/skills` — Droid, Kilo Code, Roo Code, Qoder, Crush, Windsurf, Zed, Trae, JetBrains Junie, Warp, Continue.dev, Augment, Freebuff, Devin — is covered automatically at project scope by the files `installProject` writes, with no per-tool config needed.
+Everything else that reads `AGENTS.md` + `.mcp.json` + `.agents/skills` — Crush, Windsurf, Trae, JetBrains Junie, Warp, Continue.dev, Augment, Freebuff, Devin — is covered automatically at project scope by the files `installProject` writes, with no per-tool config needed.
 
 ### Guardrails the gateway enforces
 | what | how |

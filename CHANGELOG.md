@@ -2,7 +2,9 @@
 
 ## Unreleased
 - Distribution: no CI on this repo — install and update directly from GitHub. `setup.mjs --update` (and `/break-free-update`) self-update from a `git clone` (`git pull --ff-only` + hands-free re-install), reusing the scope/agents recorded in `last-install.json`.
-- Harness support: Gemini CLI (MCP + skills + GEMINI.md), GitHub Copilot CLI, Cursor (MCP), Goose, Amp, Hermes, Aider, Cline, AdaL and OpenClaw — skills/rules in each tool's own conventions, with the exact manual-MCP step printed where a tool's MCP config can't be file-edited. Any tool that reads `AGENTS.md` + `.mcp.json` + `.agents/skills` (Droid, Kilo, Roo, Qoder, Crush, Windsurf, Zed, Trae, Junie, Warp, Continue, Augment, Freebuff, Devin) is covered at project scope.
+- Harness support: Gemini CLI (MCP + skills + GEMINI.md), GitHub Copilot CLI, Cursor (MCP), Goose, Amp, Hermes, Aider, Cline, AdaL, OpenClaw, Droid, Kilo Code, Roo Code, Qoder and Zed — skills/rules in each tool's own conventions, with the exact manual-MCP step printed where a tool's MCP config can't be file-edited. Any tool that reads `AGENTS.md` + `.mcp.json` + `.agents/skills` (Crush, Windsurf, Trae, Junie, Warp, Continue, Augment, Freebuff, Devin) is covered at project scope.
+- Re-install picks up the previous setup (`last-install.json`) and pre-selects the prior scope/agents/github-flow; the github-flow skill stays fully optional (`github_flow: "none"` skips it).
+- New utilities: `setup.mjs --stats` (storage footprint + project/ledger/worktree stats) and `setup.mjs --clean` (reclaim disk: stale sessions/jobs + old log generations).
 
 ## 3.3.0 — 2026-09-15
 - Worker-note quarantine: `ledger_note` output is `trust: worker, pending` and never injected until `note_review` promotes it; workers cannot overwrite lead notes.

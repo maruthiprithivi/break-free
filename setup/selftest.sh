@@ -30,7 +30,7 @@ case "$1 $2" in
   *) echo "unknown $*" >&2; exit 1;;
 esac
 EOF
-for b in opencode kiro-cli kiro kimi kimi-cli agy antigravity pi omp gemini copilot hermes aider cline adal openclaw goose amp; do printf '#!/usr/bin/env bash\necho "fake $0"\n' > "$T/bin/$b"; done
+for b in opencode kiro-cli kiro kimi kimi-cli agy antigravity pi omp gemini copilot hermes aider cline adal openclaw goose amp droid kilo roo qoder zed; do printf '#!/usr/bin/env bash\necho "fake $0"\n' > "$T/bin/$b"; done
 mkdir -p "$T/home/.config/opencode" && printf '{ "$schema": "https://opencode.ai/config.json", "model": "x/y", "mcp": { "other": { "type": "remote", "url": "https://x" } } }\n' > "$T/home/.config/opencode/opencode.json"
 mkdir -p "$T/home/.cursor"
 chmod +x "$T/bin/"*
@@ -207,6 +207,13 @@ node "$ROOT/setup.mjs" --update > "$T/update.out" 2>&1 || fail "update exited no
 grep -q "pull" "$T/git.log" || fail "--update did not git pull"
 grep -q "GREEN" "$T/update.out" || fail "update re-install not GREEN"
 [ -f "$T/home/.claude/skills/break-free-model-gateway/SKILL.md" ] || fail "update did not re-install the skill"
+echo "ok"
+
+echo "### stats + clean"
+node "$ROOT/setup.mjs" --stats > "$T/stats.out" 2>&1 || fail "stats exited non-zero (see $T/stats.out)"
+grep -q "footprint" "$T/stats.out" || fail "stats did not report footprint"
+node "$ROOT/setup.mjs" --clean --days 0 > "$T/clean.out" 2>&1 || fail "clean exited non-zero (see $T/clean.out)"
+grep -q "Clean up" "$T/clean.out" || fail "clean section missing"
 echo "ok"
 echo
 echo "SELFTEST PASSED — the installer works on this machine (fake CLIs, mock provider). Now run: node setup.mjs"
