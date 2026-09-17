@@ -2,7 +2,7 @@
 
 ![Break Free](docs/assets/banner.png)
 
-**▶ Intro:** [watch the 8-second overview](docs/assets/intro.mp4) — parallel crews, verification gates, independent review and the ledger, in a desktop-and-terminal style.
+**▶ Intro:** [watch the 2-minute overview](docs/assets/intro.mp4) — narrated, hand-drawn and terminal-based, with burned-in subtitles: the quota/billing problem, parallel crews, verification, review, harnesses, worktrees and the ledger.
 
 Claude Code / Codex (with their first-class harness: memory, skills, MCP, tools, and a frontier model) stay the **lead**: they understand the user, decompose, design, write acceptance criteria and verification, review, coordinate and own the outcome. The **crew** — DeepSeek, Kimi/Moonshot, MiniMax, Z.AI/GLM, Ollama local + cloud, OpenRouter, OpenCode Zen, any vLLM/LM Studio endpoint — does the execution: in parallel, verified by commands the gateway runs itself, reviewed by a different vendor, and recorded in a durable Markdown ledger that survives sessions.
 
