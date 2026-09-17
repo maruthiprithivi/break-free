@@ -5,7 +5,7 @@ Thanks for helping. Break Free is a small, deliberately dependency-light codebas
 ## Set up
 
 ```bash
-git clone https://github.com/<you>/break-free.git && cd break-free
+git clone https://github.com/maruthiprithivi/break-free.git && cd break-free
 cd model-gateway && npm install && npm run build && cd ..
 ```
 

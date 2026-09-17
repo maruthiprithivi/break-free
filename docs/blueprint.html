@@ -379,7 +379,7 @@
         <li><span class="done">DONE</span> installer with preflight/postflight, doctor (model drift, log analysis, shim, extra agents), uninstall, selftest with fake CLIs, 40 e2e tests.</li>
         <li><span class="gap">GAP</span> <span class="tier now">now</span> <b>Steward routine:</b> a scheduled <code>bf steward</code> that absorbs overlays, prunes merged worktrees (proposes, doesn't delete), re-runs the verify suite on main after merges, refreshes the code map, and writes a morning brief into HANDOFF.md.</li>
         <li><span class="gap">GAP</span> <span class="tier next">next</span> <b>Repo vitals in the ledger:</b> tests/lint/coverage/dependency freshness per commit, so "is main green?" is a ledger read.</li>
-        <li><span class="gap">GAP</span> <span class="tier next">next</span> <b>Self-update &amp; versioning:</b> <code>setup.mjs --update</code> from a release, pinned versions in the answers file, migration notes; tests against the real CLIs in CI.</li>
+        <li><span class="gap">GAP</span> <span class="tier now">now</span> <b>Self-update:</b> <code>setup.mjs --update</code> ships (git pull + hands-free re-install); pinned versions in the answers file and migration notes are still open.</li>
         <li><span class="gap">GAP</span> <span class="tier later">later</span> <b>Dashboard:</b> a local HTML view generated from ledger + registry + log — the picture on this page, live.</li>
       </ul>
     </div>

@@ -7,6 +7,8 @@
  *   node setup.mjs --uninstall          remove registrations, skills, commands (keeps config/keys unless --purge)
  *   node setup.mjs --yes                hands-free: no prompts, every question takes its default — existing config
  *                                       (keys, models, aliases, chains, disabled providers) is kept and re-verified
+ *   node setup.mjs --update             pull the latest source (git pull --ff-only) and re-run the installer hands-free,
+ *                                       reusing the scope/agents chosen last time (saved in last-install.json)
  *   node setup.mjs --answers file.json  non-interactive with explicit answers (see setup/answers.example.json)
  *   node setup.mjs --project DIR        also install project-scoped files into DIR
  *   node setup.mjs --skip-tests         don't run the e2e suite after building
@@ -29,11 +31,12 @@ const CFG_DIR = path.join(home(), ".config", "model-gateway");
 const CFG_FILE = process.env.MODEL_GATEWAY_CONFIG ? expandHome(process.env.MODEL_GATEWAY_CONFIG) : path.join(CFG_DIR, "config.json");
 const LOG_FILE = path.join(CFG_DIR, "setup.log");
 const REPORT_FILE = path.join(CFG_DIR, "setup-report.json");
+const INSTALL_STATE = path.join(CFG_DIR, "last-install.json");
 const CLAUDE_SERVER = "break-free-gateway";
 const LEGACY_CLAUDE_SERVER = "model-gateway";
 const CODEX_SERVER = "break_free_gateway";
 const LEGACY_CODEX_SERVER = "model_gateway";
-const GW_COMMANDS = ["break-free-delegate.md", "break-free-plan.md", "break-free-resume.md", "break-free-model.md", "break-free-worktree.md", "break-free-panel.md", "break-free-review.md", "break-free-supervise.md"];
+const GW_COMMANDS = ["break-free-delegate.md", "break-free-plan.md", "break-free-resume.md", "break-free-model.md", "break-free-worktree.md", "break-free-panel.md", "break-free-review.md", "break-free-supervise.md", "break-free-update.md"];
 const LEGACY_COMMANDS = ["delegate.md", "panel.md", "review.md", "supervise.md", "issue.md", "ci.md", "wrap-up.md"];
 const GF_COMMANDS = ["break-free-issue.md", "break-free-ci.md", "break-free-wrap-up.md"];
 const GW_SKILL = "break-free-model-gateway";
@@ -45,14 +48,14 @@ const KEY_ENVS = ["DEEPSEEK_API_KEY", "MOONSHOT_API_KEY", "MINIMAX_API_KEY", "ZA
 const argv = process.argv.slice(2);
 const has = (f) => argv.includes(f);
 const val = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : undefined; };
-const MODE = has("--uninstall") ? "uninstall" : has("--doctor") ? "doctor" : "install";
+const MODE = has("--uninstall") ? "uninstall" : has("--doctor") ? "doctor" : has("--update") ? "update" : "install";
 const answersFile = val("--answers");
 const answers = answersFile ? JSON.parse(fs.readFileSync(answersFile, "utf8")) : {};
 const projectDir = val("--project") ? path.resolve(val("--project")) : answers.project_dir ? path.resolve(answers.project_dir) : undefined;
 if (has("--help") || has("-h")) { console.log(fs.readFileSync(new URL(import.meta.url)).toString().split("*/")[0].replace(/^\/\*\*?\s?/, "").replace(/^ \* ?/gm, "")); process.exit(0); }
 
 const report = new Report(LOG_FILE);
-const prompter = new Prompter({ answers, interactive: !answersFile && !has("--yes") });
+const prompter = new Prompter({ answers, interactive: !answersFile && !has("--yes") && !has("--update") });
 const targets = { claude: false, codex: false };
 const scope = { claude: "none", codex: "none", project: projectDir }; // user | project | both | none
 const state = { providersConfigured: [], providersVerified: [], node: null, ghAuthed: false, githubFlow: "none" };
@@ -837,6 +840,35 @@ const EXTRA_AGENTS = {
   omp: { label: "oh-my-pi (omp)", bins: ["omp"], dirs: ["~/.omp/agent"],
     user: { mcp: { file: "~/.omp/agent/mcp.json", shape: "mcpServers" }, skills: "~/.omp/agent/skills", rules: "~/.omp/agent/AGENTS.md" },
     project: { mcp: { file: ".omp/mcp.json", shape: "mcpServers" }, skills: ".omp/skills", rules: ".omp/AGENTS.md" } },
+  gemini: { label: "Gemini CLI", bins: ["gemini"], dirs: ["~/.gemini"],
+    user: { mcp: { file: "~/.gemini/settings.json", shape: "mcpServers" }, skills: "~/.gemini/skills", rules: "~/.gemini/GEMINI.md" },
+    project: { mcp: { file: ".gemini/settings.json", shape: "mcpServers" }, skills: ".gemini/skills", rules: "GEMINI.md" } },
+  copilot: { label: "GitHub Copilot CLI", bins: ["copilot"], dirs: ["~/.copilot"],
+    user: { skills: "~/.copilot/skills", rules: "~/.copilot/AGENTS.md" },
+    project: {}, mcpNote: `register the server with: copilot mcp add break-free-gateway -- node ${ENTRY}`,
+    note: "reads AGENTS.md + ~/.copilot/skills" },
+  hermes: { label: "Hermes Agent", bins: ["hermes"], dirs: ["~/.hermes"],
+    user: { skills: "~/.hermes/skills", rules: "~/.hermes/AGENTS.md" },
+    project: {}, mcpNote: `add break-free-gateway under "mcp_servers:" in ~/.hermes/config.yaml (command: node, args: ["${ENTRY}"]) — or run "hermes import-agent claude-code"`,
+    note: "mcp_servers live in ~/.hermes/config.yaml; skills in ~/.hermes/skills" },
+  aider: { label: "Aider", bins: ["aider"], dirs: [],
+    user: { rules: "~/.aider.conf.yml", rulesKind: "aider" },
+    project: { rules: ".aider.conf.yml", rulesKind: "aider" },
+    mcpNote: "aider's MCP support is experimental — register break-free-gateway in .aider.conf.yml by hand; this installs the standing rule via `read: AGENTS.md`",
+    note: "reads AGENTS.md / CONVENTIONS.md via the `read:` config key" },
+  cline: { label: "Cline", bins: ["cline"], dirs: ["~/.cline"],
+    user: { rules: "~/.clinerules", rulesOwned: true },
+    project: { rules: ".clinerules", rulesOwned: true },
+    mcpNote: `Cline stores MCP servers in its editor settings (cline_mcp_settings.json) — add break-free-gateway there (command: node, args: ["${ENTRY}"])`,
+    note: "VS Code extension; rules via .clinerules" },
+  adal: { label: "AdaL CLI", bins: ["adal"], dirs: ["~/.adal"],
+    user: { rules: "~/.adal/AGENTS.md" },
+    project: {}, mcpNote: "AdaL manages MCP servers in its UI (no editable config file) — add break-free-gateway there; this installs the standing AGENTS.md rule",
+    note: "Claude Code skills/plugins compatible" },
+  openclaw: { label: "OpenClaw", bins: ["openclaw"], dirs: ["~/.openclaw"],
+    user: { rules: "~/.openclaw/AGENTS.md" },
+    project: {}, mcpNote: "register the server with: openclaw mcp add break-free-gateway (the registry lives in OpenClaw config)",
+    note: "openclaw mcp add manages the server registry" },
 };
 const EXTRA_ORDER = Object.keys(EXTRA_AGENTS);
 const GENERIC_MARKER_NOTE = "<!-- break-free: generated by setup.mjs; safe to delete -->";
@@ -864,6 +896,24 @@ function upsertJsonMcp(file, shape, remove = false) {
   if (remove && !Object.keys(j).filter((k) => k !== "$schema").length) { fs.rmSync(abs, { force: true }); return; }
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, JSON.stringify(j, null, 2) + "\n");
+}
+/** Aider reads AGENTS.md / CONVENTIONS.md when the `read:` key lists them. Append only; never touch an existing list. */
+function upsertAiderRead(file, remove = false) {
+  const abs = expandHome(file);
+  if (remove) {
+    if (!fs.existsSync(abs)) return;
+    const txt = fs.readFileSync(abs, "utf8").replace(/\n?read:\n  - AGENTS\.md\n  - CONVENTIONS\.md\n?/, "");
+    fs.writeFileSync(abs, txt);
+    return;
+  }
+  if (fs.existsSync(abs)) {
+    const txt = fs.readFileSync(abs, "utf8");
+    if (/^read:/m.test(txt)) return; // an existing read: list is the user's to manage
+  }
+  backup(abs);
+  const cur = fs.existsSync(abs) ? fs.readFileSync(abs, "utf8").replace(/\s+$/, "") : "";
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, `${cur ? cur + "\n\n" : ""}read:\n  - AGENTS.md\n  - CONVENTIONS.md\n`);
 }
 function detectExtraAgents() {
   const out = {};
@@ -911,7 +961,7 @@ async function chooseExtraAgents() {
   return picked;
 }
 async function installExtraAgents() {
-  report.section("Other coding agents (opencode, kiro, kimi, agy, pi, omp)");
+  report.section("Other coding agents (gemini, copilot, hermes, aider, cline, adal, openclaw, …)");
   const picked = await chooseExtraAgents();
   if (!picked.length) { report.skip("no other agents selected"); return; }
   const wantU = ["user", "both"].includes(state.extraScope);
@@ -931,19 +981,23 @@ async function installExtraAgents() {
         done.push(`skills → ${t.skills}`);
       }
       if (t.rules) {
-        const text = genericRule("gateway") + (gfRule ? "\n" + genericRule("github-flow") : "");
-        if (t.rulesOwned) { fs.mkdirSync(path.dirname(abs(t.rules)), { recursive: true }); fs.writeFileSync(abs(t.rules), `${GENERIC_MARKER_NOTE}\n${text}`); }
-        else { appendOnce(abs(t.rules), GW_MARKER, genericRule("gateway")); if (gfRule) appendOnce(abs(t.rules), GF_MARKER, genericRule("github-flow")); }
-        done.push(`rules → ${t.rules}`);
+        if (t.rulesKind === "aider") { upsertAiderRead(isUser ? t.rules : path.join(base, t.rules)); done.push(`rules → ${isUser ? t.rules : t.rules} (read: AGENTS.md)`); }
+        else {
+          const text = genericRule("gateway") + (gfRule ? "\n" + genericRule("github-flow") : "");
+          if (t.rulesOwned) { fs.mkdirSync(path.dirname(abs(t.rules)), { recursive: true }); fs.writeFileSync(abs(t.rules), `${GENERIC_MARKER_NOTE}\n${text}`); }
+          else { appendOnce(abs(t.rules), GW_MARKER, genericRule("gateway")); if (gfRule) appendOnce(abs(t.rules), GF_MARKER, genericRule("github-flow")); }
+          done.push(`rules → ${t.rules}`);
+        }
       }
     };
     try {
       if (wantU) apply(a.user, null, true);
       if (wantP) apply(a.project, scope.project, false);
+      if (!a.user.mcp && !a.project.mcp && a.mcpNote) report.warn(`${a.label}: MCP not auto-registered`, a.mcpNote);
       report.pass(`${a.label}`, done.join("; ") + (a.note ? ` — ${a.note}` : ""));
     } catch (e) { report.fail(`${a.label}: install failed`, String(e.message).slice(0, 200)); }
   }
-  if (wantP) report.info("project-level: AGENTS.md, .agents/skills and .mcp.json written for Codex/Claude are also read by opencode, kimi, pi and agy");
+  if (wantP) report.info("project-level: AGENTS.md, .agents/skills and .mcp.json written for Codex/Claude are also read by opencode, kimi, pi, agy, gemini, copilot, goose, amp, droid, kilo, roo, qoder, crush, cursor, windsurf, zed, trae, junie and warp");
 }
 function doctorExtraAgents() {
   const detected = detectExtraAgents();
@@ -957,6 +1011,11 @@ function doctorExtraAgents() {
       const skill = a.user.skills && fs.existsSync(path.join(expandHome(a.user.skills), GW_SKILL, "SKILL.md"));
       (args ?? []).includes(ENTRY) ? report.pass(`${a.label}: MCP registered${skill ? " + skill" : ""}`, m) : report.warn(`${a.label}: MCP entry points to another build`, (args ?? []).join(" "), "re-run node setup.mjs");
       if (a.user.rules && !(fs.existsSync(expandHome(a.user.rules)) && fs.readFileSync(expandHome(a.user.rules), "utf8").includes(GW_MARKER))) report.warn(`${a.label}: standing rule missing`, a.user.rules, "re-run node setup.mjs");
+    } else if (!a.user.mcp) {
+      const skill = a.user.skills && fs.existsSync(path.join(expandHome(a.user.skills), GW_SKILL, "SKILL.md"));
+      const rules = a.user.rules && fs.existsSync(expandHome(a.user.rules));
+      if (skill || rules) report.pass(`${a.label}: ${skill ? "skill " : ""}${skill && rules ? "+ " : ""}${rules ? "rules" : ""} installed`, a.mcpNote ? `MCP: ${a.mcpNote}` : "");
+      else if (detected[k]) report.skip(`${a.label}: detected but not wired`, `node setup.mjs and pick it under "Other coding agents"`);
     } else if (detected[k]) report.skip(`${a.label}: detected but not wired`, `node setup.mjs and pick it under "Other coding agents"`);
   }
 }
@@ -970,7 +1029,8 @@ function uninstallExtraAgents(projectDir) {
         if (t.mcp && fs.existsSync(isUser ? expandHome(t.mcp.file) : path.join(base, t.mcp.file))) { upsertJsonMcp(isUser ? t.mcp.file : path.join(base, t.mcp.file), t.mcp.shape, true); removed.push(`${a.label} mcp`); }
         if (t.skills) for (const sk of [GW_SKILL, GF_SKILL]) if (fs.existsSync(path.join(abs(t.skills), sk))) { fs.rmSync(path.join(abs(t.skills), sk), { recursive: true, force: true }); removed.push(`${a.label} ${sk}`); }
         if (t.rules && fs.existsSync(abs(t.rules))) {
-          if (t.rulesOwned) { if (fs.readFileSync(abs(t.rules), "utf8").includes(GENERIC_MARKER_NOTE)) { fs.rmSync(abs(t.rules)); removed.push(`${a.label} rules`); } }
+          if (t.rulesKind === "aider") { upsertAiderRead(abs(t.rules), true); removed.push(`${a.label} rules`); }
+          else if (t.rulesOwned) { if (fs.readFileSync(abs(t.rules), "utf8").includes(GENERIC_MARKER_NOTE)) { fs.rmSync(abs(t.rules)); removed.push(`${a.label} rules`); } }
           else { stripBlock(abs(t.rules), GW_MARKER); stripBlock(abs(t.rules), GF_MARKER); removed.push(`${a.label} rules`); }
         }
       } catch (e) { report.warn(`${a.label}: could not fully remove`, String(e.message).slice(0, 160)); }
@@ -1495,6 +1555,47 @@ async function uninstall() {
   else report.info(`config and keys kept in ${CFG_DIR} (add --purge to delete)`);
 }
 
+// ---- update ---------------------------------------------------------------
+/** Record the choices that let a later `--update` re-run hands-free without re-prompting. */
+function writeInstallState() {
+  const s = {
+    source_dir: HERE,
+    claude_scope: scope.claude,
+    codex_scope: scope.codex,
+    project_dir: scope.project,
+    github_flow: state.githubFlow ?? "none",
+    extra_agents: state.extraAgents ?? [],
+    extra_scope: state.extraScope ?? "none",
+    saved_at: new Date().toISOString(),
+  };
+  try {
+    fs.mkdirSync(CFG_DIR, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(INSTALL_STATE, JSON.stringify(s, null, 2) + "\n", { mode: 0o600 });
+    report.info(`install state recorded → ${INSTALL_STATE} (used by --update)`);
+  } catch (e) { report.warn("could not record install state", String(e.message)); }
+}
+
+/** Pull the latest source and re-run the installer in a fresh process (so the *new* code does the re-install). */
+async function update() {
+  report.section("Update");
+  if (fs.existsSync(path.join(HERE, ".git"))) {
+    const r = await run("git", ["pull", "--ff-only"], { cwd: HERE, timeoutMs: 180_000 });
+    if (r.ok) report.pass("pulled latest source", lastLines(r.stdout) || "up to date");
+    else report.warn("git pull failed", lastLines(r.stderr || r.stdout), "uncommitted changes or no upstream — continuing with the current files");
+  } else {
+    report.warn("not a git checkout", HERE, "self-update needs a `git clone`; re-clone from https://github.com/maruthiprithivi/break-free.git");
+  }
+  const args = [path.join(HERE, "setup.mjs"), "--yes"];
+  if (fs.existsSync(INSTALL_STATE)) args.push("--answers", INSTALL_STATE);
+  report.info(`re-running the installer with the new code: node setup.mjs --yes${fs.existsSync(INSTALL_STATE) ? " --answers " + path.basename(INSTALL_STATE) : ""}`);
+  const code = await new Promise((res, rej) => {
+    const child = spawn(process.execPath, args, { stdio: "inherit", env: process.env });
+    child.on("error", rej);
+    child.on("exit", (c) => res(c ?? 1));
+  });
+  return code;
+}
+
 // ================================================================== main
 function finish() {
   prompter.close();
@@ -1520,6 +1621,7 @@ function finish() {
   console.log(color.bold(`model-gateway ${MODE}`) + color.dim(`  (${HERE})`));
   if (MODE === "doctor") { await doctor(); return finish(); }
   if (MODE === "uninstall") { await preflight(); await uninstall(); return finish(); }
+  if (MODE === "update") { process.exit(await update()); }
   await preflight();
   if (report.items.some((i) => i.status === "FAIL")) {
     if (!(await prompter.confirm("continue_after_preflight_fail", "Preflight has failures. Continue anyway?", false))) return finish();
@@ -1537,5 +1639,6 @@ function finish() {
   await installGithubFlow();
   await installExtraAgents();
   await verify();
+  writeInstallState();
   finish();
 })().catch((e) => { report.fail("unexpected error", String(e.stack ?? e)); finish(); });

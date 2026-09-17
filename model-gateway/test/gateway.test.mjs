@@ -26,6 +26,7 @@ before(async () => {
   ws = path.join(tmp, "repo");
   sessionDir = path.join(tmp, "sessions");
   fs.mkdirSync(path.join(ws, "src"), { recursive: true });
+  ws = fs.realpathSync(ws); // macOS: /var -> /private/var; the gateway realpaths its workspace root, so match it
   fs.writeFileSync(path.join(ws, "src", "app.js"), "export const answer = 42;\n");
   fs.writeFileSync(path.join(ws, ".env"), "SECRET=do-not-read\n");
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ws });

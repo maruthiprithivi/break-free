@@ -103,6 +103,10 @@ Lead's rule on main: `ledger_resume` (absorbs), review what came in, `ledger_mer
 - Keep the ledger true: it is what the next session (yours, Codex's, or a human's) will read. `.break-free/` is plain Markdown — commit it; it opens as an Obsidian vault.
 - Never put API keys in tasks or context. If every candidate fails, `list_providers` and tell the user which keys are missing.
 
+## Updating break-free
+
+The user can update to the latest Break Free at any time — say "update break-free" or run `/break-free-update`. Read the install source from `~/.config/model-gateway/last-install.json` (`source_dir` field) and run `node <source_dir>/setup.mjs --update`, which `git pull --ff-only`s the source and re-runs the installer hands-free, keeping keys, models, aliases, scope and every wired harness. Report the PASS/WARN/FAIL verdict it prints; if anything fails, fix what it says before retrying. After a successful update, remind the user to restart their harness.
+
 ## Arguments
 
 `/break-free-model-gateway <mode> <task>`: `$0` is the mode (`delegate`, `plan`, `review`, `panel`, `supervise`, `resume`; default `plan` for multi-part work, `delegate` otherwise), the rest is the task.

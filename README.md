@@ -40,7 +40,7 @@ model-gateway/            the MCP server (npm project)
 agent-config/
   claude/skills/break-free-model-gateway/SKILL.md     Claude Code skill (auto- and /model-gateway-invocable)
   claude/skills/break-free-github-flow/               work-tracking / CI / deployment skill (optional install)
-  claude/commands/break-free-{plan,resume,model,worktree,delegate,review,panel,supervise,issue,ci,wrap-up}.md
+  claude/commands/break-free-{plan,resume,model,worktree,delegate,review,panel,supervise,update,issue,ci,wrap-up}.md
   claude/mcp.json.example                  project-scoped registration
   codex/skills/break-free-model-gateway/SKILL.md      Codex skill (+ agents/openai.yaml)
   codex/config.toml.snippet · codex/AGENTS.md.snippet
@@ -53,7 +53,7 @@ install.sh                thin wrapper around setup.mjs
 ### Quick path (recommended)
 
 ```bash
-git clone https://github.com/<you>/break-free.git && cd break-free
+git clone https://github.com/maruthiprithivi/break-free.git && cd break-free
 node setup.mjs            # interactive installer — or ./install.sh
 # hands-free, reusing a saved answers file:
 node setup.mjs --yes --answers ~/.config/model-gateway/answers.json
@@ -92,6 +92,7 @@ It asks for: install scope per tool (user / project / both / skip, and the proje
 | `node setup.mjs --doctor [--project DIR] [--last N]` | diagnose only, change nothing: prerequisites, config validity and permissions, skill freshness, MCP registrations, **model catalog drift** (every alias/default checked against each provider's live list, with closest replacements), **runtime-log analysis** (per-provider failure rates and fixes), real handshake + provider calls |
 | `node setup.mjs --uninstall [--project DIR] [--purge]` | remove registrations, skills and commands; `--purge` also deletes config, keys and sessions |
 | `node setup.mjs --yes` | **hands-free re-install / upgrade**: no prompts; keeps and re-verifies everything already in `~/.config/model-gateway/config.json` (keys, default models, aliases, chains, disabled providers), refreshes skills/commands/registrations, cleans up old names |
+| `node setup.mjs --update` | **self-update**: `git pull --ff-only` the source, then re-run hands-free reusing the scope/agents saved in `last-install.json` (also `/break-free-update` inside Claude Code) |
 | `node setup.mjs --answers my.json` | non-interactive with explicit answers (CI, dotfiles); template in `setup/answers.example.json` |
 | `node setup.mjs --project DIR` | pre-select the project directory for project-level scope |
 | `node setup.mjs --skip-tests` | skip the 20-test suite after building |
@@ -187,8 +188,8 @@ The obvious failure: every worktree commits its own `.break-free/` on its branch
 
 So a PR from a worktree branch carries code only; main's knowledge is never overwritten by a merge, and main is always the freshest view because it absorbs on every `ledger_resume`. Verified end to end in the test-suite: overlay isolation, hook refusal, `git_commit` stripping, absorb + idempotency, divergent-note merge, a real `git merge` of the branch leaving `.break-free/` untouched, workflow install.
 
-### Other coding agents: opencode, Kiro CLI, Kimi Code CLI, Antigravity (agy), pi, oh-my-pi (omp)
-The installer detects these (binary on PATH or config dir present), lets you pick which to wire (`extra_agents` in the answers file: list, `"detected"` or `"all"`; `extra_scope`: user / project / both), and installs the same three things Claude Code and Codex get — the MCP server, both `break-free-*` skills, and the standing rules — in each tool's own conventions:
+### Other coding agents: Gemini CLI, Copilot CLI, Hermes, Aider, Cline, AdaL, OpenClaw, opencode, Kiro CLI, Kimi Code CLI, Antigravity (agy), pi, oh-my-pi (omp)
+The installer detects these (binary on PATH or config dir present), lets you pick which to wire (`extra_agents` in the answers file: list, `"detected"` or `"all"`; `extra_scope`: user / project / both), and installs the MCP server, both `break-free-*` skills, and the standing rules — in each tool's own conventions. Where a tool's MCP servers can't be edited by file (or its MCP support is experimental), the installer prints the exact one-line registration command instead:
 
 | agent | MCP server | skills | standing rules |
 |---|---|---|---|
@@ -198,8 +199,17 @@ The installer detects these (binary on PATH or config dir present), lets you pic
 | Antigravity (agy) | `~/.gemini/config/mcp_config.json`; project `.agents/mcp_config.json` | `~/.gemini/config/skills/` (also `.agents/skills`) | `~/.gemini/GEMINI.md`; `.agents/rules/break-free.md` |
 | pi | `~/.pi/agent/mcp.json` (needs `pi install npm:pi-mcp-adapter` once); project `.mcp.json` | `~/.pi/agent/skills/`; `.pi/skills/` | `~/.pi/agent/AGENTS.md`; project `AGENTS.md` |
 | oh-my-pi | `~/.omp/agent/mcp.json`; `.omp/mcp.json` | `~/.omp/agent/skills/`; `.omp/skills/` | `~/.omp/agent/AGENTS.md`; `.omp/AGENTS.md` |
+| Gemini CLI | `~/.gemini/settings.json` `mcpServers`; project `.gemini/settings.json` | `~/.gemini/skills/`; `.gemini/skills/` (also `.agents/skills`) | `~/.gemini/GEMINI.md`; project `GEMINI.md` |
+| GitHub Copilot CLI | manual: `copilot mcp add break-free-gateway -- node <dist/index.js>` | `~/.copilot/skills/` | `~/.copilot/AGENTS.md`; project `AGENTS.md` |
+| Hermes Agent | manual: `mcp_servers:` block in `~/.hermes/config.yaml` (or `hermes import-agent claude-code`) | `~/.hermes/skills/` | `~/.hermes/AGENTS.md`; project `AGENTS.md` |
+| Aider | manual (experimental MCP) | — | `~/.aider.conf.yml` / `.aider.conf.yml` `read: AGENTS.md` |
+| Cline | manual (editor settings `cline_mcp_settings.json`) | — | `~/.clinerules`; project `.clinerules` |
+| AdaL CLI | manual (AdaL UI) | — | `~/.adal/AGENTS.md`; project `AGENTS.md` |
+| OpenClaw | manual: `openclaw mcp add break-free-gateway` | — | `~/.openclaw/AGENTS.md`; project `AGENTS.md` |
 
 Existing entries in those files are preserved (JSON is merged, rules are marker-based and self-updating), `--doctor` reports each agent, `--uninstall` removes only what was added. All of them then share the same ledger and worktree registry, so a hand-off written by kiro in one worktree is what Claude Code reads on main.
+
+Everything else that reads `AGENTS.md` + `.mcp.json` + `.agents/skills` — Goose, Amp, Droid, Kilo Code, Roo Code, Qoder, Crush, Cursor, Windsurf, Zed, Trae, JetBrains Junie, Warp, Devin — is covered automatically at project scope by the files `installProject` writes, with no per-tool config needed.
 
 ### Guardrails the gateway enforces
 | what | how |

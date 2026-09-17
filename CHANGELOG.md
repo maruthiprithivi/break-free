@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Distribution: no CI on this repo — install and update directly from GitHub. `setup.mjs --update` (and `/break-free-update`) self-update from a `git clone` (`git pull --ff-only` + hands-free re-install), reusing the scope/agents recorded in `last-install.json`.
+- Harness support: Gemini CLI (MCP + skills + GEMINI.md), GitHub Copilot CLI, Hermes, Aider, Cline, AdaL and OpenClaw — skills/rules in each tool's own conventions, with the exact manual-MCP step printed where a tool's MCP config can't be file-edited. Any tool that reads `AGENTS.md` + `.mcp.json` + `.agents/skills` (Goose, Amp, Droid, Kilo, Roo, Qoder, Crush, Cursor, Windsurf, Zed, Trae, Junie, Warp, Devin) is covered at project scope.
 
 ## 3.3.0 — 2026-09-15
 - Worker-note quarantine: `ledger_note` output is `trust: worker, pending` and never injected until `note_review` promotes it; workers cannot overwrite lead notes.

@@ -30,7 +30,7 @@ case "$1 $2" in
   *) echo "unknown $*" >&2; exit 1;;
 esac
 EOF
-for b in omp kiro-cli opencode; do printf '#!/usr/bin/env bash\necho "fake $0"\n' > "$T/bin/$b"; done
+for b in opencode kiro-cli kiro kimi kimi-cli agy antigravity pi omp gemini copilot hermes aider cline adal openclaw; do printf '#!/usr/bin/env bash\necho "fake $0"\n' > "$T/bin/$b"; done
 mkdir -p "$T/home/.config/opencode" && printf '{ "$schema": "https://opencode.ai/config.json", "model": "x/y", "mcp": { "other": { "type": "remote", "url": "https://x" } } }\n' > "$T/home/.config/opencode/opencode.json"
 chmod +x "$T/bin/"*
 
@@ -50,6 +50,7 @@ cat > "$T/answers.json" <<EOF
   "ollama_enabled": false, "vllm_enabled": false, "fallback_chain": "deepseek/good", "skip_tests": false, "github_flow": "full", "harness_profiles": true, "harness_shell_rc": true }
 EOF
 
+REAL_GIT="$(command -v git)"
 export MODEL_GATEWAY_HOME_OVERRIDE="$T/home" PATH="$T/bin:$PATH" NO_COLOR=1
 fail() { echo "SELFTEST FAIL: $1" >&2; exit 1; }
 
@@ -107,7 +108,21 @@ grep -q "Delegating to other models" "$T/home/.omp/agent/AGENTS.md" || fail "omp
 [ -f "$T/proj/.omp/mcp.json" ] || fail "omp project mcp missing"
 [ -f "$T/proj/.kiro/steering/break-free.md" ] || fail "kiro project steering missing"
 [ -f "$T/proj/opencode.json" ] || fail "opencode project config missing"
-[ ! -f "$T/home/.kimi/mcp.json" ] || fail "kimi should not be installed (not detected)"
+node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if(!j.mcpServers["break-free-gateway"].args)process.exit(1)' "$T/home/.kimi/mcp.json" || fail "kimi mcp.json missing"
+[ -f "$T/home/.kimi/skills/break-free-model-gateway/SKILL.md" ] || fail "kimi skill missing"
+node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if(!j.mcpServers["break-free-gateway"])process.exit(1)' "$T/home/.gemini/settings.json" || fail "gemini settings.json missing MCP"
+[ -f "$T/home/.gemini/skills/break-free-model-gateway/SKILL.md" ] || fail "gemini skill missing"
+grep -q "Delegating to other models" "$T/home/.gemini/GEMINI.md" || fail "gemini GEMINI.md rule missing"
+[ -f "$T/home/.copilot/skills/break-free-model-gateway/SKILL.md" ] || fail "copilot skill missing"
+grep -q "Delegating to other models" "$T/home/.copilot/AGENTS.md" || fail "copilot AGENTS.md rule missing"
+[ -f "$T/home/.hermes/skills/break-free-model-gateway/SKILL.md" ] || fail "hermes skill missing"
+grep -q "Delegating to other models" "$T/home/.hermes/AGENTS.md" || fail "hermes AGENTS.md rule missing"
+grep -q "read:" "$T/home/.aider.conf.yml" || fail "aider read: key missing"
+grep -q "Delegating to other models" "$T/home/.clinerules" || fail "cline .clinerules rule missing"
+grep -q "Delegating to other models" "$T/home/.adal/AGENTS.md" || fail "adal AGENTS.md rule missing"
+grep -q "Delegating to other models" "$T/home/.openclaw/AGENTS.md" || fail "openclaw AGENTS.md rule missing"
+[ -f "$T/proj/.aider.conf.yml" ] || fail "aider project config missing"
+[ -f "$T/proj/.clinerules" ] || fail "cline project .clinerules missing"
 echo "ok"
 
 echo "### harness profiles"
@@ -162,11 +177,30 @@ grep -q "Delegating to other models" "$T/home/.config/opencode/AGENTS.md" && fai
 [ ! -f "$T/home/.kiro/steering/break-free.md" ] || fail "kiro steering still present"
 [ ! -f "$T/home/.kiro/settings/mcp.json" ] || fail "kiro mcp.json should be removed when empty"
 [ ! -f "$T/proj/.omp/mcp.json" ] || fail "omp project mcp still present"
+[ ! -f "$T/home/.gemini/settings.json" ] || fail "gemini settings.json not removed"
+[ ! -f "$T/home/.clinerules" ] || fail "cline .clinerules not removed"
+grep -q "read:" "$T/home/.aider.conf.yml" && fail "aider read: not removed"
 echo "ok"
 
 echo "### doctor after uninstall (expect RED, exit 1)"
 if node "$ROOT/setup.mjs" --doctor > "$T/doctor2.out" 2>&1; then fail "doctor should be RED after uninstall"; fi
 grep -q "RED" "$T/doctor2.out" || fail "expected RED verdict"
+echo "ok"
+
+echo "### update (self-update re-install)"
+cat > "$T/bin/git" <<EOF
+#!/usr/bin/env bash
+echo "git \$*" >> "$T/git.log"
+if [ "\$1" = "pull" ]; then echo "Already up to date."; exit 0; fi
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$T/bin/git"
+grep -q '"claude_scope": "both"' "$T/home/.config/model-gateway/last-install.json" || fail "last-install.json missing claude_scope"
+grep -q '"source_dir":' "$T/home/.config/model-gateway/last-install.json" || fail "last-install.json missing source_dir"
+node "$ROOT/setup.mjs" --update > "$T/update.out" 2>&1 || fail "update exited non-zero (see $T/update.out)"
+grep -q "pull" "$T/git.log" || fail "--update did not git pull"
+grep -q "GREEN" "$T/update.out" || fail "update re-install not GREEN"
+[ -f "$T/home/.claude/skills/break-free-model-gateway/SKILL.md" ] || fail "update did not re-install the skill"
 echo "ok"
 echo
 echo "SELFTEST PASSED — the installer works on this machine (fake CLIs, mock provider). Now run: node setup.mjs"
