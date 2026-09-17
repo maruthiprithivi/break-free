@@ -1,0 +1,57 @@
+WEBVTT
+
+1
+00:00:01.200 --> 00:00:08.033
+Your best model is the expensive one. Most of the work in a task is not the hard part.
+
+2
+00:00:09.533 --> 00:00:16.367
+Boilerplate, tests, migrations, docs, bulk edits: work that needs care, not genius.
+
+3
+00:00:16.867 --> 00:00:21.633
+Run all of it on a frontier model and you pay the top rate for typing.
+
+4
+00:00:22.133 --> 00:00:27.400
+Hand it to a cheap model instead and you get a confident report that nobody checked.
+
+5
+00:00:28.900 --> 00:00:35.433
+Break Free splits the job in two. The frontier model leads. Other models execute.
+
+6
+00:00:35.933 --> 00:00:46.367
+Claude Code or Codex keeps the judgement: understanding you, decomposing, designing, reviewing, owning the result.
+
+7
+00:00:46.867 --> 00:00:55.767
+DeepSeek, Kimi, GLM, MiniMax, OpenRouter, or a local Ollama model does the execution.
+
+8
+00:00:56.267 --> 00:00:59.900
+They meet at one MCP server that you install once.
+
+9
+00:01:01.400 --> 00:01:08.467
+For every task the lead writes the instruction, the acceptance criteria, and the command that proves it.
+
+10
+00:01:08.967 --> 00:01:17.233
+The gateway runs that command itself, after the worker finishes. A pass is a real exit code, not a claim.
+
+11
+00:01:17.733 --> 00:01:25.867
+Independent tasks run at the same time as a dependency graph, and a failed check blocks whatever depended on it.
+
+12
+00:01:26.367 --> 00:01:33.533
+Workers are jailed: no shell, no force push, no protected branches, no secrets in a diff.
+
+13
+00:01:34.033 --> 00:01:43.433
+Every task, outcome and decision is written to a Markdown ledger in your repository, so the next session resumes instead of restarting.
+
+14
+00:01:44.933 --> 00:01:52.233
+One command installs it, and the setup walks you through the providers, the keys and the checks.

@@ -29,7 +29,7 @@ cd model-gateway && npm install && npm run build && cd ..
 ## Run the checks
 
 ```bash
-cd model-gateway && npm test            # 45 end-to-end tests against a mock provider + mock MCP server (~40 s)
+cd model-gateway && npm test            # 46 end-to-end tests against a mock provider + mock MCP server (~40 s)
 cd .. && bash setup/selftest.sh         # installer end-to-end with fake claude/codex/opencode/kiro/omp CLIs, a throwaway HOME, mock provider
 ```
 
@@ -48,6 +48,7 @@ Both must be green before a PR. Neither needs an API key or touches your real `~
 | installer / doctor / uninstall | `setup.mjs`, `setup/lib.mjs`, `setup/selftest.sh` |
 | skills, commands, standing rules per harness | `agent-config/` |
 | tests | `model-gateway/test/` (`mock-provider.mjs`, `mock-mcp.mjs`, `gateway.test.mjs`) |
+| banner, intro and scenario videos | `videos/` — Remotion source, rendered in Docker; see [`videos/README.md`](videos/README.md) |
 
 ## Rules of the road
 

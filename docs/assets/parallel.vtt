@@ -1,0 +1,21 @@
+WEBVTT
+
+1
+00:00:00.800 --> 00:00:07.867
+One feature is really four pieces of work: the core, its tests, the docs, and the wiring.
+
+2
+00:00:08.333 --> 00:00:11.733
+You describe them once, with what depends on what.
+
+3
+00:00:12.200 --> 00:00:20.467
+The core goes first. The moment its verification passes, the other three start together on different vendors.
+
+4
+00:00:20.933 --> 00:00:29.300
+A failing check fails that task and skips everything downstream. Nothing broken moves forward.
+
+5
+00:00:29.767 --> 00:00:35.500
+You get one consolidated report, with every verification result attached.
