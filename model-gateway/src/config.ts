@@ -126,6 +126,16 @@ const ConfigSchema = z.object({
         .default({}),
     })
     .default({}),
+  /** Harness sub-agents: spawn another coding harness inside a tmux session (a real PTY) so it runs in
+   *  the interactive/subscription mode instead of `claude -p …` (which bills the API per token). */
+  harness: z
+    .object({
+      /** tmux binary (override with BREAK_FREE_TMUX, e.g. for tests) */
+      tmux: z.string().default("tmux"),
+      /** Prefix for tmux session names */
+      sessionPrefix: z.string().default("bf-"),
+    })
+    .default({}),
   /** USD per 1M tokens, keyed by "provider/model" or "provider" (fallback). Unknown models cost 0 and are reported as unpriced. */
   pricing: z.record(z.object({ input: z.number().min(0), output: z.number().min(0) })).default({}),
   budget: z

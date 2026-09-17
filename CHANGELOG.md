@@ -5,6 +5,7 @@
 - Harness support: Gemini CLI (MCP + skills + GEMINI.md), GitHub Copilot CLI, Cursor (MCP), Goose, Amp, Hermes, Aider, Cline, AdaL, OpenClaw, Droid, Kilo Code, Roo Code, Qoder and Zed — skills/rules in each tool's own conventions, with the exact manual-MCP step printed where a tool's MCP config can't be file-edited. Any tool that reads `AGENTS.md` + `.mcp.json` + `.agents/skills` (Crush, Windsurf, Trae, Junie, Warp, Continue, Augment, Freebuff, Devin) is covered at project scope.
 - Re-install picks up the previous setup (`last-install.json`) and pre-selects the prior scope/agents/github-flow; the github-flow skill stays fully optional (`github_flow: "none"` skips it).
 - New utilities: `setup.mjs --stats` (storage footprint + project/ledger/worktree stats) and `setup.mjs --clean` (reclaim disk: stale sessions/jobs + old log generations).
+- Harness sub-agents over tmux: `harness_spawn`/`harness_send`/`harness_read`/`harness_status`/`harness_close`/`harness_list` run a task in *another coding harness* (Claude Code, Codex, omp, pi, grok, …) inside a detached tmux session — a real PTY — so the sub-agent runs in the interactive/subscription mode, not `claude -p` (print mode bills the API per token). Sessions persist under `sessions/harness/` for resume.
 
 ## 3.3.0 — 2026-09-15
 - Worker-note quarantine: `ledger_note` output is `trust: worker, pending` and never injected until `note_review` promotes it; workers cannot overwrite lead notes.

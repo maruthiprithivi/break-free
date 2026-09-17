@@ -45,6 +45,8 @@
     "allowMerge": true
   },
 
+  "harness": { "tmux": "tmux", "sessionPrefix": "bf-" },
+
   "workers": {
     "projectInstructions": true,
     "maxContextChars": 40000,

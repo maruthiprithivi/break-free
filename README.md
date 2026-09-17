@@ -312,6 +312,15 @@ Example: `break-free-claude-ollama` starts Claude Code on your LAN Ollama model 
 
 Delegated workers also inherit context: every `delegate`/`supervise`/`run_plan` call attaches the workspace's `CLAUDE.md`, `AGENTS.md` and `.claude/rules/*.md` plus the ledger's decisions/gotchas to the worker's system prompt (`workers.projectInstructions`, cap `workers.maxContextChars`), `skills: […]` attaches named `SKILL.md` files, and `mcp_servers: […]` lends them your other MCP servers through the bridge.
 
+## Harness sub-agents: hand a task to another harness (PTY)
+
+`delegate`/`run_plan` run tasks on *models*. To run a task in *another whole harness* — Claude Code, Codex, omp, pi, grok, … — the gateway hosts each sub-agent in its own **tmux session** (a real PTY) and drives it by keystrokes, so it runs in the interactive/subscription mode instead of `claude -p "<prompt>"` (print mode bills the API per token):
+
+- `harness_spawn {harness:"codex"}` → detached `tmux new-session` in the workspace; returns a session id.
+- `harness_send` / `harness_read` / `harness_status` / `harness_close` / `harness_list` → drive and inspect it. Sessions persist under `~/.config/model-gateway/sessions/harness/`, so any later session can `harness_list` → `harness_read` and resume.
+
+Inside Orca (orca.dev) the workspace root is the Orca worktree, so a sub-agent shares the repo, git worktrees and ledger with the lead and the other agents. The tmux binary is configurable (`harness.tmux`, env `BREAK_FREE_TMUX`); tmux is for harness sub-agents, the `orca` CLI is for Orca-managed worktrees/terminals.
+
 ## break-free-github-flow: work tracking, CI and deployment discipline (optional)
 
 Installed by `setup.mjs` when you say yes at the "GitHub work tracking" step (or `"github_flow": "full" | "skill" | "none"` in an answers file). It is a second skill for Claude Code and Codex — `agent-config/*/skills/break-free-github-flow` — with three slash commands and an optional standing rule.

@@ -16,6 +16,7 @@ import { collectHarnessContext } from "./harness.js";
 import type { McpBridge } from "./mcpbridge.js";
 import type { Ledger } from "./ledger.js";
 import type { WorktreeRegistry } from "./worktrees.js";
+import type { HarnessController } from "./harnessctl.js";
 import { changedSince, denyPatterns, pickDifferentVendorReviewer, reviewHits, treeSnapshot } from "./policy.js";
 import { BudgetExceeded } from "./agent.js";
 import { runCommand, type CommandResult } from "./runcmd.js";
@@ -28,6 +29,8 @@ export interface Ctx {
   mcp: McpBridge;
   ledger: Ledger;
   worktrees: WorktreeRegistry;
+  /** tmux-hosted harness sub-agents (PTY, subscription-based) */
+  harnessctl: HarnessController;
   /** USD spent today according to the runtime log (for budget.perDayUsd) */
   spentTodayUsd: () => number;
   log: (s: string) => void;

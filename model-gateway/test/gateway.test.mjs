@@ -33,9 +33,32 @@ before(async () => {
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"], { cwd: ws });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"], { cwd: ws });
 
+  // Mock tmux: sessions are files under tmux-state; send-keys appends, capture-pane cats, has-session/kill-session test/remove.
+  const tmuxState = path.join(tmp, "tmux-state");
+  fs.mkdirSync(tmuxState, { recursive: true });
+  const tmuxBin = path.join(tmp, "tmux");
+  fs.writeFileSync(tmuxBin, [
+    "#!/usr/bin/env bash",
+    `STATE="${tmuxState}"`,
+    'mkdir -p "$STATE"',
+    'cmd="$1"; shift',
+    'arg() { local f="$1" prev=""; shift; for a in "$@"; do [ "$prev" = "$f" ] && { printf "%s" "$a"; return 0; }; prev="$a"; done; }',
+    'case "$cmd" in',
+    '  new-session) : > "$STATE/$(arg -s "$@")"; exit 0 ;;',
+    '  send-keys) t="$(arg -t "$@")"; lit="$(arg -l "$@")"; [ -n "$lit" ] && printf "%s" "$lit" >> "$STATE/$t"; case " $* " in *" Enter "*) echo >> "$STATE/$t" ;; esac; exit 0 ;;',
+    '  capture-pane) cat "$STATE/$(arg -t "$@")" 2>/dev/null; exit 0 ;;',
+    '  has-session) [ -f "$STATE/$(arg -t "$@")" ] && exit 0 || exit 1 ;;',
+    '  kill-session) rm -f "$STATE/$(arg -t "$@")"; exit 0 ;;',
+    '  *) exit 0 ;;',
+    "esac",
+    "",
+  ].join("\n"));
+  fs.chmodSync(tmuxBin, 0o755);
+
   configPath = path.join(tmp, "config.json");
   fs.writeFileSync(configPath, JSON.stringify({
     sessionDir,
+    harness: { tmux: tmuxBin },
     logFile: path.join(tmp, "gateway.log"),
     defaults: { model: "fast", reviewer: "mock/good", supervisor: "mock/good", timeoutMs: 1500, maxSessionMessages: 8 },
     fallback: { chain: ["mock/good"], retriesPerCandidate: 0, retryDelayMs: 0 },
@@ -265,6 +288,22 @@ test("session history always starts with a user turn after trimming", async () =
   for (let i = 0; i < 6; i++) await call("delegate", { task: `CALL read_file {"path":"src/app.js"} #${i}`, model: "tooly", session_id: "trim", capabilities: ["read"] });
   const s = (await call("session_get", { session_id: "trim" })).json();
   assert.equal(s.messages[0].role, "user");
+});
+
+test("harness sub-agents: spawn, send, read, status, list, close over tmux", async () => {
+  const sp = (await call("harness_spawn", { harness: "claude" })).json();
+  assert.ok(sp.id);
+  assert.equal(sp.state, "running");
+  await call("harness_send", { id: sp.id, text: "explain src/app.js" });
+  const read = (await call("harness_read", { id: sp.id })).json();
+  assert.match(read.output, /explain src\/app\.js/);
+  assert.equal((await call("harness_status", { id: sp.id })).json().state, "running");
+  assert.ok((await call("harness_list")).json().sessions.some((x) => x.id === sp.id));
+  assert.equal((await call("harness_close", { id: sp.id })).json().closed, true);
+  assert.equal((await call("harness_status", { id: sp.id })).json().state, "exited");
+  // unknown id is a clean error, not a crash
+  const bad = await call("harness_read", { id: "nope" });
+  assert.equal(bad.isError, true);
 });
 
 

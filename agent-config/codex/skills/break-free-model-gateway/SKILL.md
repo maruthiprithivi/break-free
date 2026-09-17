@@ -31,6 +31,7 @@ The gateway gives workers your project's AGENTS.md / CLAUDE.md / rules, the ledg
 | `configure_provider` / `configure_alias` / `configure_fallback` | Persist model choices, aliases, fallback policy, keys and base URLs — `scope:"user"` (default) or `scope:"project"` (`.model-gateway.json` in the repo). See "Switching models". |
 | `gateway_logs` | Per-provider success/failure/tokens, per-tool stats, jobs, MCP stats, detected problems. **Run this first when delegation misbehaves.** |
 | `session_*` | Inspect / continue / clear worker conversations. |
+| `harness_spawn` / `harness_send` / `harness_read` / `harness_status` / `harness_close` / `harness_list` | Run a task in **another coding harness** (claude/codex/omp/pi/grok/…) inside a detached tmux session — a real PTY — so it uses the user's subscription, not API credits (never `claude -p`). Sessions persist and resume by id. |
 
 ## The lead's loop
 
@@ -55,6 +56,15 @@ The user says things like "use kimi-k3 for fast from now on", "switch deepseek t
 4. Apply, then `test_provider {spec}` for a real round-trip, and tell the user what changed, where it was saved, and which model answered the test.
 
 Project scope can only carry model choices, aliases, defaults and fallback order — keys, base URLs and git/GitHub policy are refused there by design.
+
+## Harness sub-agents (harness → harness over tmux)
+
+Delegating to *another coding harness* is different from delegating to an LLM: the sub-agent should run in the user's interactive mode — the Claude Code / Codex subscription — not `claude -p "<prompt>"`, which prints non-interactively and bills the API per token. Break Free hosts each harness sub-agent in its own **tmux session** (a real PTY) driven by keystrokes, and tracks it as a resumable session.
+
+- `harness_spawn {harness:"codex", cwd?}` → a detached `tmux new-session` running that harness in the workspace; returns a session id. Fan a sub-task out to a whole other harness (with its own memory, skills and tools) while the lead keeps the conversation.
+- `harness_send {id, text}` / `harness_read {id}` → write the task and read the pane. `harness_status` says running/exited; `harness_close` ends it; `harness_list` shows every session — resume an earlier one by id.
+- Session ids persist under `~/.config/model-gateway/sessions/harness/`, so a later session can `harness_list` → `harness_read` and pick up where a sub-agent left off.
+- Inside Orca (orca.dev) the workspace root is the Orca worktree; spawn there and the sub-agent shares the repo, git worktrees and ledger with the lead and the other agents. The tmux binary is configurable (`harness.tmux`, env `BREAK_FREE_TMUX`).
 
 ## Parallel agents & worktrees (multi-agent hand-offs)
 

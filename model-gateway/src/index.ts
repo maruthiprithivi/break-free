@@ -11,7 +11,8 @@
  *   job_list, job_status, job_result, job_cancel,
  *   list_mcp_servers,
  *   ledger_resume, task_create, task_update, task_list, task_get, note_write, note_search, code_map,
- *   session_list, session_get, session_clear, gateway_logs
+ *   session_list, session_get, session_clear, gateway_logs,
+ *   harness_spawn, harness_send, harness_read, harness_status, harness_close, harness_list (tmux PTY sub-agents)
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -33,6 +34,7 @@ import { runSteward, hygiene } from "./steward.js";
 import { DEFAULT_PRICING } from "./config.js";
 import { ghAvailable } from "./github.js";
 import { SessionStore } from "./sessions.js";
+import { HarnessController } from "./harnessctl.js";
 import { delegate, panel, review, supervise, runPlan, type Ctx } from "./orchestrate.js";
 import { PROVIDER_CATALOG } from "./providers.js";
 import { Logger, analyze, callContext, setLogger, summarizeArgs, log as rlog } from "./logger.js";
@@ -61,6 +63,7 @@ function reload(): Ctx {
   const sessions = new SessionStore(config, stateless);
   const mcp = new McpBridge(config, workspace.root);
   const worktrees = new WorktreeRegistry(workspace.root, { inactiveAfterHours: config.worktrees.inactiveAfterHours });
+  const harnessctl = new HarnessController(config, stateless);
   // Ledger placement: main checkout writes the committed .break-free/; a linked worktree writes a local
   // shadow overlay (.git/break-free/shadow/<branch>) on top of main's LIVE ledger, so feature branches
   // never carry ledger changes and main absorbs them with ledger_merge_from.
@@ -75,7 +78,7 @@ function reload(): Ctx {
     const today = new Date().toISOString().slice(0, 10);
     return Math.round(logger.tail(20_000, (e) => e.kind === "route.attempt" && !!e.ok && String(e.ts).startsWith(today)).reduce((a, e) => a + Number(e.cost_usd ?? 0), 0) * 1e6) / 1e6;
   };
-  return { config, sessions, workspace, mcp, ledger, worktrees, spentTodayUsd, log };
+  return { config, sessions, workspace, mcp, ledger, worktrees, harnessctl, spentTodayUsd, log };
 }
 
 let ctx = reload();
@@ -943,6 +946,47 @@ server.registerTool("session_get", {
   return json({ meta: s.meta, messages: s.messages.map((m) => ({ role: m.role, name: m.name, content: (m.content ?? "").slice(0, lim), tool_calls: m.tool_calls?.map((t) => `${t.function.name}(${t.function.arguments.slice(0, 200)})`) })) });
 });
 server.registerTool("session_clear", { title: "Clear session", description: "Delete a session's history.", inputSchema: { session_id: z.string() } }, async ({ session_id }) => json({ cleared: ctx.sessions.clear(session_id) }));
+
+// ---- harness sub-agents (tmux PTY — subscription, not API credits)
+server.registerTool("harness_spawn", {
+  title: "Spawn a harness sub-agent",
+  description: "Start another coding harness (claude, codex, omp, pi, grok, …) inside a detached tmux session — a real PTY — so it runs in the interactive/subscription mode instead of `claude -p` (print mode bills the API per token). Returns a session id for harness_send / harness_read / harness_status / harness_close. A harness sub-agent shares the repo (and its worktree) with the lead but runs in its own terminal.",
+  inputSchema: {
+    harness: z.string().describe("CLI command that owns the session: claude, codex, omp, pi, grok, …"),
+    cwd: z.string().optional().describe("Working directory (default: the gateway workspace root)"),
+    command: z.string().optional().describe("Exact command override (default: the harness name)"),
+  },
+}, async (a) => json(await ctx.harnessctl.spawn(a.harness, a)));
+
+server.registerTool("harness_send", {
+  title: "Send input to a harness session",
+  description: "Write literal keystrokes into a tmux harness session (plus Enter by default). Use for prompts, follow-ups, or approvals.",
+  inputSchema: { id: z.string(), text: z.string(), enter: z.boolean().default(true) },
+}, async (a) => { await ctx.harnessctl.send(a.id, a.text, a.enter); return json({ id: a.id, sent: true }); });
+
+server.registerTool("harness_read", {
+  title: "Read a harness session",
+  description: "Capture the tmux pane text (last N lines of scrollback) so the lead can see what the sub-agent did.",
+  inputSchema: { id: z.string(), lines: z.number().int().positive().default(400) },
+}, async (a) => json({ id: a.id, output: await ctx.harnessctl.read(a.id, a.lines) }));
+
+server.registerTool("harness_status", {
+  title: "Harness session status",
+  description: "running / exited / unknown for a harness sub-agent.",
+  inputSchema: { id: z.string() },
+}, async (a) => json({ id: a.id, state: await ctx.harnessctl.status(a.id) }));
+
+server.registerTool("harness_close", {
+  title: "Close a harness session",
+  description: "Kill the tmux session (ends the sub-agent).",
+  inputSchema: { id: z.string() },
+}, async (a) => json({ id: a.id, closed: await ctx.harnessctl.close(a.id) }));
+
+server.registerTool("harness_list", {
+  title: "List harness sessions",
+  description: "Every harness sub-agent with its tmux name, harness, cwd, state and timestamps — use to resume work a previous session started.",
+  inputSchema: {},
+}, async () => json({ sessions: await ctx.harnessctl.list() }));
 
 // ------------------------------------------------------------ main
 async function main() {
