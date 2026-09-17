@@ -1,6 +1,6 @@
 ---
 name: break-free-model-gateway
-description: Break Free — you are the lead; other models are the crew. Delegate execution (boilerplate, tests, refactors, migrations, docs, bulk edits), run many workers in parallel (run_plan), get independent review, run panels, supervise long tasks, and keep a durable task board + knowledge ledger across sessions — all through the break-free-gateway MCP server (DeepSeek, Kimi, MiniMax, Z.AI/GLM, Ollama local/cloud, OpenRouter, OpenCode Zen, vLLM) with automatic provider/model fallback. Use for any task with more than ~15 minutes of mechanical work, anything parallelisable, "delegate", "hand this to deepseek/kimi/glm/a local model", "second opinion", "review this", "run a panel", "supervise", "plan this out", "resume", "where were we", "use <model> for <alias>", "switch <provider> to <model>", "change the reviewer model", "what are the other worktrees doing", "hand this off", "create a worktree for X", "how much have we spent", "set a budget", "never let workers touch X", "review the pending notes", "run the steward".
+description: Break Free — you are the lead; other models are the crew. Delegate execution (boilerplate, tests, refactors, migrations, docs, bulk edits), run many workers in parallel (run_plan), get independent review, run panels, supervise long tasks, and keep a durable task board + knowledge ledger across sessions — all through the break-free-gateway MCP server (DeepSeek, Kimi, MiniMax, Z.AI/GLM, Ollama local/cloud, OpenRouter, OpenCode Zen, vLLM) with automatic provider/model fallback. Use for any task with more than ~15 minutes of mechanical work, anything parallelisable, "delegate", "hand this to deepseek/kimi/glm/a local model", "use codex/kiro-cli/agy/omp/pi/claude for <task>", "second opinion", "review this", "run a panel", "supervise", "plan this out", "resume", "where were we", "use <model> for <alias>", "switch <provider> to <model>", "change the reviewer model", "what are the other worktrees doing", "hand this off", "create a worktree for X", "how much have we spent", "set a budget", "never let workers touch X", "review the pending notes", "run the steward".
 argument-hint: [delegate|plan|review|panel|supervise|resume] [task]
 allowed-tools: mcp__break-free-gateway, Bash(git diff *), Bash(git status *), Bash(git log *)
 ---
@@ -34,6 +34,21 @@ The gateway gives workers your project's CLAUDE.md / rules, the ledger's decisio
 | `gateway_logs` | Per-provider success/failure/tokens, per-tool stats, jobs, MCP stats, detected problems. **Run this first when delegation misbehaves.** |
 | `session_*` | Inspect / continue / clear worker conversations. |
 | `harness_spawn` / `harness_send` / `harness_read` / `harness_status` / `harness_close` / `harness_list` | Run a task in **another coding harness** (claude/codex/omp/pi/grok/…) inside a detached tmux session — a real PTY — so it uses the user's subscription, not API credits (never `claude -p`). Sessions persist and resume by id. |
+
+## Routing "use X to do Y"
+
+When the user says "write code using deepseek", "use codex for the mockups", "use kiro-cli and agy to review" — route by what `X` is, a **model** or a **harness**:
+
+| "X" | route | example |
+|---|---|---|
+| a model/provider spec (`deepseek`, `kimi`, `zai`/`glm`, `minimax`, `ollama`, `openrouter/…`, `opencode/…`) | **LLM delegation** — `delegate`/`run_plan` with `model` | "write code using deepseek" → `delegate {model:"deepseek/deepseek-v4-pro", task:"…"}` |
+| another harness CLI (`codex`, `kiro-cli`, `agy`, `omp`, `pi`, `claude`, `opencode`, `gemini`, …) | **harness sub-agent** — `harness_spawn` + `harness_send` (tmux PTY, subscription) | "use codex for the mockups" → `harness_spawn {harness:"codex"}` then `harness_send` the brief |
+| several models | `run_plan` (parallel, per-task `model`) or `panel`/`review` | "deepseek for code, kimi to review" → `run_plan`, review by a different vendor |
+| several harnesses | one `harness_spawn` per harness, send each the same task, read each back | "use kiro-cli and agy to review" → spawn both, send the diff + "review this" to each, `harness_read` both |
+
+Ambiguity: `kimi` and `opencode` name both a model *and* a harness. "use kimi" on a coding task → Kimi Code CLI (harness) when the user wants that harness's tools; model *choices* ("switch to kimi", "use kimi-k3") → the kimi provider. If unclear, ask in one line — don't guess.
+
+A harness sub-agent is a tmux session that keeps running after you move on: `harness_list` → `harness_read` collects its work, more `harness_send` resumes it, `harness_close` ends it.
 
 ## The lead's loop
 
