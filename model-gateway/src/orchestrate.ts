@@ -5,12 +5,12 @@
  *   panel     – N models answer in parallel, optional judge synthesises
  *   supervise – worker <-> supervisor loop until accepted or rounds exhausted
  */
-import { runWorker, resolveCapabilities, type RunResult, type TaskShape } from "./agent.js";
+import { runWorker, resolveCapabilities, type RouteNotice, type RunResult, type TaskShape } from "./agent.js";
 import type { ChatMessage } from "./client.js";
 import type { GatewayConfig } from "./config.js";
 import { judgeSystem, reviewerSystem, supervisorSystem, workerSystem } from "./prompts.js";
 import type { SessionStore } from "./sessions.js";
-import { resolveCandidates } from "./router.js";
+import { resolveCandidates, resolveFloor, tierOfSpec } from "./router.js";
 import { Workspace, gitRef, type Capability } from "./workspace.js";
 import { collectHarnessContext } from "./harness.js";
 import type { McpBridge } from "./mcpbridge.js";
@@ -134,6 +134,12 @@ export function summarize(r: RunResult): Record<string, unknown> {
   };
 }
 
+/** run_plan progress line for a downward tier crossing, emitted when it happens. */
+function describeRoute(n: RouteNotice): string {
+  const reason = n.reason ?? "allow_downgrade";
+  return `route: ${n.requested} -> ${n.used} (${reason}) [tier ${n.requestedTier ?? "?"} -> ${n.usedTier ?? "?"}]`;
+}
+
 // ------------------------------------------------------------------ delegate
 export interface DelegateArgs {
   task: string;
@@ -158,11 +164,17 @@ export interface DelegateArgs {
   verify?: string;
   /** USD cap for this worker (default config.budget.perTaskUsd) */
   budget_usd?: number;
+  /** Never route below this competence tier; the default floor is the tier of the model you asked for. */
+  min_tier?: number;
+  /** Permit falling back below the floor once every at-or-above candidate has failed (default: config.fallback.allowDowngrade). */
+  allow_downgrade?: boolean;
   signal?: AbortSignal;
 }
 
-export async function delegate(ctx: Ctx, a: DelegateArgs): Promise<{ text: string; meta: Record<string, unknown>; run: RunResult }> {
+export async function delegate(ctx: Ctx, a: DelegateArgs, progress?: (s: string) => void): Promise<{ text: string; meta: Record<string, unknown>; run: RunResult }> {
   checkDayBudget(ctx);
+  const floor = resolveFloor(ctx.config, a.model, { minTier: a.min_tier, allowDowngrade: a.allow_downgrade });
+  const requested = a.model ?? ctx.config.defaults.model;
   const caps: Capability[] = resolveCapabilities(a.shape, a.capabilities);
   const ws = ctx.workspace.withDeny(denyPatterns(ctx.config));
   const before = caps.some((c) => c !== "read") ? await treeSnapshot(ws) : undefined;
@@ -174,6 +186,11 @@ export async function delegate(ctx: Ctx, a: DelegateArgs): Promise<{ text: strin
   const user: ChatMessage = { role: "user", content: [a.context ? `## Context\n${a.context}` : "", `## Task\n${a.task}`].filter(Boolean).join("\n\n") };
   const run = await runWorker(ctx.config, {
     model: a.model,
+    minTier: floor.minTier,
+    derivedTier: floor.derivedTier,
+    requestedModel: requested,
+    allowDowngrade: floor.allowDowngrade,
+    onRoute: progress ? (n) => { if (n.downgraded) progress(describeRoute(n)); } : undefined,
     system,
     messages: [...(session?.messages ?? []), user],
     capabilities: caps,
@@ -193,10 +210,12 @@ export async function delegate(ctx: Ctx, a: DelegateArgs): Promise<{ text: strin
     ctx.sessions.save(session);
   }
   const v = await verifyStep(ctx, a.verify, a.signal);
+  const usedTier = tierOfSpec(ctx.config, run.usedModel);
+  const downgraded = floor.derivedTier !== undefined && usedTier !== undefined && usedTier < floor.derivedTier;
   const pol = before ? await policyReview(ctx, ws, before, run.usedModel, a.task, a.signal) : undefined;
   const polText = pol?.review ? `\n\n## Policy review (${pol.review.model}${pol.review.different_vendor ? ", different vendor" : ""}): ${pol.review.verdict.toUpperCase()}\n${pol.review.summary ?? ""}${(pol.review.issues ?? []).slice(0, 8).map((i) => `\n- [${i.severity}] ${i.title ?? ""}${i.file ? ` (${i.file}${i.line ? `:${i.line}` : ""})` : ""}: ${i.detail}`).join("")}\nTriggered by: ${pol.hits.map((h) => h.path).join(", ")}` : "";
   const scoutNote = a.shape === "scout" ? "\n\n## Scout task\nRead-only investigation; nothing was changed." : "";
-  return { text: run.text + scoutNote + verifyText(v) + polText, meta: { ...summarize(run), shape: a.shape ?? "ship", session_id: a.session_id ?? null, harness_context: harness.sources, mcp_servers: a.mcp_servers ?? [], verify: verifyMeta(v), policy: pol ? { changed: pol.changed, review_required: pol.hits, verdict: pol.review?.verdict ?? null, reviewer: pol.review?.model ?? null } : null, at: stamp() }, run };
+  return { text: run.text + scoutNote + verifyText(v) + polText, meta: { ...summarize(run), requested_model: requested, tier: usedTier ?? null, downgraded, shape: a.shape ?? "ship", session_id: a.session_id ?? null, harness_context: harness.sources, mcp_servers: a.mcp_servers ?? [], verify: verifyMeta(v), policy: pol ? { changed: pol.changed, review_required: pol.hits, verdict: pol.review?.verdict ?? null, reviewer: pol.review?.model ?? null } : null, at: stamp() }, run };
 }
 
 // -------------------------------------------------------------------- review
@@ -342,6 +361,10 @@ export interface SuperviseArgs {
   mcp_servers?: string[];
   /** Allow-listed command run by the gateway after every worker round; its result is shown to the supervisor */
   verify?: string;
+  /** Never route the worker below this competence tier; the default floor is the tier of the model you asked for. */
+  min_tier?: number;
+  /** Permit the worker to fall back below the floor once every at-or-above candidate has failed (default: config.fallback.allowDowngrade). */
+  allow_downgrade?: boolean;
   signal?: AbortSignal;
 }
 
@@ -357,8 +380,10 @@ export interface SupervisionRound {
   verify?: ReturnType<typeof verifyMeta>;
 }
 
-export async function supervise(ctx: Ctx, a: SuperviseArgs): Promise<{ accepted: boolean; rounds: SupervisionRound[]; final: string; meta: Record<string, unknown> }> {
+export async function supervise(ctx: Ctx, a: SuperviseArgs, progress?: (s: string) => void): Promise<{ accepted: boolean; rounds: SupervisionRound[]; final: string; meta: Record<string, unknown> }> {
   checkDayBudget(ctx);
+  const floor = resolveFloor(ctx.config, a.worker, { minTier: a.min_tier, allowDowngrade: a.allow_downgrade });
+  const requestedWorker = a.worker ?? ctx.config.defaults.model;
   const caps: Capability[] = resolveCapabilities(a.shape, a.capabilities);
   const ws = ctx.workspace.withDeny(denyPatterns(ctx.config));
   const before = caps.some((c) => c !== "read") ? await treeSnapshot(ws) : undefined;
@@ -379,7 +404,21 @@ export async function supervise(ctx: Ctx, a: SuperviseArgs): Promise<{ accepted:
 
   for (let round = 1; round <= maxRounds; round++) {
     if (a.signal?.aborted) throw new Error("cancelled");
-    const w = await runWorker(ctx.config, { model: a.worker, system: workerSys, messages: [...session.messages, { role: "user", content: nextPrompt }], capabilities: caps, workspace: ws, extraTools, signal: a.signal, log: ctx.log });
+    const w = await runWorker(ctx.config, {
+      model: a.worker,
+      minTier: floor.minTier,
+      derivedTier: floor.derivedTier,
+      requestedModel: requestedWorker,
+      allowDowngrade: floor.allowDowngrade,
+      onRoute: progress ? (n) => { if (n.downgraded) progress(describeRoute(n)); } : undefined,
+      system: workerSys,
+      messages: [...session.messages, { role: "user", content: nextPrompt }],
+      capabilities: caps,
+      workspace: ws,
+      extraTools,
+      signal: a.signal,
+      log: ctx.log,
+    });
     session.messages = w.messages;
     session.meta.turns += 1;
     session.meta.lastModel = w.usedModel;
@@ -426,7 +465,9 @@ export async function supervise(ctx: Ctx, a: SuperviseArgs): Promise<{ accepted:
       else if (pol.review) final += `\n\n## Policy review (${pol.review.model}): ${pol.review.verdict.toUpperCase()} — ${pol.review.summary ?? ""}`;
     }
   }
-  return { accepted, rounds, final, meta: { shape: a.shape ?? "ship", session_id: sessionId, rounds: rounds.length, usage, cost_usd: Math.round(rounds.length ? costTotal * 1e6 : 0) / 1e6, policy, at: stamp() } };
+  const usedTier = tierOfSpec(ctx.config, rounds.at(-1)?.workerModel);
+  const downgraded = floor.derivedTier !== undefined && usedTier !== undefined && usedTier < floor.derivedTier;
+  return { accepted, rounds, final, meta: { shape: a.shape ?? "ship", requested_model: requestedWorker, tier: usedTier ?? null, downgraded, session_id: sessionId, rounds: rounds.length, usage, cost_usd: Math.round(rounds.length ? costTotal * 1e6 : 0) / 1e6, policy, at: stamp() } };
 }
 
 // ------------------------------------------------------------------ run_plan
@@ -457,6 +498,10 @@ export interface PlanTask {
   review?: boolean;
   session_id?: string;
   max_iterations?: number;
+  /** Never route below this competence tier; the default floor is the tier of the model you asked for. */
+  min_tier?: number;
+  /** Permit falling back below the floor once every at-or-above candidate has failed (default: config.fallback.allowDowngrade). */
+  allow_downgrade?: boolean;
 }
 
 export interface RunPlanArgs {
