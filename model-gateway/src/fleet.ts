@@ -11,7 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export type FleetEventKind = "job.done" | "job.failed" | "harness.exited" | "harness.output" | "harness.idle" | "ci.pending" | "ci.failed";
+export type FleetEventKind = "job.done" | "job.failed" | "harness.exited" | "harness.output" | "harness.idle" | "ci.pending" | "ci.failed" | "provider.circuit_open";
 
 export interface FleetCi {
   repo?: string;

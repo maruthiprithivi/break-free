@@ -39,6 +39,7 @@ import { ghAvailable } from "./github.js";
 import { SessionStore } from "./sessions.js";
 import { HarnessController } from "./harnessctl.js";
 import { appendEvents, classify, drainTo, expireCi, pendingEvents, readSnapshot, resolveCi, writeSnapshot, type FleetEvent, type FleetSnapshot } from "./fleet.js";
+import { getBreaker } from "./breaker.js";
 import { delegate, panel, review, supervise, runPlan, type Ctx } from "./orchestrate.js";
 import { PROVIDER_CATALOG } from "./providers.js";
 import { Logger, analyze, callContext, setLogger, summarizeArgs, log as rlog } from "./logger.js";
@@ -1137,7 +1138,10 @@ async function main() {
     // Print a config/provider summary and exit non-zero if nothing is usable.
     const rows = listProviderNames(ctx.config).map(providerReport);
     const usable = rows.filter((r) => r.usable).map((r) => r.provider);
-    console.log(JSON.stringify({ config_files: loaded.sources, workspace: ctx.workspace.root, usable_providers: usable, github_cli: await ghAvailable(), providers: rows }, null, 2));
+    // An open circuit looks exactly like a healthy provider in the rows above — key
+    // present, model configured — so --doctor has to say it out loud.
+    const openCircuits = getBreaker(ctx.config).list();
+    console.log(JSON.stringify({ config_files: loaded.sources, workspace: ctx.workspace.root, usable_providers: usable, open_circuits: openCircuits, github_cli: await ghAvailable(), providers: rows }, null, 2));
     process.exit(usable.length ? 0 : 2);
   }
   if (argv.includes("--logs")) {

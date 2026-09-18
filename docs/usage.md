@@ -134,6 +134,16 @@ Say it to the agent — "use kimi-k3 for `fast` from now on", "switch deepseek t
 ## Fallback semantics
 For each candidate in order: transient failures (429, 5xx, timeout, network) are retried `retriesPerCandidate` times with backoff, then the next candidate is tried; missing key / disabled / 401 / unknown model skip immediately to the next; `bad_request` (400) stops, because the request itself is wrong. After the alias/explicit list, `fallback.chain` is appended. `retryOn` controls which reasons are allowed to fall through. Every tool result ends with `meta: {"model": "…", "fallback_attempts": […]}`.
 
+## The circuit breaker: a dead host costs one timeout, not one per call
+
+A wedged host is the worst kind of failure, because it looks healthy. It accepts the TCP connection and then says nothing, so the request sits until `timeoutMs` — which is deliberately generous for slow models — and with `retriesPerCandidate` it does that twice. One delegation burned twenty minutes that way, and every later call in the session burned twenty more, because nothing remembered.
+
+Two consecutive **timeout or network** failures now open that provider's circuit. While it is open its candidates are skipped instantly with the attempt reason `circuit_open`, the chain carries on to the next candidate, and a `provider.circuit_open` event goes on the fleet queue so the trip is visible rather than inferred. Only host-level symptoms count as strikes: a 401 or an unknown model says nothing about whether the host is answering.
+
+After `cooldownMs` the next call is a trial. The strikes are not forgiven, so one further failure re-opens the circuit immediately and only a real answer clears it. The state is persisted next to the session files, so a restart does not re-learn the same dead host, and `--doctor` reports `open_circuits` — an open circuit is otherwise indistinguishable from a healthy provider, since the key is present and the model is configured.
+
+Tune it with `fallback.breaker`: `{ "enabled": true, "failures": 2, "cooldownMs": 300000 }`.
+
 ## The tier floor: fallback never quietly gets weaker
 
 Fallback used to mean "anything that answers". A task pinned to a frontier model could land on a small local one and grind for half an hour, and the only sign was the `model` field in `meta`.
