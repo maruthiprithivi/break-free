@@ -123,3 +123,18 @@ test("project .model-gateway.json mergeAutonomy is ignored", async (t) => {
   const merge = await g.merge();
   assert.match(merge.text, /PR merging disabled by config \(github\.allowMerge=false\)/);
 });
+
+// Crew aliases are the same chains wearing a second badge. If someone edits a core
+// alias and the crew name stops matching, that is a silent routing bug: `ensign`
+// would quietly point at a model `fast` no longer uses.
+test("crew aliases resolve to exactly the chain they mirror", async () => {
+  const { DEFAULT_ALIASES, CREW_ALIAS_MIRRORS } = await import("../dist/config.js");
+  assert.deepEqual(Object.keys(CREW_ALIAS_MIRRORS).sort(), ["commander", "counselor", "ensign", "holodeck", "subspace"]);
+  for (const [crew, core] of Object.entries(CREW_ALIAS_MIRRORS)) {
+    assert.ok(DEFAULT_ALIASES[core], `core alias ${core} must still exist`);
+    assert.deepEqual(DEFAULT_ALIASES[crew].candidates, DEFAULT_ALIASES[core].candidates, `${crew} must mirror ${core}`);
+  }
+  for (const core of ["fast", "strong", "reviewer", "local", "cloud"]) {
+    assert.ok(DEFAULT_ALIASES[core], `${core} must not be renamed or removed`);
+  }
+});

@@ -113,6 +113,19 @@ Everything else that reads `AGENTS.md` + `.mcp.json` + `.agents/skills` — Crus
 `list_mcp_servers` shows servers from `config.workers.mcp.servers`, `~/.claude.json` (user + project scope), `<workspace>/.mcp.json` and `~/.codex/config.toml`. Nothing is exposed unless a call names it: `delegate({ …, mcp_servers: ["postgres", "playwright"] })`. Tools appear to the worker as `mcp__postgres__query`; anything matching `workers.mcp.denyTools` (`*delete*`, `*remove*`, `*drop*`, `*destroy*`, `*purge*`, `*wipe*`, `*truncate*` by default) is never exposed, and a server entry may add `allowTools`. Stdio, streamable-HTTP and SSE transports; `${ENV}` expansion in env/args/url/headers.
 
 ## Model specs
+
+Every alias has a crew name that resolves to the same chain. Both work; use whichever reads better to you.
+
+| crew name | same chain as | what it is for |
+|---|---|---|
+| `ensign` | `fast` | the legwork: boilerplate, tests, refactors |
+| `commander` | `strong` | hard implementation or supervision |
+| `counselor` | `reviewer` | the independent read on whether something is sound, from a different vendor than the worker |
+| `holodeck` | `local` | a simulation that never leaves the ship |
+| `subspace` | `cloud` | the off-ship link |
+
+`delegate({ model: "ensign" })` and `delegate({ model: "fast" })` are the same call. The crew name takes its candidate list from the core alias rather than copying it, so editing one cannot leave the other pointing at a retired model, and a test pins that.
+
 `fast` `strong` `reviewer` `local` `cloud` (aliases, each an ordered fallback chain) · `deepseek/deepseek-v4-pro` · `kimi/kimi-k3` · `zai/glm-5.3` · `minimax/MiniMax-M3` · `ollama/qwen3-coder:30b` · `ollama-cloud/gpt-oss:120b` · `openrouter/moonshotai/kimi-k3` · `opencode/deepseek-v4-flash` · bare `kimi` (provider default) · `a,b,c` (ad-hoc chain).
 
 ## Switching models from chat

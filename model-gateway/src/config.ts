@@ -211,7 +211,9 @@ export function modeDefaults(mode: "guarded" | "pr-only" | "local-only", mergeAu
   }
 }
 
-export const DEFAULT_ALIASES: Record<string, { candidates: string[]; description: string }> = {
+interface AliasDef { candidates: string[]; description: string }
+
+const CORE_ALIASES = {
   fast: {
     description: "Cheap/fast worker for boilerplate, tests, refactors",
     candidates: ["deepseek/deepseek-v4-flash", "zai/glm-5.3-flash", "opencode/deepseek-v4-flash", "openrouter/deepseek/deepseek-v4-flash", "ollama/qwen3-coder:30b"],
@@ -232,7 +234,32 @@ export const DEFAULT_ALIASES: Record<string, { candidates: string[]; description
     description: "Ollama Cloud tier",
     candidates: ["ollama-cloud/gpt-oss:120b", "ollama-cloud/deepseek-v4-flash"],
   },
+} satisfies Record<string, AliasDef>;
+
+/**
+ * Crew names for the same chains. `ensign` and `fast` are the same alias wearing
+ * two badges: the candidate list is taken from the core entry rather than copied,
+ * so editing `fast` cannot leave `ensign` pointing at a retired model.
+ */
+const CREW_ALIASES: Record<string, { mirrors: keyof typeof CORE_ALIASES; description: string }> = {
+  ensign: { mirrors: "fast", description: "Junior officer: the legwork. Same chain as `fast`." },
+  commander: { mirrors: "strong", description: "Senior officer: hard implementation or supervision. Same chain as `strong`." },
+  counselor: { mirrors: "reviewer", description: "The independent read on whether something is sound; prefer a DIFFERENT vendor than the worker. Same chain as `reviewer`." },
+  holodeck: { mirrors: "local", description: "A simulation that never leaves the ship. Same chain as `local`." },
+  subspace: { mirrors: "cloud", description: "The off-ship link. Same chain as `cloud`." },
 };
+
+export const DEFAULT_ALIASES: Record<string, AliasDef> = {
+  ...CORE_ALIASES,
+  ...Object.fromEntries(
+    Object.entries(CREW_ALIASES).map(([name, { mirrors, description }]) => [name, { description, candidates: CORE_ALIASES[mirrors].candidates }]),
+  ),
+};
+
+/** Which core alias each crew name mirrors, so callers can prove the pairing. */
+export const CREW_ALIAS_MIRRORS: Record<string, string> = Object.fromEntries(
+  Object.entries(CREW_ALIASES).map(([name, { mirrors }]) => [name, mirrors]),
+);
 
 /** Approximate list prices (USD per 1M tokens). Edit `pricing` in config to correct them; unknown models report as unpriced. */
 export const DEFAULT_PRICING: Record<string, { input: number; output: number }> = {
