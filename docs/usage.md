@@ -121,6 +121,36 @@ Say it to the agent — "use kimi-k3 for `fast` from now on", "switch deepseek t
 ## Fallback semantics
 For each candidate in order: transient failures (429, 5xx, timeout, network) are retried `retriesPerCandidate` times with backoff, then the next candidate is tried; missing key / disabled / 401 / unknown model skip immediately to the next; `bad_request` (400) stops, because the request itself is wrong. After the alias/explicit list, `fallback.chain` is appended. `retryOn` controls which reasons are allowed to fall through. Every tool result ends with `meta: {"model": "…", "fallback_attempts": […]}`.
 
+## Project modes
+
+One named mode derives the git and GitHub policy, instead of setting three flags and hoping they agree:
+
+| `mode` | push | merge | protected branches |
+|---|---|---|---|
+| `guarded` (default) | non-protected branches only | only when `mergeAutonomy` is true | enforced |
+| `pr-only` | non-protected branches only | never, always a PR | enforced |
+| `local-only` | never | never | enforced |
+
+`mergeAutonomy` is a separate opt-in, so letting workers merge is always a deliberate act. An explicit `github.allowPush` or `github.allowMerge` still wins over the mode, so an existing config keeps behaving exactly as it did. Neither `mode` nor `mergeAutonomy` can be set from a project `.model-gateway.json`: that file comes with a repository you may have just cloned, and a clone must never be able to grant itself push rights.
+
+**Note for upgrades:** `github.allowMerge` used to default to `true`. It is now `false` under `guarded` unless you set `mergeAutonomy`, so a worker holding the `github` capability no longer merges out of the box.
+
+## Task shapes: ship and scout
+
+Every `delegate`, `supervise` and `run_plan` task takes a `shape`:
+
+- **`ship`** (default) uses the capabilities you asked for.
+- **`scout`** is a read-only investigation. Its capabilities are forced to `read` whatever you passed, and the report says it changed nothing.
+
+A scout is the safest thing you can delegate, so it has a name rather than requiring you to remember to write `capabilities: ["read"]`:
+
+```jsonc
+delegate({ task: "Why does the retry loop double-count attempts? Point at files and lines.",
+           model: "strong", shape: "scout" })
+```
+
+Asking for `["read","write","run"]` on a scout is not an error and not a warning — the write and run tools are simply never given to the worker.
+
 ## Capabilities and guardrails
 | capability | tools | can't |
 |---|---|---|
