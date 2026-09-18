@@ -1077,6 +1077,27 @@ async function main() {
     process.exit(0);
   }
   if (argv.includes("--fleet-check")) {
+    if (argv.includes("--hook")) {
+      // Claude Code Stop-hook contract: block -> one line of JSON on stdout;
+      // allow -> no output at all. Nothing may be written to stderr.
+      const stderrWrite = process.stderr.write;
+      process.stderr.write = (() => true) as typeof process.stderr.write;
+      try {
+        const res = await fleetCheck();
+        if (res.blocking) {
+          const parts: string[] = [];
+          if (res.running.jobs > 0) parts.push(`${res.running.jobs} job(s) running`);
+          if (res.pending.length > 0) parts.push(`${res.pending.length} event(s) pending`);
+          const reason = `${parts.join(", ")} - call fleet_status to collect them`;
+          console.log(JSON.stringify({ decision: "block", reason }));
+        }
+      } catch {
+        // Hook mode is silent on any internal error: no stdout, no stderr.
+      } finally {
+        process.stderr.write = stderrWrite;
+      }
+      process.exit(0);
+    }
     // Shell-hook friendly fleet status: always valid JSON, always exit 0.
     try {
       console.log(JSON.stringify(await fleetCheck(), null, 2));

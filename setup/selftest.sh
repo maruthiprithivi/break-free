@@ -60,6 +60,16 @@ echo "old" > "$T/home/.claude/skills/model-gateway/SKILL.md"; echo "uses model-g
 mkdir -p "$T/home/.codex" && printf '[mcp_servers.model_gateway]\ncommand = "node"\n\n[model_providers.mine]\nname = "mine"\nbase_url = "http://localhost:11434/v1"\nwire_api = "chat"\n' > "$T/home/.codex/config.toml"
 printf '# my rules\n\n<!-- Append to your repo'"'"'s AGENTS.md (or ~/.codex/AGENTS.md for all projects). -->\n\n## Delegating to other models\n\nThe `break_free_gateway` MCP server is available. Use the `break-free-model-gateway` skill old text.\n' > "$T/home/.codex/AGENTS.md"
 mkdir -p "$T/home/.claude" && printf '# mine\n\n## Delegating to other models (break-free-model-gateway)\nOLD VERSION of the rule.\n' > "$T/home/.claude/CLAUDE.md"
+cat > "$T/home/.claude/settings.json" <<'EOF'
+{
+  "permissions": { "allow": ["Bash(echo hi:*)"] },
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "echo unrelated-stop" } ] }
+    ]
+  }
+}
+EOF
 
 echo "### install"
 node "$ROOT/setup.mjs" --answers "$T/answers.json" > "$T/install.out" 2>&1 || fail "install exited non-zero (see $T/install.out)"
@@ -91,6 +101,12 @@ grep -q 'break-free-gateway' "$T/proj/.mcp.json" || fail "project .mcp.json miss
 [ -f "$T/proj/.github/workflows/break-free-ledger-guard.yml" ] || fail "ledger guard workflow missing"
 grep -q "break-free ledger guard" "$T/proj/.git/hooks/pre-commit" || fail "ledger guard hook missing"
 [ "$(stat -c %a "$T/home/.config/model-gateway/config.json" 2>/dev/null || stat -f %Lp "$T/home/.config/model-gateway/config.json")" = "600" ] || fail "config not 0600"
+grep -q -- '--fleet-check --hook' "$T/home/.claude/settings.json" || fail "Stop hook missing after install"
+echo "ok"
+
+echo "### install idempotence (Stop hook)"
+node "$ROOT/setup.mjs" --answers "$T/answers.json" > "$T/install2.out" 2>&1 || fail "second install exited non-zero (see $T/install2.out)"
+[ "$(grep -c -- '--fleet-check --hook' "$T/home/.claude/settings.json")" = "1" ] || fail "Stop hook should appear exactly once after re-install"
 echo "ok"
 
 echo "### other agents"
@@ -186,6 +202,7 @@ grep -q "Delegating to other models" "$T/home/.config/opencode/AGENTS.md" && fai
 [ ! -f "$T/home/.clinerules" ] || fail "cline .clinerules not removed"
 grep -q "read:" "$T/home/.aider.conf.yml" && fail "aider read: not removed"
 [ ! -f "$T/home/.cursor/mcp.json" ] || fail "cursor mcp.json not removed"
+( ! grep -q -- '--fleet-check --hook' "$T/home/.claude/settings.json" ) && grep -q 'echo unrelated-stop' "$T/home/.claude/settings.json" || fail "Stop hook not removed or unrelated hook damaged"
 echo "ok"
 
 echo "### doctor after uninstall (expect RED, exit 1)"

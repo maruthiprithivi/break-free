@@ -729,6 +729,10 @@ async function installClaude() {
   // Same standing nudge Codex gets in AGENTS.md, so both agents consider delegation without magic words.
   const gwRule = fs.readFileSync(path.join(AGENT_CFG, "claude", "CLAUDE.gateway.snippet"), "utf8");
   appendOnce(path.join(home(), ".claude", "CLAUDE.md"), GW_MARKER, gwRule) ? report.pass("delegation rule added to ~/.claude/CLAUDE.md") : report.pass("~/.claude/CLAUDE.md already has the delegation rule");
+  try {
+    upsertStopHook(path.join(home(), ".claude", "settings.json"));
+    report.pass("turn-end guard (Stop hook) installed", `~/.claude/settings.json → ${stopHookCommand()}`);
+  } catch (e) { report.fail("turn-end guard (Stop hook) not installed", String(e.message).slice(0, 200)); }
 }
 
 function codexTomlBody(envVars) {
@@ -792,6 +796,10 @@ async function installProject() {
       report.pass("Claude: wrote .mcp.json", "Claude Code asks once to approve project servers (claude mcp reset-project-choices to re-ask)");
       if (appendOnce(path.join(pd, "CLAUDE.md"), GW_MARKER, fs.readFileSync(path.join(AGENT_CFG, "claude", "CLAUDE.gateway.snippet"), "utf8"))) report.pass("Claude: delegation rule added to CLAUDE.md");
       report.info("note: .mcp.json holds an absolute path to this machine's build — teammates run setup.mjs to get their own");
+      try {
+        upsertStopHook(path.join(pd, ".claude", "settings.json"));
+        report.pass("Claude: turn-end guard (Stop hook) installed", `.claude/settings.json → ${stopHookCommand()}`);
+      } catch (e) { report.fail("Claude: turn-end guard (Stop hook) not installed", String(e.message).slice(0, 200)); }
     }
   }
 
@@ -1108,6 +1116,49 @@ async function probeAnthropic(base, key, model) {
 }
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
+// ---- Claude Code turn-end guard (Stop hook) --------------------------------
+// setup.mjs owns exactly one Stop hook in the Claude Code settings file the installer
+// manages for the chosen scope. The command is the marker: `--fleet-check --hook`.
+const STOP_HOOK_MARKER = "--fleet-check --hook";
+const stopHookCommand = () => `${shq(process.execPath)} ${shq(ENTRY)} ${STOP_HOOK_MARKER}`;
+const isStopHook = (h) => !!h && h.type === "command" && typeof h.command === "string" && h.command.includes(STOP_HOOK_MARKER);
+const hasStopHook = (groups) => Array.isArray(groups) && groups.some((g) => !!g && Array.isArray(g.hooks) && g.hooks.some(isStopHook));
+/** Remove our hook object(s) from every Stop group, preserving unrelated hooks and groups. */
+function stripStopHooks(groups) {
+  if (!Array.isArray(groups)) return groups;
+  const out = [];
+  for (const g of groups) {
+    if (!g || typeof g !== "object" || !Array.isArray(g.hooks)) { out.push(g); continue; }
+    const kept = g.hooks.filter((h) => !isStopHook(h));
+    if (kept.length) out.push({ ...g, hooks: kept });
+  }
+  return out;
+}
+/** Insert (or remove) our Stop hook in a Claude Code settings.json. Never touches unrelated entries. */
+function upsertStopHook(file, remove = false) {
+  let j = {};
+  if (fs.existsSync(file)) {
+    j = readJsonSafe(file);
+    if (!j || j.__error) throw new Error(`${file} is not valid JSON — fix it by hand first`);
+    backup(file);
+  }
+  j.hooks ??= {};
+  if (j.hooks.Stop !== undefined && !Array.isArray(j.hooks.Stop)) throw new Error(`${file} has a non-array hooks.Stop`);
+  const groups = Array.isArray(j.hooks.Stop) ? stripStopHooks(j.hooks.Stop) : [];
+  j.hooks.Stop = remove ? groups : [...groups, { hooks: [{ type: "command", command: stopHookCommand() }] }];
+  if (!j.hooks.Stop.length) delete j.hooks.Stop;
+  if (!Object.keys(j.hooks).length) delete j.hooks;
+  if (remove && !Object.keys(j).length) { fs.rmSync(file, { force: true }); return; }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(j, null, 2) + "\n");
+}
+function stopHookInstalled(file) {
+  if (!fs.existsSync(file)) return false;
+  const j = readJsonSafe(file);
+  if (!j || j.__error) return false;
+  return hasStopHook(j.hooks?.Stop);
+}
+
 
 // ---- Responses-API shim (Codex profiles) ---------------------------------------
 async function shimHealthy() {
@@ -1392,6 +1443,10 @@ async function doctor() {
     fs.existsSync(skill) ? (sameContent(skill, path.join(AGENT_CFG, "claude", "skills", GW_SKILL, "SKILL.md")) ? report.pass("Claude skill installed (current)") : report.warn("Claude skill installed but outdated", "", "node setup.mjs to refresh")) : report.fail("Claude skill not installed", "", "node setup.mjs");
     const get = await run("claude", ["mcp", "get", CLAUDE_SERVER], { timeoutMs: 30_000 });
     get.ok && get.stdout.includes(ENTRY) ? report.pass("Claude MCP registration") : report.fail("Claude MCP registration missing or points elsewhere", lastLines(get.stdout || get.stderr), "node setup.mjs");
+    const userHook = path.join(home(), ".claude", "settings.json");
+    stopHookInstalled(userHook)
+      ? report.pass("Claude turn-end guard (Stop hook) installed", userHook)
+      : report.fail("Claude turn-end guard (Stop hook) not installed", "", "node setup.mjs");
   }
   {
     const c = fs.existsSync(path.join(home(), ".claude", "skills", GF_SKILL, "SKILL.md"));
@@ -1420,6 +1475,10 @@ async function doctor() {
     const ptoml = path.join(projectDir, ".codex", "config.toml");
     fs.existsSync(ptoml) && fs.readFileSync(ptoml, "utf8").includes(`[mcp_servers.${CODEX_SERVER}]`) ? report.pass("Codex project config present") : report.skip("Codex project config not present");
     fs.existsSync(path.join(projectDir, ".agents", "skills", GW_SKILL, "SKILL.md")) ? report.pass("Codex project skill present") : report.skip("Codex project skill not present");
+    const projectHook = path.join(projectDir, ".claude", "settings.json");
+    stopHookInstalled(projectHook)
+      ? report.pass("Claude project turn-end guard (Stop hook) installed", projectHook)
+      : report.skip("Claude project turn-end guard (Stop hook) not present");
   }
   doctorExtraAgents();
   if (fs.existsSync(HARNESS_DIR)) {
@@ -1544,6 +1603,8 @@ async function uninstall() {
     }
     stripBlock(path.join(home(), ".claude", "CLAUDE.md"), GF_MARKER);
     stripBlock(path.join(home(), ".claude", "CLAUDE.md"), GW_MARKER);
+    try { upsertStopHook(path.join(home(), ".claude", "settings.json"), true); report.pass("removed turn-end guard (Stop hook)"); }
+    catch (e) { report.warn("could not remove turn-end guard (Stop hook)", String(e.message).slice(0, 160)); }
     report.pass("removed Claude skills (model-gateway, github-flow) + commands + CLAUDE.md rule");
   }
   if (targets.codex) {
@@ -1569,6 +1630,8 @@ async function uninstall() {
     stripBlock(path.join(projectDir, "AGENTS.md"), GW_MARKER);
     const ptoml = path.join(projectDir, ".codex", "config.toml");
     if (fs.existsSync(ptoml)) fs.writeFileSync(ptoml, removeTomlTable(fs.readFileSync(ptoml, "utf8"), `mcp_servers.${CODEX_SERVER}`));
+    try { upsertStopHook(path.join(projectDir, ".claude", "settings.json"), true); report.pass("removed project turn-end guard (Stop hook)"); }
+    catch (e) { report.warn("could not remove project turn-end guard (Stop hook)", String(e.message).slice(0, 160)); }
     report.pass("removed project-level files", projectDir);
   }
   uninstallExtraAgents(projectDir);
