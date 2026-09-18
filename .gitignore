@@ -11,6 +11,12 @@ model-gateway/dist/
 node_modules/
 *.tsbuildinfo
 
+# --- remotion (videos/): deps and render output. The finished media is committed
+# under docs/assets/, the intermediate renders are not.
+videos/node_modules/
+videos/out/
+videos/.remotion/
+
 # --- installer artefacts
 *.bak
 setup-report.json

@@ -1,0 +1,297 @@
+{
+  "fps": 30,
+  "videos": {
+    "intro": {
+      "durationInFrames": 3502,
+      "chapters": [
+        {
+          "id": "open",
+          "startFrame": 36,
+          "durationInFrames": 250,
+          "lines": [
+            {
+              "id": "open-1",
+              "startFrame": 0,
+              "durationInFrames": 220,
+              "audioFrames": 205
+            }
+          ]
+        },
+        {
+          "id": "why",
+          "startFrame": 286,
+          "durationInFrames": 581,
+          "lines": [
+            {
+              "id": "why-1",
+              "startFrame": 0,
+              "durationInFrames": 220,
+              "audioFrames": 205
+            },
+            {
+              "id": "why-2",
+              "startFrame": 220,
+              "durationInFrames": 158,
+              "audioFrames": 143
+            },
+            {
+              "id": "why-3",
+              "startFrame": 378,
+              "durationInFrames": 173,
+              "audioFrames": 158
+            }
+          ]
+        },
+        {
+          "id": "what",
+          "startFrame": 867,
+          "durationInFrames": 975,
+          "lines": [
+            {
+              "id": "what-1",
+              "startFrame": 0,
+              "durationInFrames": 211,
+              "audioFrames": 196
+            },
+            {
+              "id": "what-2",
+              "startFrame": 211,
+              "durationInFrames": 328,
+              "audioFrames": 313
+            },
+            {
+              "id": "what-3",
+              "startFrame": 539,
+              "durationInFrames": 282,
+              "audioFrames": 267
+            },
+            {
+              "id": "what-4",
+              "startFrame": 821,
+              "durationInFrames": 124,
+              "audioFrames": 109
+            }
+          ]
+        },
+        {
+          "id": "how",
+          "startFrame": 1842,
+          "durationInFrames": 1306,
+          "lines": [
+            {
+              "id": "how-1",
+              "startFrame": 0,
+              "durationInFrames": 227,
+              "audioFrames": 212
+            },
+            {
+              "id": "how-2",
+              "startFrame": 227,
+              "durationInFrames": 263,
+              "audioFrames": 248
+            },
+            {
+              "id": "how-3",
+              "startFrame": 490,
+              "durationInFrames": 259,
+              "audioFrames": 244
+            },
+            {
+              "id": "how-4",
+              "startFrame": 749,
+              "durationInFrames": 230,
+              "audioFrames": 215
+            },
+            {
+              "id": "how-5",
+              "startFrame": 979,
+              "durationInFrames": 297,
+              "audioFrames": 282
+            }
+          ]
+        },
+        {
+          "id": "close",
+          "startFrame": 3148,
+          "durationInFrames": 354,
+          "lines": [
+            {
+              "id": "close-1",
+              "startFrame": 0,
+              "durationInFrames": 234,
+              "audioFrames": 219
+            }
+          ]
+        }
+      ]
+    },
+    "delegate": {
+      "durationInFrames": 1123,
+      "chapters": [
+        {
+          "id": "delegate",
+          "startFrame": 24,
+          "durationInFrames": 1099,
+          "lines": [
+            {
+              "id": "delegate-1",
+              "startFrame": 0,
+              "durationInFrames": 204,
+              "audioFrames": 190
+            },
+            {
+              "id": "delegate-2",
+              "startFrame": 204,
+              "durationInFrames": 143,
+              "audioFrames": 129
+            },
+            {
+              "id": "delegate-3",
+              "startFrame": 347,
+              "durationInFrames": 215,
+              "audioFrames": 201
+            },
+            {
+              "id": "delegate-4",
+              "startFrame": 562,
+              "durationInFrames": 262,
+              "audioFrames": 248
+            },
+            {
+              "id": "delegate-5",
+              "startFrame": 824,
+              "durationInFrames": 197,
+              "audioFrames": 183
+            }
+          ]
+        }
+      ]
+    },
+    "parallel": {
+      "durationInFrames": 1157,
+      "chapters": [
+        {
+          "id": "parallel",
+          "startFrame": 24,
+          "durationInFrames": 1133,
+          "lines": [
+            {
+              "id": "parallel-1",
+              "startFrame": 0,
+              "durationInFrames": 226,
+              "audioFrames": 212
+            },
+            {
+              "id": "parallel-2",
+              "startFrame": 226,
+              "durationInFrames": 116,
+              "audioFrames": 102
+            },
+            {
+              "id": "parallel-3",
+              "startFrame": 342,
+              "durationInFrames": 262,
+              "audioFrames": 248
+            },
+            {
+              "id": "parallel-4",
+              "startFrame": 604,
+              "durationInFrames": 265,
+              "audioFrames": 251
+            },
+            {
+              "id": "parallel-5",
+              "startFrame": 869,
+              "durationInFrames": 186,
+              "audioFrames": 172
+            }
+          ]
+        }
+      ]
+    },
+    "review": {
+      "durationInFrames": 1136,
+      "chapters": [
+        {
+          "id": "review",
+          "startFrame": 24,
+          "durationInFrames": 1112,
+          "lines": [
+            {
+              "id": "review-1",
+              "startFrame": 0,
+              "durationInFrames": 172,
+              "audioFrames": 158
+            },
+            {
+              "id": "review-2",
+              "startFrame": 172,
+              "durationInFrames": 181,
+              "audioFrames": 167
+            },
+            {
+              "id": "review-3",
+              "startFrame": 353,
+              "durationInFrames": 274,
+              "audioFrames": 260
+            },
+            {
+              "id": "review-4",
+              "startFrame": 627,
+              "durationInFrames": 243,
+              "audioFrames": 229
+            },
+            {
+              "id": "review-5",
+              "startFrame": 870,
+              "durationInFrames": 164,
+              "audioFrames": 150
+            }
+          ]
+        }
+      ]
+    },
+    "ledger": {
+      "durationInFrames": 1021,
+      "chapters": [
+        {
+          "id": "ledger",
+          "startFrame": 24,
+          "durationInFrames": 997,
+          "lines": [
+            {
+              "id": "ledger-1",
+              "startFrame": 0,
+              "durationInFrames": 114,
+              "audioFrames": 100
+            },
+            {
+              "id": "ledger-2",
+              "startFrame": 114,
+              "durationInFrames": 226,
+              "audioFrames": 212
+            },
+            {
+              "id": "ledger-3",
+              "startFrame": 340,
+              "durationInFrames": 193,
+              "audioFrames": 179
+            },
+            {
+              "id": "ledger-4",
+              "startFrame": 533,
+              "durationInFrames": 207,
+              "audioFrames": 193
+            },
+            {
+              "id": "ledger-5",
+              "startFrame": 740,
+              "durationInFrames": 179,
+              "audioFrames": 165
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

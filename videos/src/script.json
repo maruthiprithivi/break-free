@@ -1,0 +1,278 @@
+{
+  "brand": {
+    "name": "Break Free",
+    "tagline": "the frontier model leads, other models execute",
+    "repo": "github.com/maruthiprithivi/break-free",
+    "install": "curl -fsSL https://raw.githubusercontent.com/maruthiprithivi/break-free/main/install.sh | bash"
+  },
+  "voice": {
+    "model": "text2speech_v2",
+    "variant": "elevenlabs",
+    "voiceId": "30fc8796-ceb6-4a66-b3a7-4a145ef7f346",
+    "voiceName": "Arthur"
+  },
+  "videos": [
+    {
+      "id": "intro",
+      "kind": "intro",
+      "title": "Why, what, and how",
+      "subtitle": "the frontier model leads, other models execute",
+      "poster": "hero.png",
+      "chapters": [
+        {
+          "id": "open",
+          "label": "",
+          "heading": "",
+          "backplate": "hero.png",
+          "scene": "title",
+          "lines": [
+            {
+              "id": "open-1",
+              "text": "Your best model is the expensive one. Most of the work in a task is not the hard part."
+            }
+          ]
+        },
+        {
+          "id": "why",
+          "label": "01",
+          "heading": "Why",
+          "backplate": "why.png",
+          "scene": "bottleneck",
+          "lines": [
+            {
+              "id": "why-1",
+              "text": "Boilerplate, tests, migrations, docs, bulk edits: work that needs care, not genius."
+            },
+            {
+              "id": "why-2",
+              "text": "Run all of it on a frontier model and you pay the top rate for typing."
+            },
+            {
+              "id": "why-3",
+              "text": "Hand it to a cheap model instead and you get a confident report that nobody checked."
+            }
+          ]
+        },
+        {
+          "id": "what",
+          "label": "02",
+          "heading": "What",
+          "backplate": "what.png",
+          "scene": "leadcrew",
+          "lines": [
+            {
+              "id": "what-1",
+              "text": "Break Free splits the job in two. The frontier model leads. Other models execute."
+            },
+            {
+              "id": "what-2",
+              "text": "Claude Code or Codex keeps the judgement: understanding you, decomposing, designing, reviewing, owning the result."
+            },
+            {
+              "id": "what-3",
+              "text": "DeepSeek, Kimi, GLM, MiniMax, OpenRouter, or a local Ollama model does the execution."
+            },
+            {
+              "id": "what-4",
+              "text": "They meet at one MCP server that you install once."
+            }
+          ]
+        },
+        {
+          "id": "how",
+          "label": "03",
+          "heading": "How",
+          "backplate": "how.png",
+          "scene": "verify",
+          "lines": [
+            {
+              "id": "how-1",
+              "text": "For every task the lead writes the instruction, the acceptance criteria, and the command that proves it."
+            },
+            {
+              "id": "how-2",
+              "text": "The gateway runs that command itself, after the worker finishes. A pass is a real exit code, not a claim."
+            },
+            {
+              "id": "how-3",
+              "text": "Independent tasks run at the same time as a dependency graph, and a failed check blocks whatever depended on it."
+            },
+            {
+              "id": "how-4",
+              "text": "Workers are jailed: no shell, no force push, no protected branches, no secrets in a diff."
+            },
+            {
+              "id": "how-5",
+              "text": "Every task, outcome and decision is written to a Markdown ledger in your repository, so the next session resumes instead of restarting."
+            }
+          ]
+        },
+        {
+          "id": "close",
+          "label": "",
+          "heading": "",
+          "backplate": "hero.png",
+          "scene": "install",
+          "lines": [
+            {
+              "id": "close-1",
+              "text": "One command installs it, and the setup walks you through the providers, the keys and the checks."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "delegate",
+      "kind": "scenario",
+      "title": "Delegate one task",
+      "subtitle": "hand off the work, keep the verification",
+      "poster": "delegate.png",
+      "chapters": [
+        {
+          "id": "delegate",
+          "label": "01",
+          "heading": "Delegate one task",
+          "backplate": "delegate.png",
+          "scene": "delegate",
+          "lines": [
+            {
+              "id": "delegate-1",
+              "text": "You have a task that needs care, not genius. Unit tests for the router."
+            },
+            {
+              "id": "delegate-2",
+              "text": "You tell the lead to delegate it, and you say how it will be proven."
+            },
+            {
+              "id": "delegate-3",
+              "text": "The gateway sends it to a cheaper model with read, write and run, plus the test command."
+            },
+            {
+              "id": "delegate-4",
+              "text": "The worker reports back, and the gateway runs the tests itself. Exit code zero, or the task failed."
+            },
+            {
+              "id": "delegate-5",
+              "text": "You review a diff that has already been tested, and your frontier quota barely moved."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "parallel",
+      "kind": "scenario",
+      "title": "Run a plan in parallel",
+      "subtitle": "a dependency graph, several vendors at once",
+      "poster": "parallel.png",
+      "chapters": [
+        {
+          "id": "parallel",
+          "label": "02",
+          "heading": "Run a plan in parallel",
+          "backplate": "parallel.png",
+          "scene": "parallel",
+          "lines": [
+            {
+              "id": "parallel-1",
+              "text": "One feature is really four pieces of work: the core, its tests, the docs, and the wiring."
+            },
+            {
+              "id": "parallel-2",
+              "text": "You describe them once, with what depends on what."
+            },
+            {
+              "id": "parallel-3",
+              "text": "The core goes first. The moment its verification passes, the other three start together on different vendors."
+            },
+            {
+              "id": "parallel-4",
+              "text": "A failing check fails that task and skips everything downstream. Nothing broken moves forward."
+            },
+            {
+              "id": "parallel-5",
+              "text": "You get one consolidated report, with every verification result attached."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "review",
+      "kind": "scenario",
+      "title": "Get an independent verdict",
+      "subtitle": "a different vendor reviews, a panel decides",
+      "poster": "review.png",
+      "chapters": [
+        {
+          "id": "review",
+          "label": "03",
+          "heading": "Get an independent verdict",
+          "backplate": "review.png",
+          "scene": "review",
+          "lines": [
+            {
+              "id": "review-1",
+              "text": "Before this lands, you want an opinion that is not the author's."
+            },
+            {
+              "id": "review-2",
+              "text": "Review sends the real diff to a different vendor and asks for a verdict, not a compliment."
+            },
+            {
+              "id": "review-3",
+              "text": "Back comes a structured answer: approve, revise or reject, with a file and a line for every issue."
+            },
+            {
+              "id": "review-4",
+              "text": "For a decision rather than a diff, a panel runs several models at once and a judge synthesises them."
+            },
+            {
+              "id": "review-5",
+              "text": "You still decide. You just decide with the disagreement in front of you."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ledger",
+      "kind": "scenario",
+      "title": "Resume across sessions",
+      "subtitle": "the ledger lives in the repository",
+      "poster": "ledger.png",
+      "chapters": [
+        {
+          "id": "ledger",
+          "label": "04",
+          "heading": "Resume across sessions",
+          "backplate": "ledger.png",
+          "scene": "ledger",
+          "lines": [
+            {
+              "id": "ledger-1",
+              "text": "Context windows end. Projects do not."
+            },
+            {
+              "id": "ledger-2",
+              "text": "Every task, decision and gotcha is written to plain Markdown inside your repository."
+            },
+            {
+              "id": "ledger-3",
+              "text": "Commit it, review it in a pull request, or open the folder as an Obsidian vault."
+            },
+            {
+              "id": "ledger-4",
+              "text": "Workers read it too, so a gotcha found once is not rediscovered by the next model."
+            },
+            {
+              "id": "ledger-5",
+              "text": "Next session, resume reads the handoff and tells you exactly where you were."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

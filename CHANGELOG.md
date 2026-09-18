@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Install: `install.sh` works standalone — `curl -fsSL .../install.sh | bash` clones (or fast-forwards) `~/.break-free` (`BREAK_FREE_HOME`, `BREAK_FREE_BRANCH`), checks Node 20+ **before** writing anything, re-attaches `/dev/tty` so the interactive installer still prompts under a pipe, and passes flags through (`| bash -s -- --yes`).
+- README rebuilt around the install experience: banner, pitch, videos, then Install as the first section — requirements table, a numbered walk through what the installer asks (replacing a 400-word paragraph), how to verify, and a symptom/cause/fix troubleshooting table. Reference material moved below.
+- Visual assets: banner, a narrated intro covering why/what/how, and four scenario walkthroughs (delegate, run_plan in parallel, independent review, ledger and resume), all with burned-in subtitles and WebVTT tracks. Remotion source and the Docker render pipeline live in `videos/`.
 - Distribution: no CI on this repo — install and update directly from GitHub. `setup.mjs --update` (and `/break-free-update`) self-update from a `git clone` (`git pull --ff-only` + hands-free re-install), reusing the scope/agents recorded in `last-install.json`.
 - Harness support: Gemini CLI (MCP + skills + GEMINI.md), GitHub Copilot CLI, Cursor (MCP), Goose, Amp, Hermes, Aider, Cline, AdaL, OpenClaw, Droid, Kilo Code, Roo Code, Qoder and Zed — skills/rules in each tool's own conventions, with the exact manual-MCP step printed where a tool's MCP config can't be file-edited. Any tool that reads `AGENTS.md` + `.mcp.json` + `.agents/skills` (Crush, Windsurf, Trae, Junie, Warp, Continue, Augment, Freebuff, Devin) is covered at project scope.
 - Re-install picks up the previous setup (`last-install.json`) and pre-selects the prior scope/agents/github-flow; the github-flow skill stays fully optional (`github_flow: "none"` skips it).

@@ -1,0 +1,21 @@
+WEBVTT
+
+1
+00:00:00.800 --> 00:00:04.133
+Context windows end. Projects do not.
+
+2
+00:00:04.600 --> 00:00:11.667
+Every task, decision and gotcha is written to plain Markdown inside your repository.
+
+3
+00:00:12.133 --> 00:00:18.100
+Commit it, review it in a pull request, or open the folder as an Obsidian vault.
+
+4
+00:00:18.567 --> 00:00:25.000
+Workers read it too, so a gotcha found once is not rediscovered by the next model.
+
+5
+00:00:25.467 --> 00:00:30.967
+Next session, resume reads the handoff and tells you exactly where you were.
