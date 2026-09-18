@@ -950,13 +950,16 @@ server.registerTool("session_clear", { title: "Clear session", description: "Del
 // ---- harness sub-agents (tmux PTY — subscription, not API credits)
 server.registerTool("harness_spawn", {
   title: "Spawn a harness sub-agent",
-  description: "Start another coding harness (claude, codex, omp, pi, grok, …) inside a detached tmux session — a real PTY — so it runs in the interactive/subscription mode instead of `claude -p` (print mode bills the API per token). Returns a session id for harness_send / harness_read / harness_status / harness_close. A harness sub-agent shares the repo (and its worktree) with the lead but runs in its own terminal.",
+  description: "Start another coding harness (claude, codex, omp, pi, grok, …) inside a detached tmux session — a real PTY — so it runs in the interactive/subscription mode instead of `claude -p` (print mode bills the API per token). Returns a session id for harness_send / harness_read / harness_status / harness_close, plus an `attach` command to watch or type into the session directly. A harness sub-agent shares the repo (and its worktree) with the lead but runs in its own terminal.",
   inputSchema: {
     harness: z.string().describe("CLI command that owns the session: claude, codex, omp, pi, grok, …"),
     cwd: z.string().optional().describe("Working directory (default: the gateway workspace root)"),
     command: z.string().optional().describe("Exact command override (default: the harness name)"),
   },
-}, async (a) => json(await ctx.harnessctl.spawn(a.harness, a)));
+}, async (a) => {
+  const s = await ctx.harnessctl.spawn(a.harness, a);
+  return json({ ...s, attach: ctx.harnessctl.attach(s) });
+});
 
 server.registerTool("harness_send", {
   title: "Send input to a harness session",
@@ -972,9 +975,9 @@ server.registerTool("harness_read", {
 
 server.registerTool("harness_status", {
   title: "Harness session status",
-  description: "running / exited / unknown for a harness sub-agent.",
+  description: "running / exited / unknown for a harness sub-agent, plus the `attach` command to watch or type into it.",
   inputSchema: { id: z.string() },
-}, async (a) => json({ id: a.id, state: await ctx.harnessctl.status(a.id) }));
+}, async (a) => json({ id: a.id, state: await ctx.harnessctl.status(a.id), attach: ctx.harnessctl.attachFor(a.id) }));
 
 server.registerTool("harness_close", {
   title: "Close a harness session",
@@ -984,9 +987,9 @@ server.registerTool("harness_close", {
 
 server.registerTool("harness_list", {
   title: "List harness sessions",
-  description: "Every harness sub-agent with its tmux name, harness, cwd, state and timestamps — use to resume work a previous session started.",
+  description: "Every harness sub-agent with its tmux name, harness, cwd, state, timestamps and `attach` command — use to resume work a previous session started.",
   inputSchema: {},
-}, async () => json({ sessions: await ctx.harnessctl.list() }));
+}, async () => json({ sessions: (await ctx.harnessctl.list()).map((s) => ({ ...s, attach: ctx.harnessctl.attach(s) })) }));
 
 // ------------------------------------------------------------ main
 async function main() {

@@ -28,6 +28,10 @@ export interface HarnessSession {
   state: "running" | "exited";
 }
 
+export function attachCommand(tmuxBin: string, s: HarnessSession): string {
+  return `${tmuxBin} attach -t ${s.tmux}`;
+}
+
 export class HarnessController {
   private dir: string;
   private mem = new Map<string, HarnessSession>();
@@ -38,6 +42,13 @@ export class HarnessController {
 
   private tmux(): string {
     return process.env.BREAK_FREE_TMUX || this.config.harness.tmux;
+  }
+  attach(s: HarnessSession): string {
+    return attachCommand(this.tmux(), s);
+  }
+  attachFor(id: string): string | undefined {
+    const s = this.load(id);
+    return s ? this.attach(s) : undefined;
   }
   private name(id: string): string {
     return `${this.config.harness.sessionPrefix}${id}`;
