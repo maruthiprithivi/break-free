@@ -59,6 +59,9 @@ before(async () => {
   fs.writeFileSync(configPath, JSON.stringify({
     sessionDir,
     harness: { tmux: tmuxBin },
+    // Merge autonomy is opt-in since named modes landed; these tests exercise gh argument
+    // validation and merge behaviour, not the default policy, so they ask for it explicitly.
+    mergeAutonomy: true,
     logFile: path.join(tmp, "gateway.log"),
     defaults: { model: "fast", reviewer: "mock/good", supervisor: "mock/good", timeoutMs: 1500, maxSessionMessages: 8 },
     fallback: { chain: ["mock/good"], retriesPerCandidate: 0, retryDelayMs: 0 },

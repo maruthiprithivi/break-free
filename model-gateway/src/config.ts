@@ -51,6 +51,10 @@ const ConfigSchema = z.object({
   sessionDir: z.string().optional(),
   /** JSONL runtime log; default ~/.config/model-gateway/gateway.log. false disables. */
   logFile: z.union([z.string(), z.literal(false)]).optional(),
+  /** Named project mode that derives github.allowPush/allowMerge defaults. */
+  mode: z.enum(["guarded", "pr-only", "local-only"]).default("guarded"),
+  /** Let a guarded worker merge PRs without explicit approval. Ignored for pr-only/local-only. */
+  mergeAutonomy: z.boolean().default(false),
   defaults: z
     .object({
       model: z.string().default("fast"),
@@ -196,7 +200,20 @@ const ConfigSchema = z.object({
 export type GatewayConfig = z.infer<typeof ConfigSchema>;
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 
-export const DEFAULT_ALIASES: Record<string, { candidates: string[]; description: string }> = {
+export function modeDefaults(mode: "guarded" | "pr-only" | "local-only", mergeAutonomy: boolean): { allowPush: boolean; allowMerge: boolean } {
+  switch (mode) {
+    case "guarded":
+      return { allowPush: true, allowMerge: mergeAutonomy };
+    case "pr-only":
+      return { allowPush: true, allowMerge: false };
+    case "local-only":
+      return { allowPush: false, allowMerge: false };
+  }
+}
+
+interface AliasDef { candidates: string[]; description: string }
+
+const CORE_ALIASES = {
   fast: {
     description: "Cheap/fast worker for boilerplate, tests, refactors",
     candidates: ["deepseek/deepseek-v4-flash", "zai/glm-5.3-flash", "opencode/deepseek-v4-flash", "openrouter/deepseek/deepseek-v4-flash", "ollama/qwen3-coder:30b"],
@@ -217,7 +234,32 @@ export const DEFAULT_ALIASES: Record<string, { candidates: string[]; description
     description: "Ollama Cloud tier",
     candidates: ["ollama-cloud/gpt-oss:120b", "ollama-cloud/deepseek-v4-flash"],
   },
+} satisfies Record<string, AliasDef>;
+
+/**
+ * Crew names for the same chains. `ensign` and `fast` are the same alias wearing
+ * two badges: the candidate list is taken from the core entry rather than copied,
+ * so editing `fast` cannot leave `ensign` pointing at a retired model.
+ */
+const CREW_ALIASES: Record<string, { mirrors: keyof typeof CORE_ALIASES; description: string }> = {
+  ensign: { mirrors: "fast", description: "Junior officer: the legwork. Same chain as `fast`." },
+  commander: { mirrors: "strong", description: "Senior officer: hard implementation or supervision. Same chain as `strong`." },
+  counselor: { mirrors: "reviewer", description: "The independent read on whether something is sound; prefer a DIFFERENT vendor than the worker. Same chain as `reviewer`." },
+  holodeck: { mirrors: "local", description: "A simulation that never leaves the ship. Same chain as `local`." },
+  subspace: { mirrors: "cloud", description: "The off-ship link. Same chain as `cloud`." },
 };
+
+export const DEFAULT_ALIASES: Record<string, AliasDef> = {
+  ...CORE_ALIASES,
+  ...Object.fromEntries(
+    Object.entries(CREW_ALIASES).map(([name, { mirrors, description }]) => [name, { description, candidates: CORE_ALIASES[mirrors].candidates }]),
+  ),
+};
+
+/** Which core alias each crew name mirrors, so callers can prove the pairing. */
+export const CREW_ALIAS_MIRRORS: Record<string, string> = Object.fromEntries(
+  Object.entries(CREW_ALIASES).map(([name, { mirrors }]) => [name, mirrors]),
+);
 
 /** Approximate list prices (USD per 1M tokens). Edit `pricing` in config to correct them; unknown models report as unpriced. */
 export const DEFAULT_PRICING: Record<string, { input: number; output: number }> = {
@@ -286,6 +328,8 @@ export function sanitizeProjectConfig(j: unknown): Record<string, unknown> {
   if (!j || typeof j !== "object") return {};
   const src = j as Record<string, unknown>;
   const out: Record<string, unknown> = {};
+  // Only project-tunable, non-sensitive settings are copied. `github`, `mode` and `mergeAutonomy`
+  // are intentionally omitted so a cloned repo can never grant itself push or merge rights.
   for (const k of ["defaults", "aliases", "fallback", "policy", "steward", "pricing"]) if (k in src) out[k] = src[k]; // policy can only add restrictions, so a project may declare it
   if (src.providers && typeof src.providers === "object") {
     const provs: Record<string, unknown> = {};
@@ -321,11 +365,20 @@ export function loadConfig(opts: { workspaceRoot?: string; configPath?: string }
     raw = deepMerge(raw, sanitizeProjectConfig(projectJson));
     sources.push(projectPath);
   }
+  // zod fills defaults, so presence of an explicit value can only be detected on the raw merged object.
+  const rawObj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const rawGithub = rawObj.github && typeof rawObj.github === "object" ? (rawObj.github as Record<string, unknown>) : {};
+  const hasAllowPush = Object.prototype.hasOwnProperty.call(rawGithub, "allowPush");
+  const hasAllowMerge = Object.prototype.hasOwnProperty.call(rawGithub, "allowMerge");
+
   const parsed = ConfigSchema.safeParse(raw);
   if (!parsed.success) {
     throw new Error(`Invalid config (${sources.join(", ") || "defaults"}): ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
   }
   const config = parsed.data;
+  const modePolicy = modeDefaults(config.mode, config.mergeAutonomy);
+  if (!hasAllowPush) config.github.allowPush = modePolicy.allowPush;
+  if (!hasAllowMerge) config.github.allowMerge = modePolicy.allowMerge;
   config.workspaceRoot = path.resolve(expandHome(opts.workspaceRoot ?? config.workspaceRoot ?? process.cwd()));
   config.sessionDir = expandHome(config.sessionDir ?? path.join(os.homedir(), ".config", "model-gateway", "sessions"));
   // Built-in aliases are only defaults; user aliases win.

@@ -17,6 +17,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig, listProviderNames, redactKey, resolveProvider, saveConfigPatch, FALLBACK_REASONS, type LoadedConfig } from "./config.js";
@@ -35,6 +36,7 @@ import { DEFAULT_PRICING } from "./config.js";
 import { ghAvailable } from "./github.js";
 import { SessionStore } from "./sessions.js";
 import { HarnessController } from "./harnessctl.js";
+import { appendEvents, classify, drainTo, pendingEvents, readSnapshot, writeSnapshot, type FleetEvent, type FleetSnapshot } from "./fleet.js";
 import { delegate, panel, review, supervise, runPlan, type Ctx } from "./orchestrate.js";
 import { PROVIDER_CATALOG } from "./providers.js";
 import { Logger, analyze, callContext, setLogger, summarizeArgs, log as rlog } from "./logger.js";
@@ -83,9 +85,60 @@ function reload(): Ctx {
 
 let ctx = reload();
 
+// ------------------------------------------------------------ fleet
+const FLEET_IDLE_MS = 5 * 60_000;
+
+async function buildFleetSnapshot(prev: FleetSnapshot | undefined): Promise<FleetSnapshot> {
+  const ts = new Date().toISOString();
+  const jobsMap: Record<string, string> = {};
+  try {
+    for (const j of jobs!.list()) jobsMap[j.id] = j.state;
+  } catch {
+    // A job-list failure must not take down the snapshot.
+  }
+  const harness: FleetSnapshot["harness"] = {};
+  try {
+    const sessions = await ctx.harnessctl.list();
+    for (const s of sessions) {
+      let digest = "";
+      if (s.state === "running") {
+        try {
+          digest = createHash("sha1").update(await ctx.harnessctl.read(s.id, 40)).digest("hex");
+        } catch {
+          digest = ""; // pane vanished or tmux is unavailable: keep the session but with no digest
+        }
+      }
+      const prevH = prev?.harness?.[s.id];
+      const unchanged = s.state === "running" && prevH?.state === "running" && prevH.digest === digest;
+      harness[s.id] = { state: s.state, digest, since: unchanged ? prevH!.since : ts };
+    }
+  } catch {
+    // tmux missing or the session directory is unreadable: no harness sessions.
+  }
+  return { ts, jobs: jobsMap, harness };
+}
+
+async function fleetCheck(): Promise<{ running: { jobs: number; harness: number }; pending: FleetEvent[]; blocking: boolean }> {
+  const sessionDir = ctx.config.sessionDir!;
+  const prev = readSnapshot(sessionDir);
+  const next = await buildFleetSnapshot(prev);
+  appendEvents(sessionDir, classify(prev, next, FLEET_IDLE_MS));
+  writeSnapshot(sessionDir, next);
+  const pending = pendingEvents(sessionDir);
+  const running = {
+    jobs: Object.values(next.jobs).filter((s) => s === "running").length,
+    harness: Object.values(next.harness).filter((h) => h.state === "running").length,
+  };
+  return { running, pending, blocking: running.jobs > 0 || pending.length > 0 };
+}
+
 const CapabilitySchema = z.array(z.enum(CAPABILITIES as [string, ...string[]])).describe(
   "What the delegated model may do. read = files/grep/diff (jailed to workspace). write = create/edit files (+ ledger_note/ledger_task_log when a ledger exists). git = branch/commit/push (never protected branches, never force). github = issues/PRs/Actions via gh (implies git). run = run_command for allow-listed test/build/lint commands (workers.allowedCommands). mcp = tools of the MCP servers named in mcp_servers. Default: [\"read\"].",
 ) as unknown as z.ZodType<import("./workspace.js").Capability[]>;
+
+const ShapeSchema = z.enum(["ship", "scout"]).optional().describe(
+  "Task shape: 'ship' uses the requested capabilities (default); 'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
+);
 
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
 const json = (o: unknown) => text(JSON.stringify(o, null, 2));
@@ -367,12 +420,13 @@ server.registerTool("configure_fallback", {
 // ---- orchestration
 server.registerTool("delegate", {
   title: "Delegate a task to a model",
-  description: "Hand a self-contained task to another model. Returns its report (Result / Changes / Verification / Open questions) plus metadata (model actually used, fallbacks, tool calls). Use session_id to continue a conversation with the same worker later. Give capabilities deliberately: [\"read\"] for analysis, [\"read\",\"write\"] to let it edit files in place, [\"github\"] for branch→commit→push→PR flows.",
+  description: "Hand a self-contained task to another model. Returns its report (Result / Changes / Verification / Open questions) plus metadata (model actually used, fallbacks, tool calls). Use session_id to continue a conversation with the same worker later. Give capabilities deliberately: [\"read\"] for analysis, [\"read\",\"write\"] to let it edit files in place, [\"github\"] for branch→commit→push→PR flows. shape:'ship' uses the requested capabilities (default); shape:'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
   inputSchema: {
     task: z.string().describe("What to do. Be explicit about scope, constraints, and the expected output."),
     model: z.string().optional().describe("Alias, provider, provider/model, or comma-separated fallback list. Default: config.defaults.model"),
     session_id: z.string().optional().describe("Persist/continue conversation history under this id"),
     capabilities: CapabilitySchema.optional(),
+    shape: ShapeSchema,
     context: z.string().optional().describe("Background the worker needs (design notes, relevant snippets, prior decisions)"),
     role: z.string().optional().describe("Persona, e.g. 'security engineer', 'technical writer'"),
     instructions: z.string().optional().describe("Extra standing rules appended to the system prompt"),
@@ -443,13 +497,14 @@ server.registerTool("panel", {
 
 server.registerTool("supervise", {
   title: "Supervised delegation (worker + supervisor loop)",
-  description: "A worker model does the task; a supervisor model (ideally a different vendor) checks the result against acceptance criteria and either accepts or sends numbered feedback back, up to max_rounds. Returns the final report, every round's decision, and whether it was accepted. Best for larger implementation tasks you don't want to babysit.",
+  description: "A worker model does the task; a supervisor model (ideally a different vendor) checks the result against acceptance criteria and either accepts or sends numbered feedback back, up to max_rounds. Returns the final report, every round's decision, and whether it was accepted. Best for larger implementation tasks you don't want to babysit. shape:'ship' uses the requested capabilities (default); shape:'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
   inputSchema: {
     task: z.string(),
     worker: z.string().optional().describe("Default: config.defaults.model"),
     supervisor: z.string().optional().describe("Default: config.defaults.supervisor"),
     max_rounds: z.number().int().min(1).max(10).optional().describe("Default 3"),
     capabilities: CapabilitySchema.optional(),
+    shape: ShapeSchema,
     acceptance_criteria: z.string().optional(),
     context: z.string().optional(),
     session_id: z.string().optional(),
@@ -474,6 +529,7 @@ const PlanTaskSchema = z.object({
   task: z.string().describe("Self-contained instructions for this worker: scope, files, constraints, expected output"),
   model: z.string().optional().describe("Alias/provider/model for this task (default config.defaults.model). Mix vendors freely."),
   capabilities: CapabilitySchema.optional(),
+  shape: ShapeSchema,
   depends_on: z.array(z.string()).optional().describe("Task ids that must finish first; their reports are given to this worker as context"),
   context: z.string().optional(),
   role: z.string().optional(),
@@ -489,7 +545,7 @@ const PlanTaskSchema = z.object({
 
 server.registerTool("run_plan", {
   title: "Run a plan: many workers in parallel with dependencies",
-  description: "Execute a set of delegated tasks as a dependency graph with bounded concurrency — the way to get more done at once: split the work, give each task its own model, capabilities, acceptance criteria and verify command, and let the gateway run, verify, review and record them while you wait for the consolidated report. Independent tasks run in parallel (default workers.maxConcurrency); a task whose prerequisite failed is skipped; prerequisite reports are handed to dependants. When a .break-free ledger exists every task is tracked there so the work survives this session. Set async:true for long plans and poll job_status.",
+  description: "Execute a set of delegated tasks as a dependency graph with bounded concurrency — the way to get more done at once: split the work, give each task its own model, capabilities, acceptance criteria and verify command, and let the gateway run, verify, review and record them while you wait for the consolidated report. Independent tasks run in parallel (default workers.maxConcurrency); a task whose prerequisite failed is skipped; prerequisite reports are handed to dependants. When a .break-free ledger exists every task is tracked there so the work survives this session. Set async:true for long plans and poll job_status. Per task, shape:'ship' uses the requested capabilities (default); shape:'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
   inputSchema: {
     goal: z.string().optional().describe("One line describing what the whole plan achieves (recorded in the ledger)"),
     tasks: z.array(PlanTaskSchema).min(1).max(40),
@@ -539,6 +595,19 @@ server.registerTool("job_result", {
   return text(`${r.text ?? r.report ?? JSON.stringify(r)}\n\n---\nmeta: ${JSON.stringify({ job_id: j.id, state: j.state, ...(r.meta ? { ...(r.meta as object) } : {}), ...(r.results ? { results: r.results, usage: r.usage } : {}) })}`);
 });
 server.registerTool("job_cancel", { title: "Cancel a job", description: "Abort a running background job (in-flight model calls are cancelled; files already written stay).", inputSchema: { job_id: z.string() } }, async ({ job_id }) => json({ cancelled: jobs!.cancel(job_id) }));
+
+server.registerTool("fleet_status", {
+  title: "Fleet status: jobs, harness sessions, pending wake events",
+  description: "Snapshot the live fleet (background jobs + tmux harness sessions), classify differences into wake events, persist the snapshot and return running counts plus the pending event queue. Set drain:true to advance the cursor past the returned events so they are not reported again.",
+  inputSchema: { drain: z.boolean().optional() },
+}, async ({ drain }) => {
+  const res = await fleetCheck();
+  if (drain && res.pending.length > 0) {
+    const highest = res.pending.reduce((max, e) => Math.max(max, e.seq), 0);
+    drainTo(ctx.config.sessionDir!, highest);
+  }
+  return json(res);
+});
 
 // ---- MCP bridge
 server.registerTool("list_mcp_servers", {
@@ -950,13 +1019,16 @@ server.registerTool("session_clear", { title: "Clear session", description: "Del
 // ---- harness sub-agents (tmux PTY — subscription, not API credits)
 server.registerTool("harness_spawn", {
   title: "Spawn a harness sub-agent",
-  description: "Start another coding harness (claude, codex, omp, pi, grok, …) inside a detached tmux session — a real PTY — so it runs in the interactive/subscription mode instead of `claude -p` (print mode bills the API per token). Returns a session id for harness_send / harness_read / harness_status / harness_close. A harness sub-agent shares the repo (and its worktree) with the lead but runs in its own terminal.",
+  description: "Start another coding harness (claude, codex, omp, pi, grok, …) inside a detached tmux session — a real PTY — so it runs in the interactive/subscription mode instead of `claude -p` (print mode bills the API per token). Returns a session id for harness_send / harness_read / harness_status / harness_close, plus an `attach` command to watch or type into the session directly. A harness sub-agent shares the repo (and its worktree) with the lead but runs in its own terminal.",
   inputSchema: {
     harness: z.string().describe("CLI command that owns the session: claude, codex, omp, pi, grok, …"),
     cwd: z.string().optional().describe("Working directory (default: the gateway workspace root)"),
     command: z.string().optional().describe("Exact command override (default: the harness name)"),
   },
-}, async (a) => json(await ctx.harnessctl.spawn(a.harness, a)));
+}, async (a) => {
+  const s = await ctx.harnessctl.spawn(a.harness, a);
+  return json({ ...s, attach: ctx.harnessctl.attach(s) });
+});
 
 server.registerTool("harness_send", {
   title: "Send input to a harness session",
@@ -972,9 +1044,9 @@ server.registerTool("harness_read", {
 
 server.registerTool("harness_status", {
   title: "Harness session status",
-  description: "running / exited / unknown for a harness sub-agent.",
+  description: "running / exited / unknown for a harness sub-agent, plus the `attach` command to watch or type into it.",
   inputSchema: { id: z.string() },
-}, async (a) => json({ id: a.id, state: await ctx.harnessctl.status(a.id) }));
+}, async (a) => json({ id: a.id, state: await ctx.harnessctl.status(a.id), attach: ctx.harnessctl.attachFor(a.id) }));
 
 server.registerTool("harness_close", {
   title: "Close a harness session",
@@ -984,9 +1056,9 @@ server.registerTool("harness_close", {
 
 server.registerTool("harness_list", {
   title: "List harness sessions",
-  description: "Every harness sub-agent with its tmux name, harness, cwd, state and timestamps — use to resume work a previous session started.",
+  description: "Every harness sub-agent with its tmux name, harness, cwd, state, timestamps and `attach` command — use to resume work a previous session started.",
   inputSchema: {},
-}, async () => json({ sessions: await ctx.harnessctl.list() }));
+}, async () => json({ sessions: (await ctx.harnessctl.list()).map((s) => ({ ...s, attach: ctx.harnessctl.attach(s) })) }));
 
 // ------------------------------------------------------------ main
 async function main() {
@@ -1002,6 +1074,36 @@ async function main() {
     const n = Number(flag("--logs")) || 500;
     const events = logger ? logger.tail(n) : [];
     console.log(JSON.stringify({ file: logger?.file ?? null, enabled: !!logger, ...analyze(events) }, null, 2));
+    process.exit(0);
+  }
+  if (argv.includes("--fleet-check")) {
+    if (argv.includes("--hook")) {
+      // Claude Code Stop-hook contract: block -> one line of JSON on stdout;
+      // allow -> no output at all. Nothing may be written to stderr.
+      const stderrWrite = process.stderr.write;
+      process.stderr.write = (() => true) as typeof process.stderr.write;
+      try {
+        const res = await fleetCheck();
+        if (res.blocking) {
+          const parts: string[] = [];
+          if (res.running.jobs > 0) parts.push(`${res.running.jobs} job(s) running`);
+          if (res.pending.length > 0) parts.push(`${res.pending.length} event(s) pending`);
+          const reason = `${parts.join(", ")} - call fleet_status to collect them`;
+          console.log(JSON.stringify({ decision: "block", reason }));
+        }
+      } catch {
+        // Hook mode is silent on any internal error: no stdout, no stderr.
+      } finally {
+        process.stderr.write = stderrWrite;
+      }
+      process.exit(0);
+    }
+    // Shell-hook friendly fleet status: always valid JSON, always exit 0.
+    try {
+      console.log(JSON.stringify(await fleetCheck(), null, 2));
+    } catch {
+      console.log(JSON.stringify({ running: { jobs: 0, harness: 0 }, pending: [], blocking: false }, null, 2));
+    }
     process.exit(0);
   }
   if (argv.includes("--serve")) {
