@@ -23,20 +23,24 @@ curl -fsSL https://raw.githubusercontent.com/maruthiprithivi/break-free/main/ins
 
 ## Watch
 
-<a href="https://maruthiprithivi.github.io/break-free/#intro"><img src="docs/assets/preview/intro.webp" alt="Break Free in two minutes" width="100%"></a>
+<a href="https://maruthiprithivi.github.io/break-free/#intro"><img src="docs/assets/preview/intro.webp" alt="What Break Free actually does" width="100%"></a>
 
-**[Watch with sound and subtitles](https://maruthiprithivi.github.io/break-free/)** — why it exists, what it is, and how the verification actually works. Two minutes.
+**[What Break Free actually does](https://maruthiprithivi.github.io/break-free/)** — you say who does the work; it gets carried out and checked. One minute, narrated, with subtitles.
 
 <table>
 <tr>
-<td width="25%"><a href="https://maruthiprithivi.github.io/break-free/#delegate"><img src="docs/assets/preview/delegate.webp" alt="Delegate one task" width="100%"></a><b>Delegate one task</b><br><sub>Hand off the work, keep the verification.</sub></td>
-<td width="25%"><a href="https://maruthiprithivi.github.io/break-free/#parallel"><img src="docs/assets/preview/parallel.webp" alt="Run a plan in parallel" width="100%"></a><b>Run a plan in parallel</b><br><sub>A dependency graph, several vendors at once.</sub></td>
-<td width="25%"><a href="https://maruthiprithivi.github.io/break-free/#review"><img src="docs/assets/preview/review.webp" alt="Get an independent verdict" width="100%"></a><b>Get an independent verdict</b><br><sub>A different vendor reviews; a panel decides.</sub></td>
-<td width="25%"><a href="https://maruthiprithivi.github.io/break-free/#ledger"><img src="docs/assets/preview/ledger.webp" alt="Resume across sessions" width="100%"></a><b>Resume across sessions</b><br><sub>The ledger lives in the repository.</sub></td>
+<td width="25%"><a href="https://maruthiprithivi.github.io/break-free/#delegate"><img src="docs/assets/preview/delegate.webp" alt="Hand a task to another model" width="100%"></a><b>Hand a task to another model</b><br><sub>Name the model, name the check.</sub></td>
+<td width="25%"><a href="https://maruthiprithivi.github.io/break-free/#handoff"><img src="docs/assets/preview/handoff.webp" alt="Send work to another harness" width="100%"></a><b>Send work to another harness</b><br><sub>Codex, omp or pi, on your subscription.</sub></td>
+<td width="25%"><a href="https://maruthiprithivi.github.io/break-free/#parallel"><img src="docs/assets/preview/parallel.webp" alt="Split one job across several" width="100%"></a><b>Split one job across several</b><br><sub>In parallel, with the checks you named.</sub></td>
+</tr>
+<tr>
+<td width="25%"><a href="https://maruthiprithivi.github.io/break-free/#verdict"><img src="docs/assets/preview/verdict.webp" alt="Get an independent verdict" width="100%"></a><b>Get an independent verdict</b><br><sub>From a vendor that did not write it.</sub></td>
+<td width="25%"><a href="https://maruthiprithivi.github.io/break-free/#guard"><img src="docs/assets/preview/guard.webp" alt="Nothing gets left behind" width="100%"></a><b>Nothing gets left behind</b><br><sub>The turn will not end on a failed run.</sub></td>
+<td width="25%"><a href="https://maruthiprithivi.github.io/break-free/#resume"><img src="docs/assets/preview/resume.webp" alt="Pick up where you left off" width="100%"></a><b>Pick up where you left off</b><br><sub>The log lives in the repository.</sub></td>
 </tr>
 </table>
 
-<sub>The clips above are silent previews — GitHub strips video players from README files. The narrated versions, with subtitle tracks, play on the <a href="https://maruthiprithivi.github.io/break-free/">project page</a>; the source files are in <a href="docs/assets/">docs/assets/</a> and the Remotion pipeline that builds them is in <a href="videos/">videos/</a>.</sub>
+<sub>The clips above are silent previews: GitHub strips video players from README files. The narrated versions play on the <a href="https://maruthiprithivi.github.io/break-free/">project page</a>, source files are in <a href="docs/assets/">docs/assets/</a>, and the Remotion pipeline that builds them is in <a href="videos/">videos/</a>.</sub>
 
 ## Install
 

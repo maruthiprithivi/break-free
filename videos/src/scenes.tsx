@@ -1,24 +1,7 @@
 import React from "react";
-import { AbsoluteFill, interpolate } from "remotion";
+import { AbsoluteFill, Easing, interpolate, useCurrentFrame } from "remotion";
 import { glow, mono, sans, theme } from "./theme";
-import {
-  arrow,
-  Bar,
-  Chip,
-  Col,
-  fanin,
-  fanout,
-  Flow,
-  Label,
-  Panel,
-  Row,
-  Stamp,
-  Svg,
-  Terminal,
-  TypedLine,
-  Wires,
-  Wordmark,
-} from "./ui";
+import { Bar, Chip, Col, Panel, Row, Stamp, Terminal, TypedLine, Wires, Wordmark, arrow, fanout } from "./ui";
 
 export type SceneProps = {
   stage: number;
@@ -27,799 +10,500 @@ export type SceneProps = {
   duration: number;
   install: string;
   repo: string;
+  videoId: string;
+  lineId: string;
 };
 
-/** Crossfade between groups of narration stages that cannot share the screen. */
-const group = (stage: number, p: number, from: number, to: number) => {
-  if (stage < from || stage > to + 1) return 0;
-  if (stage === from && from !== 0) return Math.min(1, p * 5);
-  if (stage === to + 1) return 1 - Math.min(1, p * 5);
-  return 1;
+/* ------------------------------------------------------------- animation */
+
+/** 0 -> 1 between `at` and `at + len` of a beat's progress, eased out. */
+const at = (p: number, start: number, len = 0.25) =>
+  interpolate(p, [start, start + len], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) });
+
+/** Enter: fade up and settle. Every element arrives, nothing is simply present. */
+const Enter: React.FC<{ p: number; start?: number; dy?: number; children: React.ReactNode; style?: React.CSSProperties }> = ({ p, start = 0, dy = 18, children, style }) => {
+  const t = at(p, start);
+  return <div style={{ opacity: t, transform: `translateY(${(1 - t) * dy}px)`, ...style }}>{children}</div>;
 };
 
-const Layer: React.FC<{ opacity: number; children: React.ReactNode }> = ({ opacity, children }) =>
-  opacity <= 0.002 ? null : (
-    <AbsoluteFill
-      style={{
-        alignItems: "center",
-        justifyContent: "center",
-        paddingTop: 170,
-        paddingBottom: 215,
-        opacity,
-      }}
-    >
-      {children}
-    </AbsoluteFill>
-  );
-
-const Head: React.FC<{ children: React.ReactNode; colour?: string }> = ({ children, colour }) => (
-  <div
-    style={{
-      fontFamily: sans,
-      fontSize: 26,
-      fontWeight: 600,
-      color: colour ?? theme.text,
-      letterSpacing: -0.2,
-    }}
-  >
-    {children}
-  </div>
+const Stage: React.FC<{ children: React.ReactNode; gap?: number }> = ({ children, gap = 26 }) => (
+  <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", paddingTop: 168, paddingBottom: 222 }}>
+    <Col gap={gap} style={{ alignItems: "center" }}>{children}</Col>
+  </AbsoluteFill>
 );
 
-const Kv: React.FC<{ k: string; v: React.ReactNode; colour?: string }> = ({ k, v, colour }) => (
+const Head: React.FC<{ children: React.ReactNode; colour?: string; size?: number }> = ({ children, colour, size = 27 }) => (
+  <div style={{ fontFamily: sans, fontSize: size, fontWeight: 600, color: colour ?? theme.text, letterSpacing: -0.2 }}>{children}</div>
+);
+
+const Kv: React.FC<{ k: string; v: React.ReactNode; colour?: string; w?: number }> = ({ k, v, colour, w = 104 }) => (
   <Row gap={18} style={{ alignItems: "baseline" }}>
-    <span style={{ fontFamily: mono, fontSize: 19, color: theme.faint, width: 104 }}>{k}</span>
-    <span style={{ fontFamily: mono, fontSize: 21, color: colour ?? theme.text }}>{v}</span>
+    <span style={{ fontFamily: mono, fontSize: 18, color: theme.faint, width: w, flexShrink: 0 }}>{k}</span>
+    <span style={{ fontFamily: mono, fontSize: 20, color: colour ?? theme.text }}>{v}</span>
   </Row>
 );
 
-const Node: React.FC<{
-  name: string;
-  vendor?: string;
-  state?: "idle" | "run" | "pass" | "fail" | "skip";
-  progress?: number;
-  width?: number;
-}> = ({ name, vendor, state = "idle", progress = 0, width = 250 }) => {
-  const colour =
-    state === "pass" ? theme.green : state === "fail" ? theme.red : state === "run" ? theme.cyan : theme.line;
+const Node: React.FC<{ name: string; sub?: string; state?: "idle" | "run" | "pass" | "fail" | "skip"; progress?: number; width?: number }> = ({ name, sub, state = "idle", progress = 0, width = 250 }) => {
+  const colour = state === "pass" ? theme.green : state === "fail" ? theme.red : state === "run" ? theme.cyan : theme.line;
   return (
     <Panel accent={colour} width={width} padding={18} dimmed={state === "skip"}>
       <Col gap={10}>
         <Row gap={10} style={{ justifyContent: "space-between" }}>
           <span style={{ fontFamily: mono, fontSize: 21, color: theme.text }}>{name}</span>
-          <span
-            style={{
-              fontFamily: mono,
-              fontSize: 15,
-              letterSpacing: 2,
-              color: colour === theme.line ? theme.faint : colour,
-            }}
-          >
-            {state === "skip" ? "SKIPPED" : state.toUpperCase()}
+          <span style={{ fontFamily: mono, fontSize: 14, letterSpacing: 2, color: colour === theme.line ? theme.faint : colour }}>
+            {state === "skip" ? "SKIPPED" : state === "idle" ? "" : state.toUpperCase()}
           </span>
         </Row>
-        {vendor ? (
-          <span style={{ fontFamily: mono, fontSize: 16, color: theme.faint }}>{vendor}</span>
-        ) : null}
+        {sub ? <span style={{ fontFamily: mono, fontSize: 16, color: theme.faint }}>{sub}</span> : null}
         {state === "run" ? <Bar progress={progress} width={width - 36} /> : null}
       </Col>
     </Panel>
   );
 };
 
-/* ------------------------------------------------------------------ intro */
+/* ------------------------------------------------------------- intro beats */
 
-const TitleScene: React.FC<SceneProps> = ({ frame, repo }) => {
-  const rise = interpolate(frame, [0, 26], [26, 0], { extrapolateRight: "clamp" });
-  const fade = interpolate(frame, [0, 22], [0, 1], { extrapolateRight: "clamp" });
-  const rule = interpolate(frame, [18, 52], [0, 620], { extrapolateRight: "clamp" });
-  const tag = interpolate(frame, [30, 58], [0, 1], { extrapolateRight: "clamp" });
+const Title: React.FC<SceneProps> = ({ stageProgress: p, repo }) => {
+  const rule = interpolate(at(p, 0.12, 0.35), [0, 1], [0, 660]);
   return (
-    <Layer opacity={1}>
-      <div style={{ transform: `translateY(${rise}px)`, opacity: fade }}>
-        <Wordmark size={132} />
-        <div style={{ height: 1, width: rule, marginTop: 30, background: `linear-gradient(90deg, ${theme.green}, transparent)` }} />
-        <div
-          style={{
-            marginTop: 28,
-            fontFamily: sans,
-            fontSize: 40,
-            color: theme.dim,
-            opacity: tag,
-            letterSpacing: -0.3,
-          }}
-        >
-          the frontier model leads, other models execute
-        </div>
-        <Row gap={14} style={{ marginTop: 34, opacity: tag }}>
+    <Stage gap={0}>
+      <Enter p={p} dy={26}><Wordmark size={126} /></Enter>
+      <div style={{ height: 1, width: rule, marginTop: 28, background: `linear-gradient(90deg, ${theme.green}, transparent)` }} />
+      <Enter p={p} start={0.3} style={{ marginTop: 26 }}>
+        <div style={{ fontFamily: sans, fontSize: 38, color: theme.dim }}>you say who does the work</div>
+      </Enter>
+      <Enter p={p} start={0.5} style={{ marginTop: 30 }}>
+        <Row gap={14}>
           <Chip colour={theme.green}>MCP server</Chip>
           <Chip>Claude Code and Codex</Chip>
           <Chip colour={theme.violet}>{repo}</Chip>
         </Row>
-      </div>
-    </Layer>
+      </Enter>
+    </Stage>
   );
 };
 
-const BottleneckScene: React.FC<SceneProps> = ({ stage, stageProgress }) => {
-  const work = ["boilerplate", "unit tests", "migrations", "docs", "bulk edits", "refactors"];
-  const cost = stage >= 1 ? (stage === 1 ? stageProgress : 1) : 0;
-  return (
-    <>
-      <Layer opacity={group(stage, stageProgress, 0, 1)}>
-        <Row gap={64}>
-          <Col gap={12}>
-            <Label>the work in one task</Label>
-            {work.map((w, i) => (
-              <div
-                key={w}
-                style={{
-                  fontFamily: mono,
-                  fontSize: 23,
-                  color: theme.dim,
-                  padding: "9px 20px",
-                  borderRadius: 8,
-                  border: `1px solid ${theme.line}`,
-                  background: "rgba(255,255,255,0.02)",
-                  opacity: interpolate(stageProgress, [i * 0.06, i * 0.06 + 0.2], [0.15, 1], {
-                    extrapolateLeft: "clamp",
-                    extrapolateRight: "clamp",
-                  }),
-                }}
-              >
-                {w}
-              </div>
-            ))}
-          </Col>
-          <Col gap={18} style={{ alignItems: "center" }}>
-            <div
-              style={{
-                width: 14,
-                height: 300,
-                borderRadius: 999,
-                background: `linear-gradient(180deg, ${theme.amber}, rgba(251,191,36,0.15))`,
-                boxShadow: glow("rgba(251,191,36,0.45)", 40 * (0.4 + cost)),
-              }}
-            />
-            <Label colour={theme.amber}>frontier model</Label>
-          </Col>
-          <Panel accent={cost > 0.2 ? theme.amber : theme.line} width={420}>
-            <Col gap={16}>
-              <Head colour={theme.amber}>Top rate, for typing</Head>
-              <Kv k="work" v="mostly mechanical" />
-              <Kv k="model" v="the most expensive" />
-              <Row gap={16}>
-                <span style={{ fontFamily: mono, fontSize: 18, color: theme.faint, width: 104 }}>cost</span>
-                <Bar progress={cost} colour={theme.amber} width={260} />
-              </Row>
-            </Col>
-          </Panel>
+const Ask: React.FC<SceneProps> = ({ stageProgress: p }) => (
+  <Stage>
+    <Enter p={p}>
+      <Terminal title="you" width={980}>
+        <Row gap={12} style={{ alignItems: "baseline" }}>
+          <span style={{ fontFamily: mono, fontSize: 23, color: theme.green }}>&gt;</span>
+          <TypedLine text="use deepseek for the router tests" reveal={at(p, 0.05, 0.3)} caret size={23} />
         </Row>
-      </Layer>
-
-      <Layer opacity={group(stage, stageProgress, 2, 2)}>
-        <Row gap={46}>
-          <Panel accent={theme.line} width={430}>
-            <Col gap={14}>
-              <Head>Hand it off blindly</Head>
-              <Kv k="model" v="whatever is cheapest" />
-              <Kv k="checks" v="none" colour={theme.red} />
-              <Kv k="report" v={'"all tests pass"'} colour={theme.dim} />
-            </Col>
+      </Terminal>
+    </Enter>
+    <Row gap={18}>
+      {["did it actually run?", "who really did it?", "was it checked?"].map((q, i) => (
+        <Enter key={q} p={p} start={0.42 + i * 0.1}>
+          <Panel accent={theme.line} padding={16} width={290}>
+            <span style={{ fontFamily: sans, fontSize: 21, color: theme.dim }}>{q}</span>
           </Panel>
-          <Wires w={110} h={40} lines={arrow(110, 20)} colour={theme.faint} />
-          <Panel accent={theme.red} width={430}>
-            <Col gap={16}>
-              <Head colour={theme.red}>Nobody checked</Head>
-              <Stamp state="fail" detail="claimed, never run" />
-              <span style={{ fontFamily: sans, fontSize: 21, color: theme.dim }}>
-                A worker grading its own homework is not verification.
-              </span>
-            </Col>
-          </Panel>
-        </Row>
-      </Layer>
-    </>
-  );
-};
+        </Enter>
+      ))}
+    </Row>
+    <Enter p={p} start={0.78}><Stamp state="fail" detail="unverified" /></Enter>
+  </Stage>
+);
 
-const LeadCrewScene: React.FC<SceneProps> = ({ stage, stageProgress }) => {
-  const crew = ["deepseek", "kimi", "glm", "minimax", "openrouter", "ollama (local)"];
-  const gate = stage >= 3 ? (stage === 3 ? stageProgress : 1) : 0;
-  const leadDetail = stage >= 1 ? 1 : 0.35;
-  const crewDetail = stage >= 2 ? 1 : 0.35;
+const RoutingSay: React.FC<SceneProps> = ({ stageProgress: p }) => (
+  <Stage gap={40}>
+    <Enter p={p}>
+      <Row gap={16} style={{ alignItems: "baseline" }}>
+        <span style={{ fontFamily: sans, fontSize: 46, color: theme.dim }}>use</span>
+        <span style={{ fontFamily: mono, fontSize: 46, color: theme.green, borderBottom: `2px solid ${theme.green}`, paddingBottom: 4 }}>X</span>
+        <span style={{ fontFamily: sans, fontSize: 46, color: theme.dim }}>for</span>
+        <span style={{ fontFamily: mono, fontSize: 46, color: theme.cyan, borderBottom: `2px solid ${theme.cyan}`, paddingBottom: 4 }}>Y</span>
+      </Row>
+    </Enter>
+    <Wires w={620} h={64} lines={fanout(620, 64, [150, 470])} colour={theme.line} dashed />
+    <Row gap={60}>
+      <Enter p={p} start={0.45}>
+        <Panel accent={theme.cyan} width={300}><Col gap={8}><Head colour={theme.cyan} size={22}>X is a model</Head><span style={{ fontFamily: mono, fontSize: 18, color: theme.dim }}>delegate it</span></Col></Panel>
+      </Enter>
+      <Enter p={p} start={0.6}>
+        <Panel accent={theme.violet} width={300}><Col gap={8}><Head colour={theme.violet} size={22}>X is a harness</Head><span style={{ fontFamily: mono, fontSize: 18, color: theme.dim }}>open it</span></Col></Panel>
+      </Enter>
+    </Row>
+  </Stage>
+);
+
+const RoutingModel: React.FC<SceneProps> = ({ stageProgress: p }) => {
+  const pick = at(p, 0.3, 0.2);
   return (
-    <Layer opacity={1}>
-      <Col gap={26} style={{ alignItems: "center" }}>
-        <Panel accent={theme.green} width={840}>
-          <Col gap={12}>
-            <Row gap={16} style={{ justifyContent: "space-between" }}>
-              <Head colour={theme.green}>Lead</Head>
-              <span style={{ fontFamily: mono, fontSize: 18, color: theme.faint }}>
-                Claude Code / Codex
-              </span>
-            </Row>
-            <Row gap={10} style={{ flexWrap: "wrap", opacity: leadDetail }}>
-              {["understands you", "decomposes", "designs", "writes the verification", "reviews", "owns the result"].map(
-                (b) => (
-                  <Chip key={b} colour={theme.green} size={18}>
-                    {b}
-                  </Chip>
-                ),
-              )}
-            </Row>
-          </Col>
-        </Panel>
-
-        <div
-          style={{
-            width: 640,
-            padding: "14px 26px",
-            borderRadius: 999,
-            border: `1px solid ${gate > 0.1 ? theme.violet : theme.line}`,
-            background: gate > 0.1 ? "rgba(167,139,250,0.08)" : "transparent",
-            textAlign: "center",
-            fontFamily: mono,
-            fontSize: 22,
-            color: gate > 0.1 ? theme.violet : theme.faint,
-            boxShadow: gate > 0.1 ? glow("rgba(167,139,250,0.3)", 30) : undefined,
-          }}
-        >
-          break-free-gateway
-          <span style={{ fontSize: 17, color: theme.faint, marginLeft: 22 }}>
-            one MCP server, installed once
-          </span>
-        </div>
-
-        <Row gap={14} style={{ opacity: crewDetail, flexWrap: "wrap", justifyContent: "center", width: 980 }}>
-          {crew.map((c) => (
-            <Panel key={c} accent={theme.cyan} padding={16} width={290}>
-              <Row gap={12}>
-                <span style={{ width: 8, height: 8, borderRadius: 999, background: theme.cyan }} />
-                <span style={{ fontFamily: mono, fontSize: 21, color: theme.text }}>{c}</span>
+    <Stage gap={34}>
+      <Row gap={16}>
+        {["deepseek", "kimi", "glm", "ollama (local)"].map((m, i) => (
+          <Enter key={m} p={p} start={i * 0.06}>
+            <Panel accent={i === 0 ? theme.cyan : theme.line} padding={16} width={220} style={{ transform: i === 0 ? `scale(${1 + pick * 0.05})` : undefined }}>
+              <Row gap={10}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, background: i === 0 ? theme.cyan : theme.faint, boxShadow: i === 0 ? glow(theme.cyan, 12 * pick) : undefined }} />
+                <span style={{ fontFamily: mono, fontSize: 19, color: i === 0 ? theme.text : theme.faint }}>{m}</span>
               </Row>
             </Panel>
-          ))}
-        </Row>
-        <Label colour={theme.cyan}>crew: execution</Label>
-      </Col>
-    </Layer>
+          </Enter>
+        ))}
+      </Row>
+      <Wires w={120} h={40} lines={arrow(120, 20)} colour={theme.cyan} />
+      <Enter p={p} start={0.55}>
+        <Panel accent={theme.cyan} width={560}>
+          <Col gap={12}>
+            <Head colour={theme.cyan} size={22}>delegated worker</Head>
+            <Row gap={10}>
+              {["read", "write", "run"].map((c, i) => (
+                <Enter key={c} p={p} start={0.65 + i * 0.06}><Chip size={18}>{c}</Chip></Enter>
+              ))}
+              <Enter p={p} start={0.85}><Chip size={18} muted>no git</Chip></Enter>
+            </Row>
+          </Col>
+        </Panel>
+      </Enter>
+    </Stage>
   );
 };
 
-const VerifyScene: React.FC<SceneProps> = ({ stage, stageProgress }) => {
-  const jail = [
-    ["run_command", "allow-list only, no shell: ; && | $() are rejected"],
-    ["git_push", "refused on protected branches"],
-    ["git", "no force, no reset, no rebase, no branch deletes"],
-    ["read_file", "jailed to the workspace, .env and keys denied"],
-    ["gh", "issues, PRs and Actions only, never repo or secret deletion"],
-  ];
-  const ledger = [
-    ["HANDOFF.md", "resume brief: in progress, blocked, ready"],
-    ["PLAN.md", "board by status, dependency graph"],
-    ["tasks/T-001.md", "acceptance criteria, verify command, outcome"],
-    ["notes/", "decisions and gotchas, injected into every worker"],
+const RoutingHarness: React.FC<SceneProps> = ({ stageProgress: p }) => {
+  const open = at(p, 0.1, 0.3);
+  return (
+    <Stage gap={30}>
+      <div style={{ transform: `scale(${0.92 + open * 0.08})`, opacity: open }}>
+        <Terminal title="tmux: break-free-9f2a1c   (codex)" width={1020}>
+          <TypedLine text="codex" reveal={at(p, 0.4, 0.2)} colour={theme.green} size={22} caret />
+          <div style={{ fontFamily: mono, fontSize: 19, color: theme.faint, marginTop: 8, opacity: at(p, 0.55) }}>
+            its own memory, skills and tools, in your repository
+          </div>
+        </Terminal>
+      </div>
+      <Enter p={p} start={0.72}>
+        <Row gap={14}>
+          <Chip colour={theme.violet}>your subscription</Chip>
+          <Chip muted>not metered API calls</Chip>
+          <Chip colour={theme.green}>attach any time</Chip>
+        </Row>
+      </Enter>
+    </Stage>
+  );
+};
+
+const Verify: React.FC<SceneProps> = ({ stageProgress: p }) => {
+  const run = at(p, 0.25, 0.4);
+  return (
+    <Stage gap={26}>
+      <Enter p={p}>
+        <Panel accent={theme.line} width={880}>
+          <Col gap={12}>
+            <Kv k="worker" v="deepseek/deepseek-v4-pro" />
+            <Kv k="claimed" v={'"done, tests pass"'} colour={theme.dim} />
+          </Col>
+        </Panel>
+      </Enter>
+      <Wires w={60} h={44} lines={[[30, 0, 30, 44]]} colour={theme.green} />
+      <Enter p={p} start={0.22}>
+        <Panel accent={run > 0.9 ? theme.green : theme.cyan} width={880}>
+          <Col gap={14}>
+            <Kv k="gateway" v="npm test -- router" colour={theme.cyan} />
+            <Bar progress={run} colour={run > 0.9 ? theme.green : theme.cyan} width={820} />
+            {run > 0.9 ? <Kv k="exit" v="0" colour={theme.green} /> : null}
+          </Col>
+        </Panel>
+      </Enter>
+      {run > 0.95 ? <Enter p={p} start={0.8}><Stamp state="pass" detail="a real exit code, not a claim" /></Enter> : null}
+    </Stage>
+  );
+};
+
+const FollowThrough: React.FC<SceneProps> = ({ stageProgress: p, frame }) => {
+  const pulse = 0.65 + 0.35 * Math.sin(frame / 7);
+  const rows: [string, string, boolean][] = [
+    ["tests", "npm test — exit 0", true],
+    ["docs", "no check requested", true],
+    ["ci abc1234", "run still in flight", false],
   ];
   return (
-    <>
-      <Layer opacity={group(stage, stageProgress, 0, 1)}>
-        <Row gap={40} style={{ alignItems: "stretch" }}>
-          <Panel accent={theme.green} width={560}>
-            <Col gap={14}>
-              <Label colour={theme.green}>written by the lead</Label>
-              <Kv k="task" v="implement TokenBucket in src/ratelimit.ts" />
-              <Kv k="accept" v="429 after N in window; window resets" />
-              <Kv k="verify" v="npm test -- ratelimit" colour={theme.cyan} />
-              <Kv k="caps" v="read - write - run" />
-            </Col>
-          </Panel>
-          <Panel accent={stage >= 1 ? theme.green : theme.line} width={560}>
-            <Col gap={14}>
-              <Label colour={stage >= 1 ? theme.green : theme.faint}>run by the gateway</Label>
-              <Kv k="worker" v="deepseek/deepseek-v4-pro" />
-              <Kv k="claimed" v={'"done, tests pass"'} colour={theme.dim} />
-              {stage >= 1 ? (
-                <>
-                  <Kv k="gateway" v="npm test -- ratelimit" colour={theme.cyan} />
-                  <Kv k="exit" v="0" colour={theme.green} />
-                  <Stamp state="pass" detail="a real exit code" />
-                </>
-              ) : null}
-            </Col>
-          </Panel>
-        </Row>
-      </Layer>
-
-      <Layer opacity={group(stage, stageProgress, 2, 2)}>
-        <Col gap={0} style={{ alignItems: "center" }}>
-          <Node name="core" vendor="strong - verified" state="pass" width={280} />
-          <Wires w={802} h={52} lines={fanout(802, 52, [125, 401, 677])} colour={theme.green} />
-          <Row gap={26}>
-            <Node name="tests" vendor="fast" state="pass" />
-            <Node name="docs" vendor="local" state="pass" />
-            <Node name="wire" vendor="strong" state="fail" />
-          </Row>
-          <Wires
-            w={802}
-            h={52}
-            lines={[[677, 0, 677, 26], [401, 26, 677, 26], [401, 26, 401, 52]]}
-            colour={theme.red}
-          />
-          <Node name="ship" vendor="depends_on: wire" state="skip" width={280} />
-          <div style={{ height: 26 }} />
-          <Label colour={theme.faint}>a failed check blocks whatever depended on it</Label>
-        </Col>
-      </Layer>
-
-      <Layer opacity={group(stage, stageProgress, 3, 3)}>
-        <Panel accent={theme.red} width={1080}>
-          <Col gap={16}>
-            <Head colour={theme.red}>What a worker cannot do</Head>
-            {jail.map(([k, v]) => (
-              <Row key={k} gap={22} style={{ alignItems: "baseline" }}>
-                <span style={{ fontFamily: mono, fontSize: 21, color: theme.text, width: 180 }}>{k}</span>
-                <span style={{ fontFamily: mono, fontSize: 19, color: theme.dim }}>{v}</span>
-              </Row>
+    <Stage gap={26}>
+      <Enter p={p}>
+        <Panel accent={theme.line} width={900}>
+          <Col gap={14}>
+            <Head size={22}>open work</Head>
+            {rows.map(([k, v, done], i) => (
+              <Enter key={k} p={p} start={0.1 + i * 0.12}>
+                <Row gap={18} style={{ alignItems: "baseline" }}>
+                  <span style={{
+                    fontFamily: mono, fontSize: 19, width: 18,
+                    color: done ? theme.green : theme.amber,
+                    opacity: done ? 1 : pulse,
+                  }}>{done ? "x" : "o"}</span>
+                  <span style={{ fontFamily: mono, fontSize: 20, color: done ? theme.faint : theme.text, width: 150 }}>{k}</span>
+                  <span style={{ fontFamily: mono, fontSize: 18, color: done ? theme.faint : theme.amber, opacity: done ? 1 : pulse }}>{v}</span>
+                </Row>
+              </Enter>
             ))}
           </Col>
         </Panel>
-      </Layer>
-
-      <Layer opacity={group(stage, stageProgress, 4, 4)}>
-        <Panel accent={theme.green} width={1000}>
-          <Col gap={16}>
-            <Head colour={theme.green}>.break-free/</Head>
-            {ledger.map(([k, v]) => (
-              <Row key={k} gap={22} style={{ alignItems: "baseline" }}>
-                <span style={{ fontFamily: mono, fontSize: 21, color: theme.cyan, width: 230 }}>{k}</span>
-                <span style={{ fontFamily: mono, fontSize: 19, color: theme.dim }}>{v}</span>
-              </Row>
-            ))}
-            <Label>plain Markdown, committed with the repository</Label>
-          </Col>
-        </Panel>
-      </Layer>
-    </>
+      </Enter>
+      <Enter p={p} start={0.7}>
+        <div style={{
+          fontFamily: mono, fontSize: 21, color: theme.amber, padding: "12px 26px",
+          border: `1px solid ${theme.amber}`, borderRadius: 999, background: "rgba(251,191,36,0.08)",
+        }}>
+          one item still open — the turn does not end here
+        </div>
+      </Enter>
+    </Stage>
   );
 };
 
-const InstallScene: React.FC<SceneProps> = ({ frame, install, repo }) => {
-  const typed = interpolate(frame, [10, 92], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-  const out = interpolate(frame, [100, 130], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+const Install: React.FC<SceneProps> = ({ stageProgress: p, install, repo }) => {
+  const typed = at(p, 0.02, 0.4);
+  const out = at(p, 0.45, 0.3);
   const lines: [string, string][] = [
     ["== Preflight", theme.dim],
     ["  PASS  Node 22.22.2", theme.green],
     ["  PASS  Claude Code CLI", theme.green],
-    ["== Postflight", theme.dim],
     ["  PASS  MCP handshake ok - 13 tools", theme.green],
-    ["  GREEN - everything checks out. Good to go.", theme.green],
+    ["  GREEN - everything checks out.", theme.green],
   ];
   return (
-    <Layer opacity={1}>
-      <Col gap={34} style={{ alignItems: "center" }}>
-        <Terminal title="install" width={1180}>
+    <Stage gap={30}>
+      <Enter p={p}>
+        <Terminal title="install" width={1160}>
           <Row gap={12} style={{ alignItems: "baseline" }}>
-            <span style={{ fontFamily: mono, fontSize: 24, color: theme.green }}>$</span>
-            <TypedLine text={install} reveal={typed} caret={typed < 1} size={23} />
+            <span style={{ fontFamily: mono, fontSize: 23, color: theme.green }}>$</span>
+            <TypedLine text={install} reveal={typed} caret={typed < 1} size={22} />
           </Row>
-          <div style={{ opacity: out, display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 5 }}>
             {lines.map(([t, c], i) => (
-              <div
-                key={t}
-                style={{
-                  fontFamily: mono,
-                  fontSize: 21,
-                  color: c,
-                  whiteSpace: "pre",
-                  opacity: interpolate(out, [i * 0.12, i * 0.12 + 0.2], [0, 1], {
-                    extrapolateLeft: "clamp",
-                    extrapolateRight: "clamp",
-                  }),
-                }}
-              >
-                {t}
-              </div>
+              <div key={t} style={{ fontFamily: mono, fontSize: 20, color: c, whiteSpace: "pre", opacity: at(out, i * 0.16, 0.2) }}>{t}</div>
             ))}
           </div>
         </Terminal>
-        <Col gap={12} style={{ alignItems: "center", opacity: out }}>
-          <Wordmark size={64} />
-          <span style={{ fontFamily: mono, fontSize: 24, color: theme.dim }}>{repo}</span>
+      </Enter>
+      <Enter p={p} start={0.75}>
+        <Col gap={10} style={{ alignItems: "center" }}>
+          <Wordmark size={56} />
+          <span style={{ fontFamily: mono, fontSize: 22, color: theme.dim }}>{repo}</span>
         </Col>
-      </Col>
-    </Layer>
+      </Enter>
+    </Stage>
   );
 };
 
-/* -------------------------------------------------------------- scenarios */
+/* -------------------------------------------------- per-video scenario beats */
 
-const DelegateScene: React.FC<SceneProps> = ({ stage, stageProgress }) => (
-  <>
-    <Layer opacity={group(stage, stageProgress, 0, 0)}>
-      <Panel accent={theme.line} width={880}>
-        <Col gap={16}>
-          <Label>on your desk</Label>
-          <Head>Unit tests for src/router.ts</Head>
-          <span style={{ fontFamily: sans, fontSize: 24, color: theme.dim }}>
-            Alias expansion and fallback ordering. Careful work. Not hard work.
-          </span>
-        </Col>
-      </Panel>
-    </Layer>
+const TASKS: Record<string, { head: string; kv: [string, string][] }> = {
+  delegate: { head: "Unit tests for src/router.ts", kv: [["needs", "care, not genius"], ["alias", "fast"]] },
+  handoff: { head: "A job for Codex", kv: [["why", "its own memory, skills, tools"], ["where", "this repository"]] },
+  parallel: { head: "Rate limiting", kv: [["pieces", "core, tests, docs, wiring"], ["models", "not all the same"]] },
+  verdict: { head: "About to land", kv: [["diff", "4 files, +212 -37"], ["want", "eyes that did not write it"]] },
+  guard: { head: "Done and pushed", kv: [["commit", "abc1234"], ["risk", "this is where it gets forgotten"]] },
+  resume: { head: "It is Monday", kv: [["context", "last week is gone"], ["repo", "unchanged"]] },
+};
 
-    <Layer opacity={group(stage, stageProgress, 1, 1)}>
-      <Terminal title="claude code" width={1240}>
+const Task: React.FC<SceneProps> = ({ stageProgress: p, videoId }) => {
+  const t = TASKS[videoId] ?? { head: "A task", kv: [] };
+  return (
+    <Stage>
+      <Enter p={p} dy={24}>
+        <Panel accent={theme.line} width={880}>
+          <Col gap={16}>
+            <span style={{ fontFamily: mono, fontSize: 16, letterSpacing: 3, color: theme.faint }}>THE TASK</span>
+            <Head size={34}>{t.head}</Head>
+            {t.kv.map(([k, v], i) => (
+              <Enter key={k} p={p} start={0.3 + i * 0.14}><Kv k={k} v={v} w={120} /></Enter>
+            ))}
+          </Col>
+        </Panel>
+      </Enter>
+    </Stage>
+  );
+};
+
+const SAYS: Record<string, string> = {
+  delegate: "use deepseek to write them, verify with npm test",
+  handoff: "use codex for this one",
+  parallel: "core on deepseek, docs local, wiring on kimi; docs and wiring wait for core",
+  verdict: "have kimi review it",
+  guard: "git push",
+  resume: "everything was written down as it happened",
+};
+
+const Say: React.FC<SceneProps> = ({ stageProgress: p, videoId }) => (
+  <Stage>
+    <Enter p={p}>
+      <Terminal title={videoId === "resume" ? ".break-free/" : "you"} width={1180}>
         <Row gap={12} style={{ alignItems: "baseline" }}>
-          <span style={{ fontFamily: mono, fontSize: 23, color: theme.green }}>&gt;</span>
-          <TypedLine
-            text="/break-free-delegate fast write unit tests for src/router.ts covering alias expansion and fallback ordering"
-            reveal={Math.min(1, stageProgress * 1.5)}
-            caret
-            size={22}
-          />
+          <span style={{ fontFamily: mono, fontSize: 23, color: theme.green }}>{videoId === "resume" ? "#" : ">"}</span>
+          <TypedLine text={SAYS[videoId] ?? ""} reveal={at(p, 0.03, 0.55)} caret size={22} />
         </Row>
-        <div style={{ fontFamily: mono, fontSize: 20, color: theme.faint, marginTop: 8 }}>
-          verify: npm test -- router
-        </div>
       </Terminal>
-    </Layer>
-
-    <Layer opacity={group(stage, stageProgress, 2, 2)}>
-      <Row gap={40}>
-        <Panel accent={theme.green} width={380}>
-          <Col gap={12}>
-            <Label colour={theme.green}>lead</Label>
-            <Head>Claude Code</Head>
-            <span style={{ fontFamily: mono, fontSize: 19, color: theme.dim }}>keeps the judgement</span>
-          </Col>
-        </Panel>
-        <Wires w={120} h={40} lines={arrow(120, 20)} colour={theme.green} />
-        <Panel accent={theme.cyan} width={480}>
-          <Col gap={12}>
-            <Label colour={theme.cyan}>worker</Label>
-            <Head>deepseek-v4-flash</Head>
-            <Row gap={10}>
-              <Chip size={18}>read</Chip>
-              <Chip size={18}>write</Chip>
-              <Chip size={18}>run</Chip>
-              <Chip size={18} muted>
-                no git
-              </Chip>
-            </Row>
-          </Col>
-        </Panel>
-      </Row>
-    </Layer>
-
-    <Layer opacity={group(stage, stageProgress, 3, 3)}>
-      <Panel accent={theme.green} width={900}>
-        <Col gap={18}>
-          <Label colour={theme.green}>the gateway runs it, after the worker</Label>
-          <Kv k="command" v="npm test -- router" colour={theme.cyan} />
-          <Kv k="output" v="14 passing, 0 failing" />
-          <Kv k="exit" v="0" colour={theme.green} />
-          <Stamp state="pass" detail="not a claim, a real exit code" />
-        </Col>
-      </Panel>
-    </Layer>
-
-    <Layer opacity={group(stage, stageProgress, 4, 4)}>
-      <Col gap={24} style={{ alignItems: "center" }}>
-        <Panel accent={theme.cyan} width={860}>
-          <Col gap={12}>
-            <Row gap={16} style={{ justifyContent: "space-between" }}>
-              <span style={{ fontFamily: mono, fontSize: 22, color: theme.text }}>src/router.test.ts</span>
-              <span style={{ fontFamily: mono, fontSize: 22, color: theme.green }}>+148  -0</span>
-            </Row>
-            <div style={{ height: 1, background: theme.line }} />
-            <Kv k="model" v="deepseek/deepseek-v4-flash" />
-            <Kv k="verified" v="npm test -- router, exit 0" colour={theme.green} />
-            <Kv k="your quota" v="unchanged" colour={theme.green} />
-          </Col>
-        </Panel>
-      </Col>
-    </Layer>
-  </>
+    </Enter>
+  </Stage>
 );
 
-const ParallelScene: React.FC<SceneProps> = ({ stage, stageProgress }) => {
-  const run = stage === 2 ? stageProgress : stage > 2 ? 1 : 0;
-  const state = (i: number): "idle" | "run" | "pass" | "fail" | "skip" => {
-    if (stage < 2) return "idle";
-    if (stage === 2) return run > 0.75 ? "pass" : "run";
-    return i === 2 ? "fail" : "pass";
-  };
-  return (
-    <>
-      <Layer opacity={group(stage, stageProgress, 0, 1)}>
-        <Col gap={0} style={{ alignItems: "center" }}>
-          <Node name="core" vendor="strong" state="idle" width={300} />
-          {stage >= 1 ? (
-            <Wires w={802} h={64} lines={fanout(802, 64, [125, 401, 677])} colour={theme.line} dashed />
-          ) : (
-            <div style={{ height: 64, display: "flex", alignItems: "center" }}>
-              <Label>one feature, four pieces of work</Label>
-            </div>
-          )}
-          <Row gap={26}>
-            <Node name="tests" vendor="fast" state="idle" />
-            <Node name="docs" vendor="local" state="idle" />
-            <Node name="wire" vendor="strong" state="idle" />
-          </Row>
-          {stage >= 1 ? (
-            <div style={{ height: 40, display: "flex", alignItems: "flex-end" }}>
-              <Label colour={theme.faint}>depends_on: core</Label>
-            </div>
-          ) : null}
-        </Col>
-      </Layer>
-
-      <Layer opacity={group(stage, stageProgress, 2, 3)}>
-        <Col gap={0} style={{ alignItems: "center" }}>
-          <Node name="core" vendor="verified: npm test" state="pass" width={300} />
-          <Wires w={802} h={52} lines={fanout(802, 52, [125, 401, 677])} colour={theme.green} />
-          <Row gap={26}>
-            <Node name="tests" vendor="deepseek" state={state(0)} progress={run} />
-            <Node name="docs" vendor="ollama, local" state={state(1)} progress={run * 0.8} />
-            <Node name="wire" vendor="kimi" state={state(2)} progress={run * 0.9} />
-          </Row>
-          {stage >= 3 ? (
-            <>
-              <Wires
-                w={802}
-                h={52}
-                lines={[[677, 0, 677, 26], [401, 26, 677, 26], [401, 26, 401, 52]]}
-                colour={theme.red}
-              />
-              <Node name="ship" vendor="depends_on: wire" state="skip" width={300} />
-            </>
-          ) : null}
-          <div style={{ height: 28 }} />
-          <Label colour={stage >= 3 ? theme.red : theme.cyan}>
-            {stage >= 3 ? "one check failed, everything downstream is skipped" : "three vendors, at the same time"}
-          </Label>
-        </Col>
-      </Layer>
-
-      <Layer opacity={group(stage, stageProgress, 4, 4)}>
-        <Panel accent={theme.green} width={1000}>
-          <Col gap={14}>
-            <Head colour={theme.green}>One consolidated report</Head>
-            <Kv k="core" v="pass - npm test -- ratelimit, exit 0" colour={theme.green} />
-            <Kv k="tests" v="pass - npm test, exit 0" colour={theme.green} />
-            <Kv k="docs" v="pass - no verification requested" colour={theme.green} />
-            <Kv k="wire" v="fail - npm test, exit 1" colour={theme.red} />
-            <Kv k="ship" v="skipped - depends_on: wire" colour={theme.faint} />
-            <Label>every outcome recorded in the ledger</Label>
-          </Col>
-        </Panel>
-      </Layer>
-    </>
-  );
-};
-
-const ReviewScene: React.FC<SceneProps> = ({ stage, stageProgress }) => (
-  <>
-    <Layer opacity={group(stage, stageProgress, 0, 1)}>
-      <Row gap={38}>
-        <Panel accent={theme.cyan} width={430}>
-          <Col gap={12}>
-            <Label colour={theme.cyan}>author</Label>
-            <Head>deepseek-v4-pro</Head>
-            <Kv k="diff" v="4 files, +212 -37" />
-          </Col>
-        </Panel>
-        <Wires w={120} h={40} lines={arrow(120, 20)} colour={stage >= 1 ? theme.violet : theme.line} />
-        <Panel accent={stage >= 1 ? theme.violet : theme.line} width={430}>
-          <Col gap={12}>
-            <Label colour={stage >= 1 ? theme.violet : theme.faint}>reviewer</Label>
-            <Head>kimi-k2.7-code</Head>
-            <Kv k="rule" v="never the same vendor" colour={theme.violet} />
-          </Col>
-        </Panel>
-      </Row>
-    </Layer>
-
-    <Layer opacity={group(stage, stageProgress, 2, 2)}>
-      <Panel accent={theme.violet} width={980}>
-        <Col gap={12}>
-          <Label colour={theme.violet}>verdict</Label>
-          {[
-            ['"verdict": "revise",', theme.amber],
-            ['"issues": [', theme.dim],
-            ['  { "file": "src/ratelimit.ts", "line": 84,', theme.text],
-            ['    "issue": "window resets on read, not on write" },', theme.text],
-            ['  { "file": "src/server.ts", "line": 31,', theme.text],
-            ['    "issue": "limiter bypassed for HEAD requests" }', theme.text],
-            ["]", theme.dim],
-          ].map(([t, c], i) => (
-            <div
-              key={i}
-              style={{
-                fontFamily: mono,
-                fontSize: 22,
-                color: c,
-                opacity: interpolate(stageProgress, [i * 0.07, i * 0.07 + 0.15], [0, 1], {
-                  extrapolateLeft: "clamp",
-                  extrapolateRight: "clamp",
-                }),
-              }}
-            >
-              {t}
-            </div>
-          ))}
-        </Col>
-      </Panel>
-    </Layer>
-
-    <Layer opacity={group(stage, stageProgress, 3, 4)}>
-      <Col gap={0} style={{ alignItems: "center" }}>
-        <Row gap={22}>
-          {[
-            ["deepseek", "keep JSON files", theme.cyan],
-            ["kimi", "move to SQLite", theme.violet],
-            ["glm", "SQLite, behind a flag", theme.green],
-          ].map(([name, take, colour]) => (
-            <Panel key={name} accent={colour} width={300}>
-              <Col gap={10}>
-                <span style={{ fontFamily: mono, fontSize: 20, color: colour }}>{name}</span>
-                <span style={{ fontFamily: sans, fontSize: 21, color: theme.text }}>{take}</span>
+const Route: React.FC<SceneProps> = ({ stageProgress: p, videoId, frame }) => {
+  if (videoId === "parallel") {
+    const run = at(p, 0.35, 0.5);
+    return (
+      <Stage gap={0}>
+        <Node name="core" sub="verified: npm test" state="pass" width={290} />
+        <Wires w={802} h={50} lines={fanout(802, 50, [125, 401, 677])} colour={theme.green} />
+        <Row gap={26}>
+          <Node name="tests" sub="deepseek" state={run > 0.85 ? "pass" : "run"} progress={run} />
+          <Node name="docs" sub="ollama, local" state={run > 0.85 ? "pass" : "run"} progress={run * 0.85} />
+          <Node name="wiring" sub="kimi" state={run > 0.85 ? "pass" : "run"} progress={run * 0.92} />
+        </Row>
+      </Stage>
+    );
+  }
+  if (videoId === "handoff") {
+    return (
+      <Stage gap={26}>
+        <Enter p={p}><Row gap={30}>
+          <Panel accent={theme.line} width={280} dimmed><Col gap={6}><span style={{ fontFamily: mono, fontSize: 18, color: theme.faint }}>a model?</span><span style={{ fontFamily: mono, fontSize: 20, color: theme.faint }}>no</span></Col></Panel>
+          <Panel accent={theme.violet} width={280}><Col gap={6}><span style={{ fontFamily: mono, fontSize: 18, color: theme.violet }}>a harness</span><span style={{ fontFamily: mono, fontSize: 20, color: theme.text }}>codex</span></Col></Panel>
+        </Row></Enter>
+        <Wires w={60} h={44} lines={[[30, 0, 30, 44]]} colour={theme.violet} />
+        <Enter p={p} start={0.45}>
+          <Terminal title="tmux: break-free-9f2a1c" width={900}>
+            <TypedLine text="codex" reveal={at(p, 0.6, 0.2)} colour={theme.green} size={21} caret />
+          </Terminal>
+        </Enter>
+      </Stage>
+    );
+  }
+  if (videoId === "guard") {
+    const fail = at(p, 0.45, 0.2);
+    return (
+      <Stage gap={24}>
+        <Enter p={p}>
+          <Panel accent={fail > 0.5 ? theme.red : theme.cyan} width={940}>
+            <Col gap={12}>
+              <Kv k="run" v="pages build and deployment" />
+              <Kv k="commit" v="abc1234" />
+              <Bar progress={at(p, 0.1, 0.35)} colour={fail > 0.5 ? theme.red : theme.cyan} width={880} />
+              {fail > 0.5 ? <Kv k="conclusion" v="failure" colour={theme.red} /> : null}
+            </Col>
+          </Panel>
+        </Enter>
+        {fail > 0.6 ? (
+          <Enter p={p} start={0.68}>
+            <Panel accent={theme.red} width={940}>
+              <Col gap={8}>
+                <span style={{ fontFamily: mono, fontSize: 16, letterSpacing: 3, color: theme.red }}>NOW OPEN WORK</span>
+                <span style={{ fontFamily: mono, fontSize: 19, color: theme.text }}>ci.failed  abc1234  (build)</span>
+                <span style={{ fontFamily: mono, fontSize: 17, color: theme.dim }}>github.com/…/actions/runs/35350299640</span>
               </Col>
             </Panel>
-          ))}
-        </Row>
-        <Wires w={944} h={56} lines={fanin(944, 56, [150, 472, 794])} colour={theme.faint} />
-        <Panel accent={theme.text} width={880}>
-          <Col gap={10}>
-            <Label>judge</Label>
-            <span style={{ fontFamily: sans, fontSize: 25, color: theme.text }}>
-              Two of three favour SQLite; the disagreement is about migration cost, not correctness.
-            </span>
-            {stage >= 4 ? (
-              <span style={{ fontFamily: mono, fontSize: 21, color: theme.green }}>
-                you decide, with the disagreement in front of you
-              </span>
-            ) : null}
-          </Col>
-        </Panel>
-      </Col>
-    </Layer>
-  </>
-);
-
-const LedgerScene: React.FC<SceneProps> = ({ stage, stageProgress }) => {
-  const tree: [string, string, string][] = [
-    [".break-free/", "", theme.green],
-    ["  HANDOFF.md", "resume brief", theme.cyan],
-    ["  PLAN.md", "board and dependency graph", theme.cyan],
-    ["  tasks/T-014.md", "acceptance - verify - outcome", theme.cyan],
-    ["  notes/routing.md", "decision: alias chains over per-call models", theme.cyan],
-    ["  journal/2026-09.md", "what happened, in order", theme.cyan],
-  ];
+          </Enter>
+        ) : null}
+      </Stage>
+    );
+  }
+  // delegate + verdict: a hand-off between two parties
+  const right = videoId === "verdict" ? { label: "reviewer", name: "kimi-k2.7-code", colour: theme.violet, note: "never the same vendor" }
+                                      : { label: "worker", name: "deepseek-v4-flash", colour: theme.cyan, note: "read - write - run" };
   return (
-    <>
-      <Layer opacity={group(stage, stageProgress, 0, 0)}>
-        <Col gap={26} style={{ alignItems: "center" }}>
-          <Panel accent={theme.line} width={900}>
-            <Col gap={16}>
-              <Row gap={16} style={{ justifyContent: "space-between" }}>
-                <Label>session context</Label>
-                <span style={{ fontFamily: mono, fontSize: 19, color: theme.red }}>full</span>
-              </Row>
-              <Bar progress={0.97} colour={theme.red} width={840} />
-              <span style={{ fontFamily: sans, fontSize: 24, color: theme.dim }}>
-                Everything the model learned today is about to be gone.
-              </span>
-            </Col>
-          </Panel>
-        </Col>
-      </Layer>
-
-      <Layer opacity={group(stage, stageProgress, 1, 2)}>
-        <Col gap={22} style={{ alignItems: "center" }}>
-          <Panel accent={theme.green} width={1040}>
-            <Col gap={12}>
-              {tree.map(([k, v, c], i) => (
-                <Row
-                  key={k}
-                  gap={22}
-                  style={{
-                    alignItems: "baseline",
-                    opacity: interpolate(stageProgress, [i * 0.08, i * 0.08 + 0.18], [0, 1], {
-                      extrapolateLeft: "clamp",
-                      extrapolateRight: "clamp",
-                    }),
-                  }}
-                >
-                  <span style={{ fontFamily: mono, fontSize: 22, color: c, width: 300 }}>{k}</span>
-                  <span style={{ fontFamily: mono, fontSize: 19, color: theme.dim }}>{v}</span>
-                </Row>
-              ))}
-            </Col>
-          </Panel>
-          {stage >= 2 ? (
-            <Row gap={14}>
-              <Chip colour={theme.green}>git commit</Chip>
-              <Chip>reviewed in a pull request</Chip>
-              <Chip colour={theme.violet}>opens as an Obsidian vault</Chip>
-            </Row>
-          ) : null}
-        </Col>
-      </Layer>
-
-      <Layer opacity={group(stage, stageProgress, 3, 3)}>
-        <Row gap={36}>
-          <Panel accent={theme.cyan} width={460}>
-            <Col gap={12}>
-              <Label colour={theme.cyan}>worker, next task</Label>
-              <span style={{ fontFamily: sans, fontSize: 23, color: theme.text }}>
-                receives the decisions and gotchas with its instructions
-              </span>
-            </Col>
-          </Panel>
-          <Panel accent={theme.amber} width={520}>
-            <Col gap={10}>
-              <Label colour={theme.amber}>gotcha</Label>
-              <span style={{ fontFamily: mono, fontSize: 20, color: theme.text }}>
-                Kimi rejects temperature above 1. Clamp before sending.
-              </span>
-              <span style={{ fontFamily: mono, fontSize: 18, color: theme.faint }}>
-                found once, never rediscovered
-              </span>
-            </Col>
-          </Panel>
-        </Row>
-      </Layer>
-
-      <Layer opacity={group(stage, stageProgress, 4, 4)}>
-        <Terminal title="claude code" width={1100}>
-          <Row gap={12} style={{ alignItems: "baseline" }}>
-            <span style={{ fontFamily: mono, fontSize: 23, color: theme.green }}>&gt;</span>
-            <TypedLine text="/break-free-resume" reveal={Math.min(1, stageProgress * 3)} size={23} />
-          </Row>
-          <div style={{ height: 1, background: theme.line, margin: "10px 0" }} />
-          {[
-            ["in progress", "T-014 rate limiting - wire into src/server.ts", theme.cyan],
-            ["blocked", "T-016 release - waiting on T-014", theme.amber],
-            ["ready", "T-017 document the limiter", theme.green],
-            ["last decision", "alias chains over per-call model pinning", theme.dim],
-          ].map(([k, v, c], i) => (
-            <Row
-              key={k}
-              gap={20}
-              style={{
-                alignItems: "baseline",
-                opacity: interpolate(stageProgress, [0.25 + i * 0.1, 0.4 + i * 0.1], [0, 1], {
-                  extrapolateLeft: "clamp",
-                  extrapolateRight: "clamp",
-                }),
-              }}
-            >
-              <span style={{ fontFamily: mono, fontSize: 19, color: c, width: 180 }}>{k}</span>
-              <span style={{ fontFamily: mono, fontSize: 20, color: theme.text }}>{v}</span>
-            </Row>
-          ))}
-        </Terminal>
-      </Layer>
-    </>
+    <Stage gap={0}>
+      <Row gap={34}>
+        <Enter p={p}>
+          <Panel accent={theme.green} width={360}><Col gap={10}>
+            <span style={{ fontFamily: mono, fontSize: 16, letterSpacing: 3, color: theme.green }}>{videoId === "verdict" ? "AUTHOR" : "LEAD"}</span>
+            <Head size={24}>{videoId === "verdict" ? "deepseek-v4-pro" : "Claude Code"}</Head>
+          </Col></Panel>
+        </Enter>
+        <div style={{ opacity: at(p, 0.3), alignSelf: "center" }}>
+          <Wires w={120} h={40} lines={arrow(120, 20)} colour={right.colour} />
+        </div>
+        <Enter p={p} start={0.42}>
+          <Panel accent={right.colour} width={420}><Col gap={10}>
+            <span style={{ fontFamily: mono, fontSize: 16, letterSpacing: 3, color: right.colour }}>{right.label.toUpperCase()}</span>
+            <Head size={24}>{right.name}</Head>
+            <span style={{ fontFamily: mono, fontSize: 18, color: theme.dim }}>{right.note}</span>
+          </Col></Panel>
+        </Enter>
+      </Row>
+      <div style={{ height: 18 }} />
+      <div style={{ opacity: 0.45 + 0.25 * Math.sin(frame / 9), fontFamily: mono, fontSize: 17, color: theme.faint }}>
+        {videoId === "verdict" ? "the real diff travels, not a summary" : "nothing else is granted"}
+      </div>
+    </Stage>
   );
+};
+
+const Result: React.FC<SceneProps> = ({ stageProgress: p, videoId }) => {
+  const blocks: Record<string, React.ReactNode> = {
+    delegate: (
+      <Panel accent={theme.green} width={900}><Col gap={12}>
+        <Row gap={16} style={{ justifyContent: "space-between" }}>
+          <span style={{ fontFamily: mono, fontSize: 21 }}>src/router.test.ts</span>
+          <span style={{ fontFamily: mono, fontSize: 21, color: theme.green }}>+148  -0</span>
+        </Row>
+        <div style={{ height: 1, background: theme.line }} />
+        <Kv k="verified" v="npm test -- router, exit 0" colour={theme.green} w={120} />
+        <Kv k="model" v="deepseek/deepseek-v4-flash" w={120} />
+      </Col></Panel>
+    ),
+    handoff: (
+      <Panel accent={theme.violet} width={900}><Col gap={12}>
+        <Kv k="session" v="break-free-9f2a1c   running" colour={theme.violet} w={120} />
+        <Kv k="attach" v="tmux attach -t break-free-9f2a1c" w={120} />
+        <Kv k="billed to" v="your Codex subscription" colour={theme.green} w={120} />
+      </Col></Panel>
+    ),
+    parallel: (
+      <Panel accent={theme.green} width={980}><Col gap={11}>
+        <Head colour={theme.green} size={22}>one report</Head>
+        <Kv k="core" v="pass - npm test, exit 0" colour={theme.green} w={110} />
+        <Kv k="tests" v="pass - npm test, exit 0" colour={theme.green} w={110} />
+        <Kv k="docs" v="pass - no check requested" colour={theme.green} w={110} />
+        <Kv k="wiring" v="fail - npm test, exit 1" colour={theme.red} w={110} />
+      </Col></Panel>
+    ),
+    verdict: (
+      <Panel accent={theme.violet} width={960}><Col gap={9}>
+        {['"verdict": "revise",', '"issues": [', '  { "file": "src/ratelimit.ts", "line": 84,', '    "issue": "window resets on read, not write" }', "]"].map((t, i) => (
+          <div key={i} style={{ fontFamily: mono, fontSize: 20, color: i === 0 ? theme.amber : theme.text, opacity: at(p, i * 0.1, 0.18) }}>{t}</div>
+        ))}
+      </Col></Panel>
+    ),
+    guard: (
+      <Panel accent={theme.red} width={1020}><Col gap={12}>
+        <span style={{ fontFamily: mono, fontSize: 16, letterSpacing: 3, color: theme.red }}>STOP HOOK</span>
+        <div style={{ fontFamily: mono, fontSize: 19, color: theme.text, lineHeight: 1.5 }}>
+          {'{"decision":"block","reason":"CI FAILED on abc1234 (build)'}
+        </div>
+        <div style={{ fontFamily: mono, fontSize: 19, color: theme.text, lineHeight: 1.5 }}>
+          {'  - fix it before ending the turn"}'}
+        </div>
+      </Col></Panel>
+    ),
+    resume: (
+      <Terminal title="claude code" width={1060}>
+        {[["in progress", "T-014 rate limiting - wiring", theme.cyan], ["blocked", "T-016 release - waits on T-014", theme.amber], ["ready", "T-017 document the limiter", theme.green]].map(([k, v, c], i) => (
+          <Row key={k as string} gap={20} style={{ alignItems: "baseline", opacity: at(p, 0.15 + i * 0.14, 0.2) }}>
+            <span style={{ fontFamily: mono, fontSize: 18, color: c as string, width: 150 }}>{k as string}</span>
+            <span style={{ fontFamily: mono, fontSize: 19, color: theme.text }}>{v as string}</span>
+          </Row>
+        ))}
+      </Terminal>
+    ),
+  };
+  return <Stage><Enter p={p} dy={22}>{blocks[videoId] ?? null}</Enter></Stage>;
 };
 
 export const scenes: Record<string, React.FC<SceneProps>> = {
-  title: TitleScene,
-  bottleneck: BottleneckScene,
-  leadcrew: LeadCrewScene,
-  verify: VerifyScene,
-  install: InstallScene,
-  delegate: DelegateScene,
-  parallel: ParallelScene,
-  review: ReviewScene,
-  ledger: LedgerScene,
+  title: Title,
+  ask: Ask,
+  "routing-say": RoutingSay,
+  "routing-model": RoutingModel,
+  "routing-harness": RoutingHarness,
+  verify: Verify,
+  followthrough: FollowThrough,
+  install: Install,
+  task: Task,
+  say: Say,
+  route: Route,
+  result: Result,
 };
 
-export const UnknownScene: React.FC<SceneProps> = () => (
-  <Svg>
-    <Flow d="M 300 540 L 1620 540" progress={1} dashed />
-  </Svg>
-);
+export const UnknownScene: React.FC<SceneProps> = () => <Stage><span style={{ fontFamily: mono, color: theme.faint }}>—</span></Stage>;

@@ -1,21 +1,17 @@
 WEBVTT
 
 1
-00:00:00.800 --> 00:00:07.133
-You have a task that needs care, not genius. Unit tests for the router.
+00:00:00.800 --> 00:00:07.867
+The task: unit tests for the router. Worth doing well, not worth your most expensive model.
 
 2
-00:00:07.600 --> 00:00:11.900
-You tell the lead to delegate it, and you say how it will be proven.
+00:00:08.333 --> 00:00:15.033
+So you say it plainly. Use DeepSeek to write them, and check them with npm test.
 
 3
-00:00:12.367 --> 00:00:19.067
-The gateway sends it to a cheaper model with read, write and run, plus the test command.
+00:00:15.500 --> 00:00:23.300
+DeepSeek is a model, so it is delegated, with permission to read, write and run, and nothing else.
 
 4
-00:00:19.533 --> 00:00:27.800
-The worker reports back, and the gateway runs the tests itself. Exit code zero, or the task failed.
-
-5
-00:00:28.267 --> 00:00:34.367
-You review a diff that has already been tested, and your frontier quota barely moved.
+00:00:23.767 --> 00:00:30.533
+The gateway runs the tests itself, and you get a diff that already passed, naming the model that wrote it.

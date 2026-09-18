@@ -2,81 +2,63 @@
   "fps": 30,
   "videos": {
     "intro": {
-      "durationInFrames": 3502,
+      "durationInFrames": 1884,
       "chapters": [
         {
           "id": "open",
           "startFrame": 36,
-          "durationInFrames": 250,
+          "durationInFrames": 207,
           "lines": [
             {
               "id": "open-1",
               "startFrame": 0,
-              "durationInFrames": 220,
-              "audioFrames": 205
+              "durationInFrames": 177,
+              "audioFrames": 162
             }
           ]
         },
         {
           "id": "why",
-          "startFrame": 286,
-          "durationInFrames": 581,
+          "startFrame": 243,
+          "durationInFrames": 248,
           "lines": [
             {
               "id": "why-1",
               "startFrame": 0,
-              "durationInFrames": 220,
-              "audioFrames": 205
-            },
-            {
-              "id": "why-2",
-              "startFrame": 220,
-              "durationInFrames": 158,
-              "audioFrames": 143
-            },
-            {
-              "id": "why-3",
-              "startFrame": 378,
-              "durationInFrames": 173,
-              "audioFrames": 158
+              "durationInFrames": 218,
+              "audioFrames": 203
             }
           ]
         },
         {
           "id": "what",
-          "startFrame": 867,
-          "durationInFrames": 975,
+          "startFrame": 491,
+          "durationInFrames": 629,
           "lines": [
             {
               "id": "what-1",
               "startFrame": 0,
-              "durationInFrames": 211,
-              "audioFrames": 196
+              "durationInFrames": 173,
+              "audioFrames": 158
             },
             {
               "id": "what-2",
-              "startFrame": 211,
-              "durationInFrames": 328,
-              "audioFrames": 313
+              "startFrame": 173,
+              "durationInFrames": 203,
+              "audioFrames": 188
             },
             {
               "id": "what-3",
-              "startFrame": 539,
-              "durationInFrames": 282,
-              "audioFrames": 267
-            },
-            {
-              "id": "what-4",
-              "startFrame": 821,
-              "durationInFrames": 124,
-              "audioFrames": 109
+              "startFrame": 376,
+              "durationInFrames": 223,
+              "audioFrames": 208
             }
           ]
         },
         {
           "id": "how",
-          "startFrame": 1842,
-          "durationInFrames": 1306,
+          "startFrame": 1120,
+          "durationInFrames": 496,
           "lines": [
             {
               "id": "how-1",
@@ -87,121 +69,127 @@
             {
               "id": "how-2",
               "startFrame": 227,
-              "durationInFrames": 263,
-              "audioFrames": 248
-            },
-            {
-              "id": "how-3",
-              "startFrame": 490,
-              "durationInFrames": 259,
-              "audioFrames": 244
-            },
-            {
-              "id": "how-4",
-              "startFrame": 749,
-              "durationInFrames": 230,
-              "audioFrames": 215
-            },
-            {
-              "id": "how-5",
-              "startFrame": 979,
-              "durationInFrames": 297,
-              "audioFrames": 282
+              "durationInFrames": 239,
+              "audioFrames": 224
             }
           ]
         },
         {
           "id": "close",
-          "startFrame": 3148,
-          "durationInFrames": 354,
+          "startFrame": 1616,
+          "durationInFrames": 268,
           "lines": [
             {
               "id": "close-1",
               "startFrame": 0,
-              "durationInFrames": 234,
-              "audioFrames": 219
+              "durationInFrames": 148,
+              "audioFrames": 133
             }
           ]
         }
       ]
     },
     "delegate": {
-      "durationInFrames": 1123,
+      "durationInFrames": 1008,
       "chapters": [
         {
           "id": "delegate",
           "startFrame": 24,
-          "durationInFrames": 1099,
+          "durationInFrames": 984,
           "lines": [
             {
               "id": "delegate-1",
               "startFrame": 0,
-              "durationInFrames": 204,
-              "audioFrames": 190
+              "durationInFrames": 226,
+              "audioFrames": 212
             },
             {
               "id": "delegate-2",
-              "startFrame": 204,
-              "durationInFrames": 143,
-              "audioFrames": 129
-            },
-            {
-              "id": "delegate-3",
-              "startFrame": 347,
+              "startFrame": 226,
               "durationInFrames": 215,
               "audioFrames": 201
             },
             {
-              "id": "delegate-4",
-              "startFrame": 562,
-              "durationInFrames": 262,
-              "audioFrames": 248
+              "id": "delegate-3",
+              "startFrame": 441,
+              "durationInFrames": 248,
+              "audioFrames": 234
             },
             {
-              "id": "delegate-5",
-              "startFrame": 824,
-              "durationInFrames": 197,
-              "audioFrames": 183
+              "id": "delegate-4",
+              "startFrame": 689,
+              "durationInFrames": 217,
+              "audioFrames": 203
+            }
+          ]
+        }
+      ]
+    },
+    "handoff": {
+      "durationInFrames": 877,
+      "chapters": [
+        {
+          "id": "handoff",
+          "startFrame": 24,
+          "durationInFrames": 853,
+          "lines": [
+            {
+              "id": "handoff-1",
+              "startFrame": 0,
+              "durationInFrames": 226,
+              "audioFrames": 212
+            },
+            {
+              "id": "handoff-2",
+              "startFrame": 226,
+              "durationInFrames": 89,
+              "audioFrames": 75
+            },
+            {
+              "id": "handoff-3",
+              "startFrame": 315,
+              "durationInFrames": 248,
+              "audioFrames": 234
+            },
+            {
+              "id": "handoff-4",
+              "startFrame": 563,
+              "durationInFrames": 212,
+              "audioFrames": 198
             }
           ]
         }
       ]
     },
     "parallel": {
-      "durationInFrames": 1157,
+      "durationInFrames": 918,
       "chapters": [
         {
           "id": "parallel",
           "startFrame": 24,
-          "durationInFrames": 1133,
+          "durationInFrames": 894,
           "lines": [
             {
               "id": "parallel-1",
               "startFrame": 0,
-              "durationInFrames": 226,
-              "audioFrames": 212
+              "durationInFrames": 238,
+              "audioFrames": 224
             },
             {
               "id": "parallel-2",
-              "startFrame": 226,
-              "durationInFrames": 116,
-              "audioFrames": 102
+              "startFrame": 238,
+              "durationInFrames": 154,
+              "audioFrames": 140
             },
             {
               "id": "parallel-3",
-              "startFrame": 342,
-              "durationInFrames": 262,
-              "audioFrames": 248
+              "startFrame": 392,
+              "durationInFrames": 238,
+              "audioFrames": 224
             },
             {
               "id": "parallel-4",
-              "startFrame": 604,
-              "durationInFrames": 265,
-              "audioFrames": 251
-            },
-            {
-              "id": "parallel-5",
-              "startFrame": 869,
+              "startFrame": 630,
               "durationInFrames": 186,
               "audioFrames": 172
             }
@@ -209,85 +197,97 @@
         }
       ]
     },
-    "review": {
-      "durationInFrames": 1136,
+    "verdict": {
+      "durationInFrames": 760,
       "chapters": [
         {
-          "id": "review",
+          "id": "verdict",
           "startFrame": 24,
-          "durationInFrames": 1112,
+          "durationInFrames": 736,
           "lines": [
             {
-              "id": "review-1",
+              "id": "verdict-1",
               "startFrame": 0,
-              "durationInFrames": 172,
-              "audioFrames": 158
+              "durationInFrames": 217,
+              "audioFrames": 203
             },
             {
-              "id": "review-2",
-              "startFrame": 172,
-              "durationInFrames": 181,
-              "audioFrames": 167
+              "id": "verdict-2",
+              "startFrame": 217,
+              "durationInFrames": 176,
+              "audioFrames": 162
             },
             {
-              "id": "review-3",
-              "startFrame": 353,
-              "durationInFrames": 274,
-              "audioFrames": 260
-            },
-            {
-              "id": "review-4",
-              "startFrame": 627,
-              "durationInFrames": 243,
-              "audioFrames": 229
-            },
-            {
-              "id": "review-5",
-              "startFrame": 870,
-              "durationInFrames": 164,
-              "audioFrames": 150
+              "id": "verdict-3",
+              "startFrame": 393,
+              "durationInFrames": 265,
+              "audioFrames": 251
             }
           ]
         }
       ]
     },
-    "ledger": {
-      "durationInFrames": 1021,
+    "guard": {
+      "durationInFrames": 966,
       "chapters": [
         {
-          "id": "ledger",
+          "id": "guard",
           "startFrame": 24,
-          "durationInFrames": 997,
+          "durationInFrames": 942,
           "lines": [
             {
-              "id": "ledger-1",
+              "id": "guard-1",
               "startFrame": 0,
-              "durationInFrames": 114,
-              "audioFrames": 100
+              "durationInFrames": 168,
+              "audioFrames": 154
             },
             {
-              "id": "ledger-2",
-              "startFrame": 114,
-              "durationInFrames": 226,
-              "audioFrames": 212
+              "id": "guard-2",
+              "startFrame": 168,
+              "durationInFrames": 269,
+              "audioFrames": 255
             },
             {
-              "id": "ledger-3",
-              "startFrame": 340,
-              "durationInFrames": 193,
-              "audioFrames": 179
+              "id": "guard-3",
+              "startFrame": 437,
+              "durationInFrames": 253,
+              "audioFrames": 239
             },
             {
-              "id": "ledger-4",
-              "startFrame": 533,
-              "durationInFrames": 207,
-              "audioFrames": 193
+              "id": "guard-4",
+              "startFrame": 690,
+              "durationInFrames": 174,
+              "audioFrames": 160
+            }
+          ]
+        }
+      ]
+    },
+    "resume": {
+      "durationInFrames": 665,
+      "chapters": [
+        {
+          "id": "resume",
+          "startFrame": 24,
+          "durationInFrames": 641,
+          "lines": [
+            {
+              "id": "resume-1",
+              "startFrame": 0,
+              "durationInFrames": 130,
+              "audioFrames": 116
             },
             {
-              "id": "ledger-5",
-              "startFrame": 740,
-              "durationInFrames": 179,
-              "audioFrames": 165
+              "id": "resume-2",
+              "startFrame": 130,
+              "durationInFrames": 236,
+              "audioFrames": 222
+            },
+            {
+              "id": "resume-3",
+              "startFrame": 366,
+              "durationInFrames": 197,
+              "audioFrames": 183
             }
           ]
         }

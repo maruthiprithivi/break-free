@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Videos rebuilt: an intro plus six walkthroughs (delegate a model, hand off to another harness, split a job in parallel, get an independent verdict, nothing gets left behind, resume across sessions). The scripts are claim-sourced against the code in `videos/CLAIMS.md`; the earlier set described a product that did not exist. The scene changes on every narration beat rather than a still drifting behind static panels, captions occupy a reserved band no stage content can enter, and every video opens and closes on a card.
 
 ## 3.4.0 — 2026-09-18
 - **CI and deployments are blocking work.** A successful `git_push` or `gh_merge_pr` enqueues a `ci.pending` event for that commit, and the watcher resolves it by asking `gh` for the run's conclusion, in shell rather than through a model. Success drains silently; failure becomes a blocking `ci.failed` carrying the run URL and failing job, so the turn-end guard will not let the turn end on top of it. A green workflow is not treated as a healthy deploy: where the commit has deployments, their own status must succeed too. Bounded by `fleet.ciTimeoutMs` (20 minutes) and fully inert when `gh` is missing or unauthenticated, so an unverifiable run can never wedge a session.
