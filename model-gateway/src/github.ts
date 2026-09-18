@@ -15,6 +15,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { GatewayConfig } from "./config.js";
+import { enqueueCi } from "./fleet.js";
 import { enumArg, noFlag, strArray, type Workspace, type WorkerTool } from "./workspace.js";
 
 const execFileP = promisify(execFile);
@@ -116,7 +117,17 @@ export function githubTools(config: GatewayConfig, ws: Workspace): WorkerTool[] 
     const method = enumArg(a.method, ["squash", "merge", "rebase"] as const, "method", "squash");
     const args = ["pr", "merge", asInt(a.number, "number"), "__REPO__", `--${method}`]; // no --admin, no --delete-branch
     if (a.auto) args.push("--auto");
-    return gh(args, 120_000);
+    return gh(args, 120_000).then(async (out) => {
+      // Same reasoning as git_push: a merge starts a run on the base branch.
+      // --auto merges later, so there is nothing to watch yet.
+      if (!a.auto) {
+        try {
+          const sha = (await gh(["pr", "view", asInt(a.number, "number"), "__REPO__", "--json", "mergeCommit", "-q", ".mergeCommit.oid"], 30_000)).trim();
+          if (sha && config.sessionDir) enqueueCi(config.sessionDir, { sha });
+        } catch { /* the merge succeeded; bookkeeping must not undo that */ }
+      }
+      return out;
+    });
   });
 
   // ---- actions

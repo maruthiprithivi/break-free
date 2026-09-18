@@ -19,6 +19,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import path from "node:path";
 import { loadConfig, listProviderNames, redactKey, resolveProvider, saveConfigPatch, FALLBACK_REASONS, type LoadedConfig } from "./config.js";
 import { chatCompletion, listRemoteModels } from "./client.js";
@@ -36,10 +38,12 @@ import { DEFAULT_PRICING } from "./config.js";
 import { ghAvailable } from "./github.js";
 import { SessionStore } from "./sessions.js";
 import { HarnessController } from "./harnessctl.js";
-import { appendEvents, classify, drainTo, pendingEvents, readSnapshot, writeSnapshot, type FleetEvent, type FleetSnapshot } from "./fleet.js";
+import { appendEvents, classify, drainTo, expireCi, pendingEvents, readSnapshot, resolveCi, writeSnapshot, type FleetEvent, type FleetSnapshot } from "./fleet.js";
 import { delegate, panel, review, supervise, runPlan, type Ctx } from "./orchestrate.js";
 import { PROVIDER_CATALOG } from "./providers.js";
 import { Logger, analyze, callContext, setLogger, summarizeArgs, log as rlog } from "./logger.js";
+
+const execFileAsync = promisify(execFile);
 
 // ------------------------------------------------------------ CLI
 const argv = process.argv.slice(2);
@@ -86,7 +90,6 @@ function reload(): Ctx {
 let ctx = reload();
 
 // ------------------------------------------------------------ fleet
-const FLEET_IDLE_MS = 5 * 60_000;
 
 async function buildFleetSnapshot(prev: FleetSnapshot | undefined): Promise<FleetSnapshot> {
   const ts = new Date().toISOString();
@@ -118,12 +121,67 @@ async function buildFleetSnapshot(prev: FleetSnapshot | undefined): Promise<Flee
   return { ts, jobs: jobsMap, harness };
 }
 
+/** `gh` with JSON out; undefined on any failure, because CI reconciliation must never throw. */
+async function ghJson(args: string[]): Promise<unknown | undefined> {
+  try {
+    const { stdout } = await execFileAsync("gh", args, { timeout: 25_000, maxBuffer: 4 * 1024 * 1024 });
+    return JSON.parse(stdout) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Turn every ci.pending event into an answer, in shell rather than in a model.
+ *
+ * A green workflow is not a healthy deploy, so where the commit has deployments
+ * their own status has to succeed too before the event is allowed to drain.
+ * If `gh` cannot answer at all we expire the events rather than block forever:
+ * an unverifiable run must not be able to wedge a session.
+ */
+async function reconcileCi(sessionDir: string): Promise<void> {
+  const shas = [...new Set(pendingEvents(sessionDir).filter((e) => e.kind === "ci.pending").map((e) => e.ci?.sha).filter((x): x is string => !!x))];
+  if (!shas.length) return;
+
+  expireCi(sessionDir, Date.now(), ctx.config.fleet.ciTimeoutMs);
+
+  const runs = (await ghJson(["run", "list", "--json", "databaseId,status,conclusion,url,headSha,name", "--limit", "30"])) as
+    | { databaseId: number; status: string; conclusion: string | null; url: string; headSha: string; name: string }[]
+    | undefined;
+  if (!runs) {
+    // No gh, no auth, or no repo: we cannot verify, so stop blocking on it.
+    expireCi(sessionDir, Date.now(), 0);
+    return;
+  }
+
+  for (const sha of shas) {
+    const run = runs.find((r) => r.headSha === sha);
+    if (!run || run.status !== "completed") continue; // still pending: keep blocking
+    if (run.conclusion !== "success") {
+      resolveCi(sessionDir, sha, { state: "failed", runId: run.databaseId, url: run.url, job: run.name });
+      continue;
+    }
+    const deps = (await ghJson(["api", `repos/{owner}/{repo}/deployments?sha=${sha}`])) as { id: number }[] | undefined;
+    if (Array.isArray(deps) && deps.length) {
+      const states = await Promise.all(deps.map((d) => ghJson(["api", `repos/{owner}/{repo}/deployments/${d.id}/statuses?per_page=1`]) as Promise<{ state: string }[] | undefined>));
+      const latest = states.map((x) => Array.isArray(x) && x[0] ? x[0].state : undefined);
+      if (latest.some((st) => st === "failure" || st === "error")) {
+        resolveCi(sessionDir, sha, { state: "failed", runId: run.databaseId, url: run.url, job: "deployment" });
+        continue;
+      }
+      if (!latest.every((st) => st === "success")) continue; // deployment still in flight: keep blocking
+    }
+    resolveCi(sessionDir, sha, { state: "success", runId: run.databaseId, url: run.url });
+  }
+}
+
 async function fleetCheck(): Promise<{ running: { jobs: number; harness: number }; pending: FleetEvent[]; blocking: boolean }> {
   const sessionDir = ctx.config.sessionDir!;
   const prev = readSnapshot(sessionDir);
   const next = await buildFleetSnapshot(prev);
-  appendEvents(sessionDir, classify(prev, next, FLEET_IDLE_MS));
+  appendEvents(sessionDir, classify(prev, next, ctx.config.fleet.idleMs));
   writeSnapshot(sessionDir, next);
+  await reconcileCi(sessionDir);
   const pending = pendingEvents(sessionDir);
   const running = {
     jobs: Object.values(next.jobs).filter((s) => s === "running").length,
@@ -1086,9 +1144,14 @@ async function main() {
         const res = await fleetCheck();
         if (res.blocking) {
           const parts: string[] = [];
+          const ciFailed = res.pending.filter((e) => e.kind === "ci.failed");
+          const ciPending = res.pending.filter((e) => e.kind === "ci.pending");
+          for (const f of ciFailed) parts.push(`CI FAILED on ${(f.ci?.sha ?? f.id).slice(0, 7)}${f.ci?.job ? ` (${f.ci.job})` : ""}${f.ci?.url ? ` - ${f.ci.url}` : ""}`);
+          for (const p of ciPending) parts.push(`CI pending on ${(p.ci?.sha ?? p.id).slice(0, 7)}`);
           if (res.running.jobs > 0) parts.push(`${res.running.jobs} job(s) running`);
-          if (res.pending.length > 0) parts.push(`${res.pending.length} event(s) pending`);
-          const reason = `${parts.join(", ")} - call fleet_status to collect them`;
+          const other = res.pending.length - ciFailed.length - ciPending.length;
+          if (other > 0) parts.push(`${other} event(s) pending`);
+          const reason = `${parts.join(", ")} - ${ciFailed.length ? "fix it before ending the turn" : "call fleet_status to collect them"}`;
           console.log(JSON.stringify({ decision: "block", reason }));
         }
       } catch {

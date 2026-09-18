@@ -140,6 +140,14 @@ const ConfigSchema = z.object({
       sessionPrefix: z.string().default("bf-"),
     })
     .default({}),
+  fleet: z
+    .object({
+      /** A ci.pending event older than this stops blocking, so a run that never reports cannot wedge a session. */
+      ciTimeoutMs: z.number().int().positive().default(20 * 60_000),
+      /** A running harness whose pane has not changed for this long is reported as idle. */
+      idleMs: z.number().int().positive().default(5 * 60_000),
+    })
+    .default({}),
   /** USD per 1M tokens, keyed by "provider/model" or "provider" (fallback). Unknown models cost 0 and are reported as unpriced. */
   pricing: z.record(z.object({ input: z.number().min(0), output: z.number().min(0) })).default({}),
   budget: z
