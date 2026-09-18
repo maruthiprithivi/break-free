@@ -132,9 +132,30 @@ test("crew aliases resolve to exactly the chain they mirror", async () => {
   assert.deepEqual(Object.keys(CREW_ALIAS_MIRRORS).sort(), ["commander", "counselor", "ensign", "holodeck", "subspace"]);
   for (const [crew, core] of Object.entries(CREW_ALIAS_MIRRORS)) {
     assert.ok(DEFAULT_ALIASES[core], `core alias ${core} must still exist`);
-    assert.deepEqual(DEFAULT_ALIASES[crew].candidates, DEFAULT_ALIASES[core].candidates, `${crew} must mirror ${core}`);
+    // By name, never a copy: a copy freezes the shipped defaults, so a user who
+    // re-points `local` finds `holodeck` still routing to the old chain.
+    assert.deepEqual(DEFAULT_ALIASES[crew].candidates, [core], `${crew} must resolve through ${core}, not copy it`);
   }
   for (const core of ["fast", "strong", "reviewer", "local", "cloud"]) {
     assert.ok(DEFAULT_ALIASES[core], `${core} must not be renamed or removed`);
   }
+});
+
+// The regression that mattered, found by using it: a crew alias must follow a user's
+// override of the core alias. The shape test above passed throughout while `holodeck`
+// still routed to the shipped default and hung on an unreachable host.
+test("a crew alias follows a user override of the core alias", async () => {
+  const { resolveCandidates } = await import("../dist/router.js");
+  const { DEFAULT_ALIASES } = await import("../dist/config.js");
+
+  const cfg = {
+    aliases: { ...DEFAULT_ALIASES, local: { description: "overridden", candidates: ["mock/good"] } },
+    providers: { mock: { baseUrl: `http://127.0.0.1:${mock.port}/v1`, apiKey: "test-key", enabled: true } },
+    fallback: { enabled: false, chain: [], retryOn: [], retriesPerCandidate: 0, retryDelayMs: 0 },
+  };
+
+  const viaCore = resolveCandidates(cfg, "local").map((c) => c.spec);
+  const viaCrew = resolveCandidates(cfg, "holodeck").map((c) => c.spec);
+  assert.deepEqual(viaCore, ["mock/good"], "the override itself must resolve");
+  assert.deepEqual(viaCrew, viaCore, "holodeck must follow the overridden local, not the shipped default");
 });

@@ -234,7 +234,7 @@ function providerReport(name: string) {
 }
 
 // ------------------------------------------------------------ server
-const VERSION = "3.3.0";
+const VERSION = "3.4.0";
 const server = new McpServer({ name: "break-free-gateway", version: VERSION }, {
   instructions: [
     "break-free-gateway lets you (the orchestrating frontier agent) keep the high-order work — deciding, designing, reviewing, owning outcomes — and hand execution to other LLMs: DeepSeek, Ollama (local/cloud), Kimi, MiniMax, Z.AI/GLM, OpenRouter, OpenCode Zen, vLLM.",

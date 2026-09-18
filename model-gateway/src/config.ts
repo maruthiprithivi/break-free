@@ -245,9 +245,11 @@ const CORE_ALIASES = {
 } satisfies Record<string, AliasDef>;
 
 /**
- * Crew names for the same chains. `ensign` and `fast` are the same alias wearing
- * two badges: the candidate list is taken from the core entry rather than copied,
- * so editing `fast` cannot leave `ensign` pointing at a retired model.
+ * Crew names for the same chains. A crew alias points at the core alias BY NAME,
+ * so it follows whatever that alias means at resolution time. Copying the candidate
+ * list looked equivalent and was not: the copy froze the shipped defaults, so a user
+ * who re-pointed `local` found `holodeck` still routing to the old chain and hanging
+ * on a host that alias no longer referred to.
  */
 const CREW_ALIASES: Record<string, { mirrors: keyof typeof CORE_ALIASES; description: string }> = {
   ensign: { mirrors: "fast", description: "Junior officer: the legwork. Same chain as `fast`." },
@@ -260,7 +262,7 @@ const CREW_ALIASES: Record<string, { mirrors: keyof typeof CORE_ALIASES; descrip
 export const DEFAULT_ALIASES: Record<string, AliasDef> = {
   ...CORE_ALIASES,
   ...Object.fromEntries(
-    Object.entries(CREW_ALIASES).map(([name, { mirrors, description }]) => [name, { description, candidates: CORE_ALIASES[mirrors].candidates }]),
+    Object.entries(CREW_ALIASES).map(([name, { mirrors, description }]) => [name, { description, candidates: [mirrors] }]),
   ),
 };
 
