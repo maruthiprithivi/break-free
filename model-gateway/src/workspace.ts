@@ -12,6 +12,7 @@
  * Nothing here can delete files, branches, or repos, force-push, reset, or
  * touch secrets — by construction, not by prompt.
  */
+import { enqueueCi } from "./fleet.js";
 import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -327,7 +328,14 @@ export class Workspace {
       const remote = String(a.remote ?? "origin");
       if (!/^[\w.-]+$/.test(remote)) throw new Error("invalid remote name");
       // Plain push: git refuses non-fast-forward updates by default, and there is no way to pass --force here.
-      return await this.git(["push", "-u", remote, `HEAD:refs/heads/${branch}`], 180_000);
+      const out = await this.git(["push", "-u", remote, `HEAD:refs/heads/${branch}`], 180_000);
+      // The push just caused a run somebody has to look at. Record it here rather than
+      // trusting the agent to remember: best-effort, and never allowed to fail the push.
+      try {
+        const sha = (await this.git(["rev-parse", "HEAD"])).trim();
+        if (sha && this.config.sessionDir) enqueueCi(this.config.sessionDir, { sha, branch });
+      } catch { /* the push succeeded; bookkeeping must not undo that */ }
+      return out;
     });
 
     return t;

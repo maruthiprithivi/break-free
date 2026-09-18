@@ -11,7 +11,17 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export type FleetEventKind = "job.done" | "job.failed" | "harness.exited" | "harness.output" | "harness.idle";
+export type FleetEventKind = "job.done" | "job.failed" | "harness.exited" | "harness.output" | "harness.idle" | "ci.pending" | "ci.failed";
+
+export interface FleetCi {
+  repo?: string;
+  branch?: string;
+  sha: string;
+  runId?: number;
+  url?: string;
+  job?: string;
+  deployment?: boolean;
+}
 
 export interface FleetEvent {
   seq: number;
@@ -19,6 +29,7 @@ export interface FleetEvent {
   kind: FleetEventKind;
   id: string;
   reason: string;
+  ci?: FleetCi;
 }
 
 export interface FleetSnapshot {
@@ -30,6 +41,7 @@ export interface FleetSnapshot {
 const QUEUE_FILE = "wake-queue.jsonl";
 const CURSOR_FILE = "cursor";
 const SNAPSHOT_FILE = "snapshot.json";
+const RESOLVED_FILE = "resolved.json";
 
 export function fleetDir(sessionDir: string): string {
   const dir = path.join(sessionDir, "fleet");
@@ -146,6 +158,37 @@ function readEventsFile(file: string): FleetEvent[] {
   return text === undefined ? [] : parseEvents(text);
 }
 
+function readResolvedSeqs(dir: string): number[] {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(dir, RESOLVED_FILE), "utf8"));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((n): n is number => typeof n === "number" && Number.isFinite(n));
+  } catch {
+    // Missing or corrupt sidecar behaves like an empty set: the queue itself is
+    // still authoritative, and a crash while writing resolved.json must never
+    // wedge pendingEvents.
+    return [];
+  }
+}
+
+function writeResolvedSeqs(dir: string, seqs: number[]): void {
+  const unique = Array.from(new Set(seqs)).sort((a, b) => a - b);
+  fs.writeFileSync(path.join(dir, RESOLVED_FILE), JSON.stringify(unique), { mode: 0o600 });
+}
+
+function markResolved(dir: string, seq: number): void {
+  const seqs = readResolvedSeqs(dir);
+  if (seqs.includes(seq)) return;
+  seqs.push(seq);
+  writeResolvedSeqs(dir, seqs);
+}
+
+function pendingEventsInDir(dir: string): FleetEvent[] {
+  const cursor = readCursor(dir);
+  const resolved = new Set(readResolvedSeqs(dir));
+  return readEventsFile(path.join(dir, QUEUE_FILE)).filter((e) => e.seq > cursor && !resolved.has(e.seq));
+}
+
 /**
  * Append events and hand back the same rows with their assigned seq.
  *
@@ -194,8 +237,95 @@ function readCursor(dir: string): number {
 
 export function pendingEvents(sessionDir: string): FleetEvent[] {
   const dir = fleetDir(sessionDir);
+  return pendingEventsInDir(dir);
+}
+
+function findNonDrainedCiPending(dir: string, sha: string): FleetEvent | undefined {
   const cursor = readCursor(dir);
-  return readEventsFile(path.join(dir, QUEUE_FILE)).filter((e) => e.seq > cursor);
+  return readEventsFile(path.join(dir, QUEUE_FILE)).find(
+    (e) => e.kind === "ci.pending" && e.seq > cursor && e.ci?.sha === sha,
+  );
+}
+
+function resolveCiPending(sessionDir: string, dir: string, event: FleetEvent): void {
+  // The queue is append-only. If this pending event is the oldest thing still
+  // waiting, advancing the cursor naturally drains it. Otherwise we can only
+  // mark its seq in the sidecar so pendingEvents skips it without rewriting
+  // wake-queue.jsonl and without draining unrelated, older pending events.
+  const pending = pendingEventsInDir(dir);
+  const oldest = pending.length > 0 ? pending[0] : undefined;
+  if (oldest !== undefined && oldest.seq === event.seq) {
+    drainTo(sessionDir, event.seq);
+  } else {
+    markResolved(dir, event.seq);
+  }
+}
+
+/**
+ * Record that a CI run for `sha` is underway. One pending event per sha is
+ * enough: a duplicate would make the same push block twice.
+ */
+export function enqueueCi(sessionDir: string, ci: { repo?: string; branch?: string; sha: string }): FleetEvent {
+  const dir = fleetDir(sessionDir);
+  const existing = findNonDrainedCiPending(dir, ci.sha);
+  if (existing) return existing;
+
+  const [event] = appendEvents(sessionDir, [
+    { ts: new Date().toISOString(), kind: "ci.pending", id: ci.sha, reason: "ci.pending", ci },
+  ]);
+  return event;
+}
+
+export function resolveCi(
+  sessionDir: string,
+  sha: string,
+  outcome: { state: "pending" | "success" | "failed"; runId?: number; url?: string; job?: string },
+): void {
+  if (outcome.state === "pending") return;
+
+  const dir = fleetDir(sessionDir);
+  const pending = pendingEventsInDir(dir).find((e) => e.kind === "ci.pending" && e.ci?.sha === sha);
+
+  if (pending) resolveCiPending(sessionDir, dir, pending);
+
+  if (outcome.state === "failed") {
+    // Keep repo/branch/deployment context when we have a pending event, but a
+    // failure must still be recorded even if the original pending was already
+    // drained or never enqueued.
+    appendEvents(sessionDir, [
+      {
+        ts: new Date().toISOString(),
+        kind: "ci.failed",
+        id: sha,
+        reason: "ci.failed",
+        ci: {
+          repo: pending?.ci?.repo,
+          branch: pending?.ci?.branch,
+          sha,
+          runId: outcome.runId,
+          url: outcome.url,
+          job: outcome.job,
+          deployment: pending?.ci?.deployment,
+        },
+      },
+    ]);
+  }
+}
+
+export function expireCi(sessionDir: string, now: number, timeoutMs: number): number {
+  const dir = fleetDir(sessionDir);
+  let expired = 0;
+
+  for (const event of pendingEventsInDir(dir)) {
+    if (event.kind !== "ci.pending") continue;
+    const ts = parseTs(event.ts);
+    if (ts === undefined || now - ts <= timeoutMs) continue;
+
+    resolveCiPending(sessionDir, dir, event);
+    expired += 1;
+  }
+
+  return expired;
 }
 
 /**
