@@ -17,6 +17,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig, listProviderNames, redactKey, resolveProvider, saveConfigPatch, FALLBACK_REASONS, type LoadedConfig } from "./config.js";
@@ -35,6 +36,7 @@ import { DEFAULT_PRICING } from "./config.js";
 import { ghAvailable } from "./github.js";
 import { SessionStore } from "./sessions.js";
 import { HarnessController } from "./harnessctl.js";
+import { appendEvents, classify, drainTo, pendingEvents, readSnapshot, writeSnapshot, type FleetEvent, type FleetSnapshot } from "./fleet.js";
 import { delegate, panel, review, supervise, runPlan, type Ctx } from "./orchestrate.js";
 import { PROVIDER_CATALOG } from "./providers.js";
 import { Logger, analyze, callContext, setLogger, summarizeArgs, log as rlog } from "./logger.js";
@@ -82,6 +84,53 @@ function reload(): Ctx {
 }
 
 let ctx = reload();
+
+// ------------------------------------------------------------ fleet
+const FLEET_IDLE_MS = 5 * 60_000;
+
+async function buildFleetSnapshot(prev: FleetSnapshot | undefined): Promise<FleetSnapshot> {
+  const ts = new Date().toISOString();
+  const jobsMap: Record<string, string> = {};
+  try {
+    for (const j of jobs!.list()) jobsMap[j.id] = j.state;
+  } catch {
+    // A job-list failure must not take down the snapshot.
+  }
+  const harness: FleetSnapshot["harness"] = {};
+  try {
+    const sessions = await ctx.harnessctl.list();
+    for (const s of sessions) {
+      let digest = "";
+      if (s.state === "running") {
+        try {
+          digest = createHash("sha1").update(await ctx.harnessctl.read(s.id, 40)).digest("hex");
+        } catch {
+          digest = ""; // pane vanished or tmux is unavailable: keep the session but with no digest
+        }
+      }
+      const prevH = prev?.harness?.[s.id];
+      const unchanged = s.state === "running" && prevH?.state === "running" && prevH.digest === digest;
+      harness[s.id] = { state: s.state, digest, since: unchanged ? prevH!.since : ts };
+    }
+  } catch {
+    // tmux missing or the session directory is unreadable: no harness sessions.
+  }
+  return { ts, jobs: jobsMap, harness };
+}
+
+async function fleetCheck(): Promise<{ running: { jobs: number; harness: number }; pending: FleetEvent[]; blocking: boolean }> {
+  const sessionDir = ctx.config.sessionDir!;
+  const prev = readSnapshot(sessionDir);
+  const next = await buildFleetSnapshot(prev);
+  appendEvents(sessionDir, classify(prev, next, FLEET_IDLE_MS));
+  writeSnapshot(sessionDir, next);
+  const pending = pendingEvents(sessionDir);
+  const running = {
+    jobs: Object.values(next.jobs).filter((s) => s === "running").length,
+    harness: Object.values(next.harness).filter((h) => h.state === "running").length,
+  };
+  return { running, pending, blocking: running.jobs > 0 || pending.length > 0 };
+}
 
 const CapabilitySchema = z.array(z.enum(CAPABILITIES as [string, ...string[]])).describe(
   "What the delegated model may do. read = files/grep/diff (jailed to workspace). write = create/edit files (+ ledger_note/ledger_task_log when a ledger exists). git = branch/commit/push (never protected branches, never force). github = issues/PRs/Actions via gh (implies git). run = run_command for allow-listed test/build/lint commands (workers.allowedCommands). mcp = tools of the MCP servers named in mcp_servers. Default: [\"read\"].",
@@ -546,6 +595,19 @@ server.registerTool("job_result", {
   return text(`${r.text ?? r.report ?? JSON.stringify(r)}\n\n---\nmeta: ${JSON.stringify({ job_id: j.id, state: j.state, ...(r.meta ? { ...(r.meta as object) } : {}), ...(r.results ? { results: r.results, usage: r.usage } : {}) })}`);
 });
 server.registerTool("job_cancel", { title: "Cancel a job", description: "Abort a running background job (in-flight model calls are cancelled; files already written stay).", inputSchema: { job_id: z.string() } }, async ({ job_id }) => json({ cancelled: jobs!.cancel(job_id) }));
+
+server.registerTool("fleet_status", {
+  title: "Fleet status: jobs, harness sessions, pending wake events",
+  description: "Snapshot the live fleet (background jobs + tmux harness sessions), classify differences into wake events, persist the snapshot and return running counts plus the pending event queue. Set drain:true to advance the cursor past the returned events so they are not reported again.",
+  inputSchema: { drain: z.boolean().optional() },
+}, async ({ drain }) => {
+  const res = await fleetCheck();
+  if (drain && res.pending.length > 0) {
+    const highest = res.pending.reduce((max, e) => Math.max(max, e.seq), 0);
+    drainTo(ctx.config.sessionDir!, highest);
+  }
+  return json(res);
+});
 
 // ---- MCP bridge
 server.registerTool("list_mcp_servers", {
@@ -1012,6 +1074,15 @@ async function main() {
     const n = Number(flag("--logs")) || 500;
     const events = logger ? logger.tail(n) : [];
     console.log(JSON.stringify({ file: logger?.file ?? null, enabled: !!logger, ...analyze(events) }, null, 2));
+    process.exit(0);
+  }
+  if (argv.includes("--fleet-check")) {
+    // Shell-hook friendly fleet status: always valid JSON, always exit 0.
+    try {
+      console.log(JSON.stringify(await fleetCheck(), null, 2));
+    } catch {
+      console.log(JSON.stringify({ running: { jobs: 0, harness: 0 }, pending: [], blocking: false }, null, 2));
+    }
     process.exit(0);
   }
   if (argv.includes("--serve")) {
