@@ -51,6 +51,10 @@ const ConfigSchema = z.object({
   sessionDir: z.string().optional(),
   /** JSONL runtime log; default ~/.config/model-gateway/gateway.log. false disables. */
   logFile: z.union([z.string(), z.literal(false)]).optional(),
+  /** Named project mode that derives github.allowPush/allowMerge defaults. */
+  mode: z.enum(["guarded", "pr-only", "local-only"]).default("guarded"),
+  /** Let a guarded worker merge PRs without explicit approval. Ignored for pr-only/local-only. */
+  mergeAutonomy: z.boolean().default(false),
   defaults: z
     .object({
       model: z.string().default("fast"),
@@ -196,6 +200,17 @@ const ConfigSchema = z.object({
 export type GatewayConfig = z.infer<typeof ConfigSchema>;
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 
+export function modeDefaults(mode: "guarded" | "pr-only" | "local-only", mergeAutonomy: boolean): { allowPush: boolean; allowMerge: boolean } {
+  switch (mode) {
+    case "guarded":
+      return { allowPush: true, allowMerge: mergeAutonomy };
+    case "pr-only":
+      return { allowPush: true, allowMerge: false };
+    case "local-only":
+      return { allowPush: false, allowMerge: false };
+  }
+}
+
 export const DEFAULT_ALIASES: Record<string, { candidates: string[]; description: string }> = {
   fast: {
     description: "Cheap/fast worker for boilerplate, tests, refactors",
@@ -286,6 +301,8 @@ export function sanitizeProjectConfig(j: unknown): Record<string, unknown> {
   if (!j || typeof j !== "object") return {};
   const src = j as Record<string, unknown>;
   const out: Record<string, unknown> = {};
+  // Only project-tunable, non-sensitive settings are copied. `github`, `mode` and `mergeAutonomy`
+  // are intentionally omitted so a cloned repo can never grant itself push or merge rights.
   for (const k of ["defaults", "aliases", "fallback", "policy", "steward", "pricing"]) if (k in src) out[k] = src[k]; // policy can only add restrictions, so a project may declare it
   if (src.providers && typeof src.providers === "object") {
     const provs: Record<string, unknown> = {};
@@ -321,11 +338,20 @@ export function loadConfig(opts: { workspaceRoot?: string; configPath?: string }
     raw = deepMerge(raw, sanitizeProjectConfig(projectJson));
     sources.push(projectPath);
   }
+  // zod fills defaults, so presence of an explicit value can only be detected on the raw merged object.
+  const rawObj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const rawGithub = rawObj.github && typeof rawObj.github === "object" ? (rawObj.github as Record<string, unknown>) : {};
+  const hasAllowPush = Object.prototype.hasOwnProperty.call(rawGithub, "allowPush");
+  const hasAllowMerge = Object.prototype.hasOwnProperty.call(rawGithub, "allowMerge");
+
   const parsed = ConfigSchema.safeParse(raw);
   if (!parsed.success) {
     throw new Error(`Invalid config (${sources.join(", ") || "defaults"}): ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
   }
   const config = parsed.data;
+  const modePolicy = modeDefaults(config.mode, config.mergeAutonomy);
+  if (!hasAllowPush) config.github.allowPush = modePolicy.allowPush;
+  if (!hasAllowMerge) config.github.allowMerge = modePolicy.allowMerge;
   config.workspaceRoot = path.resolve(expandHome(opts.workspaceRoot ?? config.workspaceRoot ?? process.cwd()));
   config.sessionDir = expandHome(config.sessionDir ?? path.join(os.homedir(), ".config", "model-gateway", "sessions"));
   // Built-in aliases are only defaults; user aliases win.
