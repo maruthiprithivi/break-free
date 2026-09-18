@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Break Free - watch</title>
+<meta name="description" content="The frontier model leads, other models execute. Narrated walkthroughs of Break Free.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2307090c'/%3E%3Ccircle cx='10' cy='16' r='3.5' fill='%2334d399'/%3E%3Cpath d='M13 16h11M18 10l6 6-6 6' stroke='%2322d3ee' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #07090c; --panel: #0d1117; --line: #1e2a38; --text: #e6edf3;
+    --dim: #8b97a6; --faint: #586170; --green: #34d399; --cyan: #22d3ee;
+    --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+    background-image:
+      radial-gradient(900px 500px at 78% -8%, rgba(34,211,238,0.10), transparent 62%),
+      radial-gradient(700px 420px at 12% 4%, rgba(52,211,153,0.08), transparent 60%);
+    background-attachment: fixed;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px 72px; }
+  header { padding: 56px 0 30px; }
+  .mark { font-family: var(--mono); font-size: clamp(30px, 6vw, 46px); font-weight: 700; letter-spacing: 3px; display: flex; gap: 14px; }
+  .mark .free { color: var(--green); text-shadow: 0 0 34px rgba(52,211,153,0.4); }
+  .rule { height: 1px; margin: 18px 0 16px; background: linear-gradient(90deg, var(--green), transparent); }
+  .tag { color: var(--dim); font-size: clamp(15px, 2.4vw, 20px); margin: 0; }
+  .links { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 10px; }
+  .chip {
+    font-family: var(--mono); font-size: 14px; color: var(--cyan); text-decoration: none;
+    border: 1px solid var(--cyan); background: rgba(34,211,238,0.08);
+    border-radius: 999px; padding: 7px 15px;
+  }
+  .chip.solid { color: var(--green); border-color: var(--green); background: rgba(52,211,153,0.10); }
+  .chip:hover { filter: brightness(1.25); }
+
+  .stage { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: #05070a; box-shadow: 0 24px 70px rgba(0,0,0,0.55); }
+  video { display: block; width: 100%; height: auto; background: #05070a; aspect-ratio: 16 / 9; }
+  video::cue { font-family: var(--sans); background: rgba(4,6,9,0.82); }
+
+  .meta { padding: 20px 22px 22px; border-top: 1px solid var(--line); }
+  .meta h1 { margin: 0 0 6px; font-size: clamp(20px, 3.2vw, 27px); font-weight: 600; letter-spacing: -0.4px; }
+  .meta p { margin: 0; color: var(--dim); font-size: 16px; }
+  .meta .sub { margin-top: 12px; font-family: var(--mono); font-size: 13px; color: var(--faint); }
+  .meta .sub a { color: var(--faint); }
+
+  h2 { font-size: 13px; letter-spacing: 3px; text-transform: uppercase; color: var(--faint); font-family: var(--mono); font-weight: 400; margin: 38px 0 14px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+  .card {
+    display: block; text-align: left; padding: 0; cursor: pointer; color: inherit;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    overflow: hidden; font: inherit; transition: border-color .15s, transform .15s;
+  }
+  .card:hover { border-color: var(--cyan); transform: translateY(-2px); }
+  .card[aria-current="true"] { border-color: var(--green); box-shadow: 0 0 0 1px rgba(52,211,153,0.35); }
+  .card img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+  .card .t { padding: 12px 14px 14px; }
+  .card .t b { display: block; font-size: 15px; font-weight: 600; }
+  .card .t span { display: block; margin-top: 3px; font-size: 13px; color: var(--dim); }
+
+  .install { margin-top: 40px; border: 1px solid var(--line); border-radius: 12px; background: rgba(5,7,10,0.72); }
+  .install .bar { padding: 11px 16px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; color: var(--faint); letter-spacing: 1px; }
+  .install .body { padding: 16px; display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+  .install code { font-family: var(--mono); font-size: 13px; color: var(--text); word-break: break-all; flex: 1 1 320px; line-height: 1.6; }
+  .install code .p { color: var(--green); }
+  button.copy { font-family: var(--mono); font-size: 13px; color: var(--green); background: rgba(52,211,153,0.10); border: 1px solid var(--green); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+  footer { margin-top: 44px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--faint); font-family: var(--mono); font-size: 13px; display: flex; gap: 16px; flex-wrap: wrap; }
+  footer a { color: var(--dim); }
+  @media (prefers-reduced-motion: reduce) { .card { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="mark"><span>BREAK</span><span class="free">FREE</span></div>
+    <div class="rule"></div>
+    <p class="tag">the frontier model leads, other models execute</p>
+    <nav class="links">
+      <a class="chip solid" href="https://github.com/maruthiprithivi/break-free">Repository</a>
+      <a class="chip" href="https://github.com/maruthiprithivi/break-free#install">Install</a>
+      <a class="chip" href="https://github.com/maruthiprithivi/break-free/blob/main/AGENT-INSTALL.md">Install with an agent</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="stage">
+      <video id="player" controls preload="metadata" playsinline poster="assets/poster-intro.jpg">
+        <source id="src" src="assets/intro.mp4" type="video/mp4">
+        <track id="cc" kind="subtitles" src="assets/intro.vtt" srclang="en" label="English" default>
+        Your browser cannot play this video.
+        <a href="assets/intro.mp4">Download it instead.</a>
+      </video>
+      <div class="meta">
+        <h1 id="title">Why, what, and how</h1>
+        <p id="blurb">Why Break Free exists, what it is, and how the verification actually works.</p>
+        <p class="sub">
+          Narrated, with captions burned in. Separate track:
+          <a id="vtt" href="assets/intro.vtt">WebVTT</a> &middot;
+          <a id="dl" href="assets/intro.mp4">download the file</a>
+        </p>
+      </div>
+    </div>
+
+    <h2>Walkthroughs</h2>
+    <div class="grid" id="grid"></div>
+
+    <section class="install">
+      <div class="bar">install</div>
+      <div class="body">
+        <code><span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/maruthiprithivi/break-free/main/install.sh | bash</code>
+        <button class="copy" id="copy" type="button">Copy</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <a href="https://github.com/maruthiprithivi/break-free">github.com/maruthiprithivi/break-free</a>
+    <a href="https://github.com/maruthiprithivi/break-free/blob/main/docs/usage.md">Documentation</a>
+    <a href="https://github.com/maruthiprithivi/break-free/blob/main/LICENSE">MIT</a>
+  </footer>
+</div>
+
+<script>
+  var VIDEOS = [
+    { id: "intro",    title: "Why, what, and how",        blurb: "Why Break Free exists, what it is, and how the verification actually works." },
+    { id: "delegate", title: "Delegate one task",          blurb: "Hand off the work, keep the verification." },
+    { id: "parallel", title: "Run a plan in parallel",     blurb: "A dependency graph, several vendors at once." },
+    { id: "review",   title: "Get an independent verdict", blurb: "A different vendor reviews; a panel decides." },
+    { id: "ledger",   title: "Resume across sessions",     blurb: "The ledger lives in the repository." }
+  ];
+
+  var player = document.getElementById("player");
+  var grid = document.getElementById("grid");
+
+  function select(id, play) {
+    var v = VIDEOS.filter(function (x) { return x.id === id; })[0];
+    if (!v) return;
+    player.pause();
+    player.poster = "assets/poster-" + v.id + ".jpg";
+    // Rebuild the source and the text track: swapping src alone leaves the old cues attached.
+    player.innerHTML =
+      '<source src="assets/' + v.id + '.mp4" type="video/mp4">' +
+      '<track kind="subtitles" src="assets/' + v.id + '.vtt" srclang="en" label="English" default>' +
+      'Your browser cannot play this video. <a href="assets/' + v.id + '.mp4">Download it instead.</a>';
+    player.load();
+    document.getElementById("title").textContent = v.title;
+    document.getElementById("blurb").textContent = v.blurb;
+    document.getElementById("vtt").href = "assets/" + v.id + ".vtt";
+    document.getElementById("dl").href = "assets/" + v.id + ".mp4";
+    Array.prototype.forEach.call(grid.children, function (c) {
+      c.setAttribute("aria-current", String(c.dataset.id === id));
+    });
+    if (location.hash.slice(1) !== id) history.replaceState(null, "", "#" + id);
+    if (play) player.play().catch(function () { /* autoplay blocked; the poster stays */ });
+  }
+
+  VIDEOS.forEach(function (v) {
+    var b = document.createElement("button");
+    b.className = "card";
+    b.type = "button";
+    b.dataset.id = v.id;
+    b.innerHTML =
+      '<img src="assets/poster-' + v.id + '.jpg" alt="" loading="lazy">' +
+      '<span class="t"><b></b><span></span></span>';
+    b.querySelector("b").textContent = v.title;
+    b.querySelector(".t span").textContent = v.blurb;
+    b.addEventListener("click", function () { select(v.id, true); });
+    grid.appendChild(b);
+  });
+
+  select(VIDEOS.some(function (v) { return v.id === location.hash.slice(1); }) ? location.hash.slice(1) : "intro", false);
+
+  document.getElementById("copy").addEventListener("click", function () {
+    var cmd = "curl -fsSL https://raw.githubusercontent.com/maruthiprithivi/break-free/main/install.sh | bash";
+    navigator.clipboard.writeText(cmd).then(function () {
+      var b = document.getElementById("copy");
+      b.textContent = "Copied";
+      setTimeout(function () { b.textContent = "Copy"; }, 1600);
+    });
+  });
+</script>
+</body>
+</html>
