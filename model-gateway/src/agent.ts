@@ -11,6 +11,13 @@ import { Workspace, type Capability, type WorkerTool } from "./workspace.js";
 import { log as rlog } from "./logger.js";
 import { runTool } from "./runcmd.js";
 
+export type TaskShape = "ship" | "scout";
+
+/** Resolve the effective capabilities for a task shape. A scout is always read-only. */
+export function resolveCapabilities(shape: TaskShape | undefined, capabilities: Capability[] | undefined): Capability[] {
+  return shape === "scout" ? ["read"] : [...(capabilities ?? ["read"])];
+}
+
 export interface RunOptions {
   model?: string;
   system: string;

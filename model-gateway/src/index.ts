@@ -87,6 +87,10 @@ const CapabilitySchema = z.array(z.enum(CAPABILITIES as [string, ...string[]])).
   "What the delegated model may do. read = files/grep/diff (jailed to workspace). write = create/edit files (+ ledger_note/ledger_task_log when a ledger exists). git = branch/commit/push (never protected branches, never force). github = issues/PRs/Actions via gh (implies git). run = run_command for allow-listed test/build/lint commands (workers.allowedCommands). mcp = tools of the MCP servers named in mcp_servers. Default: [\"read\"].",
 ) as unknown as z.ZodType<import("./workspace.js").Capability[]>;
 
+const ShapeSchema = z.enum(["ship", "scout"]).optional().describe(
+  "Task shape: 'ship' uses the requested capabilities (default); 'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
+);
+
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
 const json = (o: unknown) => text(JSON.stringify(o, null, 2));
 const fail = (e: unknown) => ({ content: [{ type: "text" as const, text: `ERROR: ${(e as Error).message ?? String(e)}` }], isError: true });
@@ -367,12 +371,13 @@ server.registerTool("configure_fallback", {
 // ---- orchestration
 server.registerTool("delegate", {
   title: "Delegate a task to a model",
-  description: "Hand a self-contained task to another model. Returns its report (Result / Changes / Verification / Open questions) plus metadata (model actually used, fallbacks, tool calls). Use session_id to continue a conversation with the same worker later. Give capabilities deliberately: [\"read\"] for analysis, [\"read\",\"write\"] to let it edit files in place, [\"github\"] for branch→commit→push→PR flows.",
+  description: "Hand a self-contained task to another model. Returns its report (Result / Changes / Verification / Open questions) plus metadata (model actually used, fallbacks, tool calls). Use session_id to continue a conversation with the same worker later. Give capabilities deliberately: [\"read\"] for analysis, [\"read\",\"write\"] to let it edit files in place, [\"github\"] for branch→commit→push→PR flows. shape:'ship' uses the requested capabilities (default); shape:'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
   inputSchema: {
     task: z.string().describe("What to do. Be explicit about scope, constraints, and the expected output."),
     model: z.string().optional().describe("Alias, provider, provider/model, or comma-separated fallback list. Default: config.defaults.model"),
     session_id: z.string().optional().describe("Persist/continue conversation history under this id"),
     capabilities: CapabilitySchema.optional(),
+    shape: ShapeSchema,
     context: z.string().optional().describe("Background the worker needs (design notes, relevant snippets, prior decisions)"),
     role: z.string().optional().describe("Persona, e.g. 'security engineer', 'technical writer'"),
     instructions: z.string().optional().describe("Extra standing rules appended to the system prompt"),
@@ -443,13 +448,14 @@ server.registerTool("panel", {
 
 server.registerTool("supervise", {
   title: "Supervised delegation (worker + supervisor loop)",
-  description: "A worker model does the task; a supervisor model (ideally a different vendor) checks the result against acceptance criteria and either accepts or sends numbered feedback back, up to max_rounds. Returns the final report, every round's decision, and whether it was accepted. Best for larger implementation tasks you don't want to babysit.",
+  description: "A worker model does the task; a supervisor model (ideally a different vendor) checks the result against acceptance criteria and either accepts or sends numbered feedback back, up to max_rounds. Returns the final report, every round's decision, and whether it was accepted. Best for larger implementation tasks you don't want to babysit. shape:'ship' uses the requested capabilities (default); shape:'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
   inputSchema: {
     task: z.string(),
     worker: z.string().optional().describe("Default: config.defaults.model"),
     supervisor: z.string().optional().describe("Default: config.defaults.supervisor"),
     max_rounds: z.number().int().min(1).max(10).optional().describe("Default 3"),
     capabilities: CapabilitySchema.optional(),
+    shape: ShapeSchema,
     acceptance_criteria: z.string().optional(),
     context: z.string().optional(),
     session_id: z.string().optional(),
@@ -474,6 +480,7 @@ const PlanTaskSchema = z.object({
   task: z.string().describe("Self-contained instructions for this worker: scope, files, constraints, expected output"),
   model: z.string().optional().describe("Alias/provider/model for this task (default config.defaults.model). Mix vendors freely."),
   capabilities: CapabilitySchema.optional(),
+  shape: ShapeSchema,
   depends_on: z.array(z.string()).optional().describe("Task ids that must finish first; their reports are given to this worker as context"),
   context: z.string().optional(),
   role: z.string().optional(),
@@ -489,7 +496,7 @@ const PlanTaskSchema = z.object({
 
 server.registerTool("run_plan", {
   title: "Run a plan: many workers in parallel with dependencies",
-  description: "Execute a set of delegated tasks as a dependency graph with bounded concurrency — the way to get more done at once: split the work, give each task its own model, capabilities, acceptance criteria and verify command, and let the gateway run, verify, review and record them while you wait for the consolidated report. Independent tasks run in parallel (default workers.maxConcurrency); a task whose prerequisite failed is skipped; prerequisite reports are handed to dependants. When a .break-free ledger exists every task is tracked there so the work survives this session. Set async:true for long plans and poll job_status.",
+  description: "Execute a set of delegated tasks as a dependency graph with bounded concurrency — the way to get more done at once: split the work, give each task its own model, capabilities, acceptance criteria and verify command, and let the gateway run, verify, review and record them while you wait for the consolidated report. Independent tasks run in parallel (default workers.maxConcurrency); a task whose prerequisite failed is skipped; prerequisite reports are handed to dependants. When a .break-free ledger exists every task is tracked there so the work survives this session. Set async:true for long plans and poll job_status. Per task, shape:'ship' uses the requested capabilities (default); shape:'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
   inputSchema: {
     goal: z.string().optional().describe("One line describing what the whole plan achieves (recorded in the ledger)"),
     tasks: z.array(PlanTaskSchema).min(1).max(40),
