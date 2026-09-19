@@ -19,6 +19,10 @@ import { routePlanTasks, type RouteDecision, type RouteResult, type RoutingEngin
 import { ASSUMED_TOKENS_PER_TASK, benchEngineLabel, decisionArm, laneCostUsd, leadArm, loadLabeledSet, renderBenchTable, scoreArm, unmeasuredLlmArm, type LabeledTask, type RouterArm } from "./bench.js";
 import { startTypeSafeDouble, type DoubleDecision, type TypeSafeDouble } from "./jev-double.js";
 import { loadScenarios, recordScenarioDecisions, renderScenarioDigest, renderScenarioReport, routedArm, scoreScenario, staticArms, totals, type ScenarioRecording, type ScenarioScore, type ScenarioTask } from "./scenarios.js";
+import { laneFor, renderValidation, summarise, type TaskOutcome, type ValidateArm, type ValidateTask } from "./validate.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { spawnSync } from "node:child_process";
 
 const REPO_BENCH = new URL("../bench/", import.meta.url).pathname;
 const DEFAULT_RECORDING = path.join(REPO_BENCH, "jev-recording.json");
@@ -342,6 +346,101 @@ async function cmdScenarios(flags: Record<string, string | boolean>): Promise<nu
   }
 }
 
+// ------------------------------------------------------------------ bf validate
+/**
+ * Runs real work to check the labels. The workspace is reset to HEAD between runs so each arm
+ * starts from the same tree — which means it must be clean when you start, and it removes
+ * untracked files it created (git-clean honours .gitignore, so node_modules stays).
+ */
+async function cmdValidate(flags: Record<string, string | boolean>): Promise<number> {
+  const setFile = typeof flags.set === "string" ? flags.set : path.join(REPO_BENCH, "route-set.jsonl");
+  const ws = path.resolve(typeof flags.workspace === "string" ? flags.workspace : process.cwd());
+  const limit = typeof flags.tasks === "string" ? Number(flags.tasks) : 3;
+  const withRouting = flags["with-routing"] === true;
+  const tasksFile = setFile.endsWith(".jsonl") ? loadLabeledSet(setFile) : loadScenarios(setFile).flatMap((s) => s.tasks);
+  const tasks = (tasksFile as ValidateTask[]).filter((t) => t.verify).slice(0, Math.max(1, limit));
+  if (!tasks.length) {
+    console.error(`no tasks with a verify command in ${setFile}`);
+    return 2;
+  }
+
+  const git = (args: string[]) => spawnSync("git", ["-C", ws, ...args], { encoding: "utf8" });
+  const clean = git(["status", "--porcelain"]);
+  if (clean.status !== 0) {
+    console.error(`${ws} is not a git repository — bf validate needs one so it can reset between runs`);
+    return 2;
+  }
+  if (clean.stdout.trim() && flags.force !== true) {
+    console.error(`${ws} has uncommitted changes.\n  bf validate resets the tree to HEAD between runs; commit, stash, or pass --force.`);
+    return 2;
+  }
+
+  const config = configFor({ routing: withRouting ? { engine: "jev" } : {} });
+  const configFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bf-validate-")), "config.json");
+  fs.writeFileSync(configFile, JSON.stringify({}));
+
+  const asText = (r: unknown): string => {
+    const content = (r as { content?: { text?: string }[] }).content ?? [];
+    return content.map((c) => c.text ?? "").join("\n");
+  };
+  const entry = new URL("./index.js", import.meta.url).pathname;
+  const transport = new StdioClientTransport({ command: process.execPath, args: [entry, "--workspace", ws, "--config", userConfigPath()], env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)) as Record<string, string>, stderr: "pipe" });
+  const client = new Client({ name: "bf-validate", version: "0" });
+  await client.connect(transport);
+
+  const resetTree = () => {
+    git(["checkout", "--", "."]);
+    git(["clean", "-fdq"]);
+  };
+  /** One real run of one task on one lane; the verify result is the gateway's own exit code. */
+  const runOn = async (t: ValidateTask, arm: ValidateArm, lane: string | null): Promise<TaskOutcome> => {
+    const started = Date.now();
+    if (lane === null) return { task: t.id, arm, lane: "(none)", verify_ok: null, model: "", ms: 0, error: `${t.id}: no lane mapped for ${arm}` };
+    try {
+      const r = await client.callTool({
+        name: "run_plan",
+        arguments: {
+          goal: `bf validate ${t.id} on ${lane}`,
+          tasks: [{ id: `${t.id}--${arm}`, task: t.task, acceptance: t.acceptance, verify: t.verify, files: t.files, tags: t.tags, model: lane, capabilities: ["read", "write", "run"] }],
+        },
+      });
+      const text = asText(r);
+      const meta = JSON.parse(text.slice(text.lastIndexOf("\nmeta: ") + 7)) as { results: { model?: string; verify?: { ok?: boolean } | null; error?: string }[] };
+      const res = meta.results[0];
+      return { task: t.id, arm, lane, verify_ok: res?.verify ? res.verify.ok === true : null, model: res?.model ?? "", ms: Date.now() - started, ...(res?.error ? { error: res.error } : {}) };
+    } catch (e) {
+      return { task: t.id, arm, lane, verify_ok: null, model: "", ms: Date.now() - started, error: (e as Error).message };
+    }
+  };
+
+  const outcomes: TaskOutcome[] = [];
+  try {
+    for (const t of tasks) {
+      resetTree();
+      const claimed = laneFor(config, t.cheapest_passing_lane);
+      outcomes.push(await runOn(t, "claimed", claimed));
+      resetTree();
+      outcomes.push(await runOn(t, "lead", laneFor(config, t.lane)));
+      if (withRouting) {
+        resetTree();
+        const routed = await client.callTool({ name: "route", arguments: { tasks: [{ id: t.id, task: t.task, files: t.files, tags: t.tags }] } });
+        const body = JSON.parse(asText(routed)) as { decisions: { model: string | null; lane: string }[] };
+        const decision = body.decisions[0];
+        outcomes.push(await runOn(t, "jev", decision?.model ?? null));
+      }
+      console.error(`  ran ${t.id} (${outcomes.filter((o) => o.task === t.id).length} arms)`);
+    }
+  } finally {
+    resetTree();
+    await client.close();
+  }
+
+  const report = summarise(outcomes, tasks, config);
+  if (flags.json) console.log(JSON.stringify({ meta: { workspace: ws, set: setFile, with_routing: withRouting }, report }, null, 2));
+  else console.log(renderValidation(report, { workspace: ws, set: setFile, withRouting }));
+  return report.label_validation.failed > 0 ? 1 : 0;
+}
+
 const HELP = `bf — Break Free command line
 
   bf route --plan <file.json|file.jsonl> [--engine jev|rules|off] [--threshold 0.7] [--json]
@@ -366,6 +465,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   if (cmd === "bench" && sub === "route") return cmdBench(flags);
   if (cmd === "demo") return cmdDemo(flags);
   if (cmd === "scenarios") return cmdScenarios(flags);
+  if (cmd === "validate") return cmdValidate(flags);
   console.log(HELP);
   return cmd === "help" || cmd === "--help" ? 0 : 2;
 }

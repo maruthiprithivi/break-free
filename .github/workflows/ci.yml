@@ -34,8 +34,10 @@ jobs:
       - name: Type-check
         run: npx tsc --noEmit
         working-directory: model-gateway
+      # `npm test` builds first (dist/ is gitignored and the suites import from it) and then runs
+      # node --test. Running node --test directly here fails with ERR_MODULE_NOT_FOUND.
       - name: Test
-        run: node --test test/*.test.mjs
+        run: npm test
         working-directory: model-gateway
 
   bench:
@@ -56,11 +58,16 @@ jobs:
       # Both replay a live recording through the real client, so this needs no key. Cost and
       # agreement are pinned by tests; here we check the commands run end to end and stay
       # reproducible, which is the property the write-up depends on.
+      - name: Build
+        run: npm run build
+        working-directory: model-gateway
       - name: bf bench route
         run: node dist/cli.js bench route
         working-directory: model-gateway
+      # `npm run build` above produced dist/, which the CLI needs.
       - name: bf scenarios (twice, must be identical)
         run: |
+          set -e
           node dist/cli.js scenarios --json > /tmp/a.json
           node dist/cli.js scenarios --json > /tmp/b.json
           node -e '
