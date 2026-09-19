@@ -167,3 +167,30 @@ export const PROVIDER_CATALOG: Record<string, ProviderDefaults> = {
 };
 
 export const PROVIDER_NAMES = Object.keys(PROVIDER_CATALOG);
+
+/**
+ * Is this endpoint on the machine or the local network? Used by `configure_provider` to default
+ * `requiresKey` to false: a local inference server (Ollama, LM Studio, llama.cpp, vLLM) almost never
+ * wants auth, and asking for a key it will ignore made the documented one-call path impossible —
+ * the only way to finish was to hand-edit `requiresKey` into the config (#13).
+ *
+ * Deliberately conservative: a public FQDN is never local, however it is spelled. A single-label
+ * host (`http://optimus:11435/v1`) is local because a public name cannot resolve without a dot.
+ */
+export function isLocalEndpoint(rawUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(rawUrl).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  } catch {
+    return false; // unparseable URL: not evidence of a local endpoint, and no default to justify
+  }
+  if (!host) return false;
+  if (host === "localhost" || host === "::1" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
+  if (/^f[cd][0-9a-f]{2}:/i.test(host) || /^fe80:/i.test(host)) return true; // IPv6 unique-local / link-local
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const [a, b] = v4.slice(1).map(Number);
+    return a === 127 || a === 10 || a === 0 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+  }
+  return !host.includes(".");
+}

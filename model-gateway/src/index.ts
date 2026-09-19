@@ -41,7 +41,7 @@ import { HarnessController } from "./harnessctl.js";
 import { appendEvents, classify, drainTo, expireCi, pendingEvents, readSnapshot, resolveCi, writeSnapshot, type FleetEvent, type FleetSnapshot } from "./fleet.js";
 import { getBreaker } from "./breaker.js";
 import { delegate, panel, review, supervise, runPlan, type Ctx } from "./orchestrate.js";
-import { PROVIDER_CATALOG } from "./providers.js";
+import { PROVIDER_CATALOG, isLocalEndpoint } from "./providers.js";
 import { LANES, LANE_SPEC, effectiveLaneMap, routePlanTasks, resolveEngine } from "./routing.js";
 import { listModels as listJevModels, probe as probeJev } from "./jev.js";
 import { Logger, analyze, callContext, setLogger, summarizeArgs, log as rlog, type LogEvent } from "./logger.js";
@@ -227,11 +227,18 @@ function projectRefuses(scope: "user" | "project" | undefined, patch: Record<str
 
 function providerReport(name: string) {
   const p = resolveProvider(ctx.config, name)!;
+  // A private base URL plus "no API key" is usually a local server configured before `requiresKey`
+  // mattered, so the report points at the one-call fix instead of leaving hand-editing the config as
+  // the only way forward (#13). Kept here rather than in resolveProvider so the resolution path
+  // carries no presentation.
+  const localKeyHint = p.requiresKey && !p.apiKey && isLocalEndpoint(p.baseUrl)
+    ? `; this endpoint looks local, so if it needs no auth: configure_provider {provider:"${name}", requires_key:false}`
+    : "";
   return {
     provider: name,
     label: p.label,
     usable: !p.unusableReason,
-    reason: p.unusableReason ?? null,
+    reason: p.unusableReason ? `${p.unusableReason}${localKeyHint}` : null,
     base_url: p.baseUrl,
     api_key: p.requiresKey ? redactKey(p.apiKey) : p.apiKey ? redactKey(p.apiKey) : "(not required)",
     requires_key: p.requiresKey,
@@ -343,7 +350,7 @@ server.registerTool("list_models", {
 
 server.registerTool("test_provider", {
   title: "Test a provider / model",
-  description: "Send a tiny real chat completion to verify the key, base URL and model work. Returns latency and the reply. Use after configure_provider.",
+  description: "Send a tiny real chat completion to verify the key, base URL and model work. Returns latency, the reply, and what the probe cost — it is a real, billable call, priced and logged like any other. An empty reply always says why (a reasoning model can spend the budget thinking before it answers). Use after configure_provider.",
   inputSchema: { spec: z.string().describe("alias, provider, or provider/model"), with_tools: z.boolean().optional().describe("Also verify tool-calling works (default true)") },
 }, async ({ spec, with_tools }) => {
   const results: unknown[] = [];
@@ -376,6 +383,15 @@ server.registerTool("test_provider", {
       // and, when it runs out anyway, say THAT rather than blaming the tools.
       const r = await chatCompletion(c.provider, { model: c.model, messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 512, temperature: 0 }, { timeoutMs: 60_000 });
       const reply = (r.message.content ?? "").trim();
+      // An empty reply must always say WHY. A reasoning model can put its whole output in a
+      // non-standard `reasoning`/`reasoning_content` field (Ollama's OpenAI-compatible endpoint does),
+      // which would otherwise read as a dead model; and `finish_reason: length` means the budget went
+      // on thinking rather than answering. Both are the model's shape, not a broken endpoint (#13).
+      const rawMessage = (r.raw as { choices?: { message?: { reasoning?: unknown; reasoning_content?: unknown } }[] } | undefined)?.choices?.[0]?.message;
+      const reasoningChars = String(rawMessage?.reasoning ?? rawMessage?.reasoning_content ?? "").length;
+      const whyEmpty = r.finishReason === "length"
+        ? "the 512-token budget was spent before any visible reply — this model reasons first; raise maxTokens to reach the answer"
+        : `finish_reason: ${r.finishReason}`;
       // A probe is a real, billable request, so it is priced like any other call. Logging it without a
       // cost is the same silent $0 as an unpriced model (#26): the report counted the call and charged
       // nothing for it, and a probe on an unpriced model was not flagged either.
@@ -388,7 +404,8 @@ server.registerTool("test_provider", {
         ms: Date.now() - started,
         reply: reply.slice(0, 80),
         usage: r.usage,
-        ...(!reply && r.finishReason === "length" ? { note: "the 512-token budget was spent before any visible reply — this model reasons first; raise maxTokens to reach the answer" } : {}),
+        ...(reasoningChars ? { reasoning_chars: reasoningChars } : {}),
+        ...(!reply ? { note: [reasoningChars ? `the model emitted ${reasoningChars} chars of reasoning and no visible reply` : "the model returned no visible reply", whyEmpty].join("; ") } : {}),
       };
       if (with_tools !== false && c.provider.supportsTools) {
         try {
@@ -426,11 +443,12 @@ server.registerTool("test_provider", {
 
 server.registerTool("configure_provider", {
   title: "Configure a provider",
-  description: "Set or update a provider's API key, base URL, default model, enabled flag, headers or extra body. Persists to the user config (mode 0600) or, with scope:'project', to <workspace>/.model-gateway.json (default_model/enabled/extra_body/timeout only). To switch the model a provider uses: configure_provider {provider:'deepseek', default_model:'deepseek-v4-pro'} — check list_models {provider} first for live names. Keys may be literal or \"${ENV_VAR}\" references.",
+  description: "Set or update a provider's API key, base URL, default model, enabled flag, requires_key (auth), headers or extra body. Persists to the user config (mode 0600) or, with scope:'project', to <workspace>/.model-gateway.json (default_model/enabled/extra_body/timeout only). Adding a local OpenAI-compatible endpoint needs no key: configure_provider {provider:'optimus', base_url:'http://127.0.0.1:11435/v1'} makes it usable, because a loopback/private base URL defaults requires_key to false. To switch the model a provider uses: configure_provider {provider:'deepseek', default_model:'deepseek-v4-pro'} — check list_models {provider} first for live names. Keys may be literal or \"${ENV_VAR}\" references.",
   inputSchema: {
     provider: z.string(),
     api_key: z.string().optional().describe("Literal key or \"${ENV_VAR}\""),
     base_url: z.string().optional(),
+    requires_key: z.boolean().optional().describe("Whether the endpoint needs an API key. Defaults to false when the base URL is loopback or a private address (a local inference server rarely wants auth) and true otherwise; pass it explicitly to override. Setting a key or key_env counts as wanting auth, so the local default does not apply then."),
     default_model: z.string().optional(),
     enabled: z.boolean().optional(),
     key_env: z.string().optional().describe("Env var to read the key from instead of storing it"),
@@ -446,6 +464,14 @@ server.registerTool("configure_provider", {
     const patch: Record<string, unknown> = {};
     if (a.api_key !== undefined) patch.apiKey = a.api_key;
     if (a.base_url !== undefined) patch.baseUrl = a.base_url;
+    // A local inference server almost never wants auth, so a call that SETS a loopback/private base
+    // URL defaults `requiresKey` to false, instead of reporting a working server as unusable for want
+    // of a key it would ignore (#13). Only the call that defines the endpoint does this: an unrelated
+    // update (`default_model`, say) must not silently flip a provider's auth, and `requiresKey` is not
+    // settable at project scope, so adding it there would break the documented project-scope path.
+    // An explicit key, key_env or requires_key is a request for auth, and each wins over the default.
+    if (a.requires_key === undefined && a.api_key === undefined && a.key_env === undefined && a.base_url && isLocalEndpoint(a.base_url)) patch.requiresKey = false;
+    if (a.requires_key !== undefined) patch.requiresKey = a.requires_key;
     if (a.default_model !== undefined) patch.defaultModel = a.default_model;
     if (a.enabled !== undefined) patch.enabled = a.enabled;
     if (a.key_env !== undefined) patch.keyEnv = a.key_env;
