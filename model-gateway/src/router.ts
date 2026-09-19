@@ -69,6 +69,10 @@ export function resolveCandidatesWithFloor(
   const push = (s: string) => {
     const parsed = parseSpec(config, s);
     if (!parsed) return;
+    const provider = resolveProvider(config, parsed.provider);
+    // `decision` providers (TypeSafe/Jev) answer typed questions, not chat completions:
+    // they must never appear in a delegate/run_plan candidate chain.
+    if (!provider || provider.kind !== "chat") return;
     const key = `${parsed.provider}/${parsed.model}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -77,7 +81,7 @@ export function resolveCandidatesWithFloor(
       skipped.push({ spec: key, tier });
       return;
     }
-    out.push({ spec: key, provider: resolveProvider(config, parsed.provider)!, model: parsed.model });
+    out.push({ spec: key, provider, model: parsed.model });
   };
   const expand = (s: string, depth: number) => {
     if (depth > 5) return;

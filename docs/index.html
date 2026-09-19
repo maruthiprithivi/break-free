@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Break Free - watch</title>
-<meta name="description" content="The frontier model leads, other models execute. Narrated walkthroughs of Break Free.">
+<title>Break Free - routing, the tripwire, and the numbers</title>
+<meta name="description" content="The frontier model leads, other models execute. Routing, the tripwire, and the measurements behind them - including the one the project loses.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2307090c'/%3E%3Ccircle cx='10' cy='16' r='3.5' fill='%2334d399'/%3E%3Cpath d='M13 16h11M18 10l6 6-6 6' stroke='%2322d3ee' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #07090c; --panel: #0d1117; --line: #1e2a38; --text: #e6edf3;
-    --dim: #8b97a6; --faint: #586170; --green: #34d399; --cyan: #22d3ee;
+    --dim: #8b97a6; --faint: #586170; --green: #34d399; --cyan: #22d3ee; --amber: #e3b341;
     --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
     --sans: system-ui, -apple-system, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
   }
@@ -67,6 +67,34 @@
   .install code { font-family: var(--mono); font-size: 13px; color: var(--text); word-break: break-all; flex: 1 1 320px; line-height: 1.6; }
   .install code .p { color: var(--green); }
   button.copy { font-family: var(--mono); font-size: 13px; color: var(--green); background: rgba(52,211,153,0.10); border: 1px solid var(--green); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+  .lede { color: var(--dim); font-size: 16px; line-height: 1.7; max-width: 78ch; margin: 0 0 16px; }
+  .lede code, .panel code, .stat code, .note code { font-family: var(--mono); font-size: 13px; color: var(--cyan); background: rgba(34,211,238,0.08); border-radius: 5px; padding: 1px 5px; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); gap: 14px; }
+  .cols + .cols { margin-top: 14px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .panel h3 { margin: 0 0 8px; font-family: var(--mono); font-size: 15px; font-weight: 600; letter-spacing: 1px; color: var(--cyan); }
+  .panel h3 em { color: var(--faint); font-style: normal; font-size: 13px; font-weight: 400; }
+  .panel p { margin: 0; color: var(--dim); font-size: 14px; line-height: 1.65; }
+  .panel p + p, .panel .flow + p { margin-top: 10px; }
+  .panel ul { margin: 8px 0 0; padding-left: 18px; color: var(--dim); font-size: 14px; line-height: 1.6; }
+  .panel li + li { margin-top: 5px; }
+  .panel .flow { margin: 12px 0 0; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(176px, 1fr)); gap: 14px; margin: 16px 0 0; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .stat b { display: block; font-family: var(--mono); font-size: 21px; line-height: 1.2; color: var(--green); }
+  .stat.warn b { color: var(--amber); }
+  .stat span { display: block; margin-top: 5px; color: var(--dim); font-size: 13px; line-height: 1.5; }
+  .codebox { border: 1px solid var(--line); border-radius: 12px; background: rgba(5,7,10,0.72); overflow: hidden; }
+  .codebox + .codebox { margin-top: 14px; }
+  .codebox .bar { padding: 11px 16px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; color: var(--faint); letter-spacing: 1px; }
+  .codebox .flow { padding: 16px; }
+  .flow { margin: 0; font-family: var(--mono); font-size: 13px; line-height: 1.8; color: var(--dim); white-space: pre; overflow-x: auto; }
+  .flow b { color: var(--green); font-weight: 600; }
+  .flow i { color: var(--faint); font-style: normal; }
+  .note { margin: 16px 0 0; color: var(--faint); font-size: 13.5px; line-height: 1.7; }
+  .note b { color: var(--dim); }
+  .callout { margin: 16px 0 0; border-left: 2px solid var(--amber); padding: 2px 0 2px 16px; color: var(--dim); font-size: 15px; line-height: 1.7; }
+  .callout b { color: var(--text); }
   footer { margin-top: 44px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--faint); font-family: var(--mono); font-size: 13px; display: flex; gap: 16px; flex-wrap: wrap; }
   footer a { color: var(--dim); }
   @media (prefers-reduced-motion: reduce) { .card { transition: none; } }
@@ -82,6 +110,8 @@
       <a class="chip solid" href="https://github.com/maruthiprithivi/break-free">Repository</a>
       <a class="chip" href="https://github.com/maruthiprithivi/break-free#install">Install</a>
       <a class="chip" href="https://github.com/maruthiprithivi/break-free/blob/main/AGENT-INSTALL.md">Install with an agent</a>
+      <a class="chip" href="https://github.com/maruthiprithivi/break-free/blob/main/docs/routing.md">Routing</a>
+      <a class="chip" href="https://github.com/maruthiprithivi/break-free/blob/main/docs/tripwire.md">Tripwire</a>
     </nav>
   </header>
 
@@ -106,6 +136,191 @@
 
     <h2>Walkthroughs</h2>
     <div class="grid" id="grid"></div>
+
+    <h2>Routing</h2>
+    <p class="lede">
+      Every <code>run_plan</code> and <code>delegate</code> task may name its own <code>model</code>. Omit it and
+      <b>routing</b> decides which lane — and which model — the task runs on, instead of falling back to
+      <code>defaults.model</code>. Routing is <b>off by default</b>: it changes which model runs your work and what that
+      costs, so it has to be your choice, not an upgrade side effect.
+    </p>
+    <div class="cols">
+      <div class="panel">
+        <h3>off <em>— the default</em></h3>
+        <p>An omitted <code>model</code> means <code>defaults.model</code>. No decisions, no calls, no ledger fields.
+        This is what Break Free did before, and it is the escape hatch if routing ever misbehaves.</p>
+      </div>
+      <div class="panel">
+        <h3>rules <em>— no key, no network</em></h3>
+        <p>One ordered regex table. Judgement rules first; then file evidence — if every file a task touches is prose
+        (<code>.md</code>, <code>.txt</code>, <code>.rst</code>, <code>.adoc</code>) it is a prose task, whatever it says;
+        then implementation rules; otherwise <code>fast</code>.</p>
+        <p>Its "confidence" is invented, so it never gates on a threshold. It escalates only when a task matches the
+        <code>unclear</code> pattern.</p>
+      </div>
+      <div class="panel">
+        <h3>jev <em>— TypeSafe System One</em></h3>
+        <p>Not an LLM. It evaluates typed questions against a state and returns typed answers: a Choice over lanes, a
+        Score for difficulty, and two Nouls for sensitivity and repo context — four questions per task, answered in
+        parallel in <b>one request per plan</b>, so a 12-task plan is one round trip.</p>
+        <p>Below <code>routing.threshold</code> (default <code>0.7</code>), or when it answers
+        <code>lead_keeps</code>/<code>unclear</code>, it hands the task back: <code>model</code> comes back
+        <code>null</code> and the task is reported under "Escalated to you". Without a key the plan runs on
+        <code>rules</code> and the result says <code>degraded: &lt;reason&gt;</code> — a router outage never fails a
+        plan.</p>
+      </div>
+    </div>
+    <div class="cols">
+      <div class="panel">
+        <h3>where you set it <em>— narrower wins</em></h3>
+        <ul>
+          <li><b>Task</b> — <code>model: "..."</code> on the task. Wins over everything; an explicit model is never routed at all.</li>
+          <li><b>Session</b> — <code>routing: "jev" | "rules" | "off"</code> on the <code>run_plan</code> / <code>delegate</code> call.</li>
+          <li><b>Environment</b> — <code>BREAK_FREE_ROUTING=jev|rules|off</code>, for every call in that shell or harness session.</li>
+          <li><b>Project</b> — <code>routing.engine</code> in <code>&lt;repo&gt;/.model-gateway.json</code>, committed and read from the workspace.</li>
+          <li><b>Global</b> — <code>routing.engine</code> in <code>~/.config/model-gateway/config.json</code>, for this machine.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3>a repo cannot turn Jev on behind your back</h3>
+        <p>A committed project file can point a repo at <code>jev</code>, and then everyone who clones it routes through
+        TypeSafe. That is the same egress the file already has through <code>defaults.model</code> — but if you want every
+        routing decision to stay on your machine, set this in your user config, where no repo can reach it:</p>
+        <pre class="flow">{ "routing": { "projectMayEnableJev": false } }</pre>
+        <p>Projects may then still ask for <code>rules</code> or <code>off</code>, just not <code>jev</code>. The flag is
+        only ever read from the user config.</p>
+      </div>
+    </div>
+
+    <h2>What a routed plan looks like</h2>
+    <div class="codebox">
+      <div class="bar">decision flow</div>
+      <pre class="flow">lead writes the plan
+ └─ policy rules <i>(deterministic)</i>
+     ├─ auth, secrets, migrations → <b>raising lane + review</b>
+     └─ everything else → engine
+         ├─ <b>jev</b>   one call per plan
+         │    ├─ confidence ≥ threshold → crew lane → verify + reviewer → ledger
+         │    └─ confidence &lt;  threshold → back to the lead
+         └─ <b>rules</b> keyword rules, no key, no network</pre>
+    </div>
+    <div class="codebox">
+      <div class="bar">the ledger entry per routed task (shape, example values in docs/routing.md)</div>
+      <pre class="flow">routed_by: jev
+route_lane: strong
+route_confidence: 0.88
+route_probs: strong=0.88 fast=0.09 local=0.03
+overridden_by: deepseek/deepseek-v4-pro   <i># only when you re-run a task with an explicit model</i></pre>
+    </div>
+
+    <h2>Routing measured — 2026-09-19, jev-1.13.0</h2>
+    <div class="stats">
+      <div class="stat warn"><b>71.67%</b><span>exact lane agreement — the ≥80% target is missed</span></div>
+      <div class="stat"><b>100%</b><span>within one tier (≥95% target), pass</span></div>
+      <div class="stat"><b>6.98%</b><span>under-routing (≤10% target), pass</span></div>
+      <div class="stat"><b>326 ms</b><span>per plan, measured 325.6 ms/plan; a 12-task plan ran in 1.22 s against a ≤2 s target</span></div>
+      <div class="stat"><b>$0.0544</b><span>per 1,000 routing decisions; $0.000663 per plan</span></div>
+      <div class="stat warn"><b>49.4%</b><span>crew cost below all-<code>strong</code> — 0.6pt short of the ≥50% target, because the sensitivity guardrail deliberately upgrades 11 of 60 tasks</span></div>
+    </div>
+    <p class="note">
+      60 labeled subtasks (<code>bench/route-set.jsonl</code>); under-routing means a lane cheaper than the one that
+      actually passes <code>verify</code>. The decisions are a recorded live capture replayed offline, so the metrics
+      reproduce — only latency is measured live. "Agreement" means agreement with one author's labels, not with truth.
+      Jev is not "just rules": 71.67% vs 53.33% exact, and 6.98% vs 31.03% under-routing; the rules engine only looks
+      cheaper (64.1% vs 49.4% below all-<code>strong</code>) because it under-routes three times as often, which is the
+      trade the guardrail exists to catch. Routing has <b>not</b> been measured by running real crew work in real
+      repositories — pass rates and calibration need real <code>verify</code> outcomes, which the scorecards collect as
+      they happen.
+    </p>
+
+    <h2>The tripwire</h2>
+    <p class="lede">
+      <code>policy.rules</code> can <b>deny</b> a path and <b>require</b> a review. Both are globs, and both are blind to
+      the one thing that matters most in a diff: what it did to the code inside the file. A worker can "fix" a failing
+      test by deleting the assertion and adding nothing back — the path is untouched, <code>verify</code> goes green, and
+      no glob has an opinion. The tripwire hands the hunks of the worker's diff to Jev and asks five typed questions
+      about what each hunk <i>is</i>.
+    </p>
+    <div class="cols">
+      <div class="panel">
+        <h3>what it asks <em>— one request per hunk</em></h3>
+        <ul>
+          <li><code>test_weakened</code> — skips, deletes, disables or loosens a test, assertion or lint guard</li>
+          <li><code>destructive_data</code> — deletes or corrupts stored data</li>
+          <li><code>security_touch</code> — changes auth, secrets or input validation</li>
+          <li><code>scope_creep</code> — changes more than the task called for</li>
+          <li><code>risk</code> — a score, 0 (trivial) to 4 (dangerous), with a confidence</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3>three verdicts</h3>
+        <ul>
+          <li><b>block</b> — a hard rejection, with the reason. Only <code>test_weakened ≥ 0.99</code>,
+              <code>destructive_data ≥ 0.99</code> or <code>risk ≥ 3.5</code> can block.</li>
+          <li><b>review</b> — still accepted, but a full review is forced even where the plan would skip it.</li>
+          <li><b>allow</b> — nothing found.</li>
+        </ul>
+        <p><code>security_touch</code> and <code>scope_creep</code> never block on their own; a security-touching change is
+        often legitimate, so it escalates rather than rejects.</p>
+      </div>
+      <div class="panel">
+        <h3>when it runs <em>— opt-in by path</em></h3>
+        <p><code>tripwire.enabled</code> defaults to <code>true</code>, but it only runs for paths a
+        <code>policy.rules</code> entry with <code>action: "check"</code> matches. With no such rule it never runs and
+        costs nothing — the same posture as routing being <code>off</code> by default.</p>
+        <p><code>action: "check"</code> is additive: it can add a review or a block, and can never remove a
+        glob-triggered review. An engine that cannot answer reports <code>unknown</code> and never stands in for a
+        review.</p>
+      </div>
+    </div>
+
+    <h2>Tripwire measured on 175 real merged diffs</h2>
+    <div class="stats">
+      <div class="stat"><b>4%</b><span>false flags, 7 of 175 hunks (≤10% target), pass</span></div>
+      <div class="stat"><b>1%</b><span>hard-blocked, 1 of 175</span></div>
+      <div class="stat"><b>96%</b><span>of clean diffs needed no full review (≥40% target)</span></div>
+      <div class="stat"><b>309 ms</b><span>p50 latency, 772 ms max (≤500 ms target)</span></div>
+      <div class="stat"><b>$0.044</b><span>per 1,000 diffs</span></div>
+    </div>
+    <p class="note">
+      That corpus is <code>bench/tripwire-natural.jsonl</code>: 175 hunks from 94 real commits across 3 real
+      repositories. It is all label-<code>clean</code>, and the label is the set's weakness, stated plainly — a merged
+      commit is <b>presumed</b> honest, not known to be, so a commit that weakened a test and got away with it is scored
+      here as a false positive. On the adversarial seeded set (<code>bench/tripwire-set.jsonl</code>, 130 diffs, 30
+      planted bad) recall is 90% (27/30) and false flags are 14% (14/100) — a miss of the ≤10% target, and swept over the
+      recorded answers no threshold meets both targets there. Zero of those 100 clean diffs were hard-blocked. Nobody has
+      yet run the tripwire against diffs a <b>worker model</b> produced on a real project, which is the distribution it
+      will run in; live answers are not deterministic, so treat a one-diff difference between runs as noise.
+    </p>
+
+    <h2>The comparison the project loses</h2>
+    <p class="lede">
+      The project measured itself against a frontier LLM prompted as a router: the same 60 tasks, the same lane
+      definitions verbatim, the same task facts, batched the way the latency column assumes. <b>Jev lost on
+      judgement.</b>
+    </p>
+    <div class="stats">
+      <div class="stat"><b>47.7×</b><span>faster per decision — the ≥20× clause passes</span></div>
+      <div class="stat warn"><b>45.1×</b><span>cheaper per decision — the ≥50× clause is missed</span></div>
+      <div class="stat warn"><b>23.3 points</b><span>behind on agreement — the ±5-point clause fails</span></div>
+      <div class="stat warn"><b>95% vs 71.67%</b><span>Gemini 3.1 Pro matched the expert labels 95% of the time; Jev matched 71.67%</span></div>
+    </div>
+    <p class="callout">
+      What survives is <b>"a cheap, fast dispatcher"</b> — not "beats a frontier model". At $0.0544 per 1,000 routing
+      decisions, routing every subtask is affordable; at $2.46 it is a line item of its own. That is the trade, and it is
+      the reader's to make.
+    </p>
+    <p class="note">
+      The frontier arm also picked a cheaper set of lanes that still passed: 56.7% saved against all-<code>strong</code>,
+      against Jev's 49.4%. Two things to hold against that table. <b>The baseline is not policy-constrained</b> — 11 of
+      the 60 tasks were kept local or pushed to <code>strong</code> by Jev's guardrail, while the LLM arm answers the raw
+      question, so part of its agreement edge is a policy layer it never had to obey; running its lanes through the same
+      reconciliation has not been done. And it is <b>one set, one expert's labels, one prompt, one run each</b>:
+      "agreement" here means agreement with that label, not with truth. The baseline's cost was itself undercounted by
+      ~4× at first — the provider bills thinking tokens as output while reporting only the visible answer — which
+      flattered Jev's own number on the exact criterion the comparison is about: $0.556 per 1,000 decisions against a
+      truth of $2.46.
+    </p>
 
     <section class="install">
       <div class="bar">install</div>

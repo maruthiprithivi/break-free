@@ -9,11 +9,14 @@
  *   - runs inside the workspace root with a timeout and an output cap
  */
 import { execFile } from "node:child_process";
+import path from "node:path";
 import type { GatewayConfig } from "./config.js";
 import type { WorkerTool } from "./workspace.js";
 
 export interface CommandResult {
   command: string;
+  /** Absolute directory the command ran in. Carried on the result so a failure report can name it. */
+  cwd: string;
   ok: boolean;
   exitCode: number | null;
   signal?: string | null;
@@ -53,12 +56,14 @@ export async function runCommand(config: GatewayConfig, cwd: string, cmd: string
   const cap = config.workers.maxCommandOutputBytes;
   const timeoutMs = opts.timeoutMs ?? config.workers.commandTimeoutMs;
   const started = Date.now();
+  // execFile resolves a relative cwd against the process cwd; report the same absolute directory it runs in.
+  const dir = path.resolve(cwd);
   return new Promise((resolve) => {
     let output = "";
     let truncated = false;
     let timedOut = false;
     const child = execFile(argv[0], argv.slice(1), {
-      cwd,
+      cwd: dir,
       timeout: timeoutMs,
       maxBuffer: cap * 4,
       signal: opts.signal,
@@ -67,7 +72,7 @@ export async function runCommand(config: GatewayConfig, cwd: string, cmd: string
       const e = err as (Error & { code?: number | string; signal?: string; killed?: boolean }) | null;
       if (e?.killed && (e.signal === "SIGTERM" || e.signal === "SIGKILL") && Date.now() - started >= timeoutMs - 50) timedOut = true;
       const exitCode = e ? (typeof e.code === "number" ? e.code : null) : 0;
-      resolve({ command: cmd, ok: !e, exitCode, signal: e?.signal ?? null, ms: Date.now() - started, output: output + (truncated ? `\n… output truncated at ${cap} bytes` : "") + (timedOut ? `\n… timed out after ${timeoutMs} ms` : "") + (e && e.code === "ENOENT" ? `\n(command not found: ${argv[0]})` : ""), truncated, timedOut });
+      resolve({ command: cmd, cwd: dir, ok: !e, exitCode, signal: e?.signal ?? null, ms: Date.now() - started, output: output + (truncated ? `\n… output truncated at ${cap} bytes` : "") + (timedOut ? `\n… timed out after ${timeoutMs} ms` : "") + (e && e.code === "ENOENT" ? `\n(command not found: ${argv[0]}; cwd ${dir})` : ""), truncated, timedOut });
     });
     const sink = (chunk: Buffer | string) => {
       if (truncated) return;
@@ -95,7 +100,7 @@ export function runTool(config: GatewayConfig, cwd: string): WorkerTool {
     },
     run: async (a) => {
       const r = await runCommand(config, cwd, String(a.command ?? ""), { timeoutMs: a.timeout_ms ? Math.min(Number(a.timeout_ms), config.workers.commandTimeoutMs) : undefined });
-      return `$ ${r.command}\nexit=${r.exitCode ?? r.signal}${r.timedOut ? " (TIMED OUT)" : ""} in ${r.ms} ms\n${r.output || "(no output)"}`;
+      return `$ ${r.command}\nexit=${r.exitCode ?? r.signal}${r.timedOut ? " (TIMED OUT)" : ""} in ${r.ms} ms · cwd ${r.cwd}\n${r.output || "(no output)"}`;
     },
   };
 }
