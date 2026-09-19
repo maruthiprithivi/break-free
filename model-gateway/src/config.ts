@@ -148,8 +148,130 @@ const ConfigSchema = z.object({
       idleMs: z.number().int().positive().default(5 * 60_000),
     })
     .default({}),
+  /**
+   * The tripwire: a sub-second Jev check on what a crew diff actually does, run after `verify`
+   * passes. It exists because glob rules see paths, not intent — a model that adds `.skip` to a
+   * failing test, loosens an assertion or drops a guard passes every sensible glob and a green
+   * verify.
+   *
+   * It is ADDITIVE: a glob-triggered review is never removed, only added to. Disabled until a
+   * `policy.rules` entry with `action: "check"` scopes it to some paths.
+   */
+  tripwire: z
+    .object({
+      enabled: z.boolean().default(true),
+      /**
+       * Probability at or above which a hunk is BLOCKED — a hard rejection of the task.
+       *
+       * Deliberately near certainty. A block is the most expensive mistake the tripwire can make
+       * (it rejects work that may be fine), and on the calibration set lowering this to 0.8 bought
+       * no extra recall while false-blocking 5 clean diffs. Everything from `reviewAt` up to this
+       * is still reviewed, so the catch rate does not depend on it.
+       */
+      blockAt: z.number().min(0).max(1).default(0.99),
+      /** Risk score at or above which a hunk is blocked (0..4 scale). */
+      blockRisk: z.number().min(0).max(4).default(3.5),
+      /**
+       * Probability at or above which a hunk is sent for a full review.
+       *
+       * Calibrated against `bench/tripwire-set.jsonl`, not guessed: at 0.5 this flagged 51% of the
+       * 100 clean diffs, because a Noul just over half is a coin flip rather than a finding. 0.95
+       * is where recall on planted diffs is still 90% while false flags fall to 14%.
+       */
+      reviewAt: z.number().min(0).max(1).default(0.95),
+      /**
+       * Risk score at or above which a hunk is sent for a full review.
+       *
+       * 3.0, not the 2.5 the seeded set alone suggested. On a corpus of 175 REAL merged diffs this is
+       * the single biggest lever there is: `risk` caused 13 of the 17 false flags, because ordinary
+       * code in a real backend lands at 2.5-3.1 on the 0-4 scale. Raising it to 3.0 cuts real-diff
+       * false flags 10% -> 4% (code-only 15% -> 5%) while costing NOTHING on the seeded set, whose
+       * recall stays 90%. Only one planted diff (a destructive-data change at risk 3.27) depends on
+       * a threshold below 3.5 at all. See bench/tripwire-results.md.
+       */
+      reviewRisk: z.number().min(0).max(4).default(3.0),
+      /**
+       * Below this confidence on the risk score, a hunk is reviewed rather than trusted.
+       *
+       * 0 disables the gate, and that is the calibrated default: Jev's confidence on the risk Score
+       * is low on 48% of CLEAN diffs and 67% of bad ones, so it does not separate the two and gating
+       * on it flagged half the clean set. Kept as a knob because it may separate them on your data.
+       */
+      confidenceThreshold: z.number().min(0).max(1).default(0),
+      /**
+       * Let an all-clean, confident tripwire stand in for a BLANKET plan-level review
+       * (`review: true` on every task). It never replaces a glob-triggered review.
+       */
+      skipPlanReview: z.boolean().default(false),
+      /** Cap the work: hunks beyond this are dropped, and the result says so only via the count. */
+      maxHunks: z.number().int().positive().default(40),
+      maxHunkChars: z.number().int().positive().default(4000),
+    })
+    .default({}),
   /** USD per 1M tokens, keyed by "provider/model" or "provider" (fallback). Unknown models cost 0 and are reported as unpriced. */
   pricing: z.record(z.object({ input: z.number().min(0), output: z.number().min(0) })).default({}),
+  /**
+   * Which model runs a `run_plan`/`delegate` task whose `model` is omitted.
+   *
+   * Precedence, highest first: the task's own `model` (never routed) → the call's `routing`
+   * parameter → the BREAK_FREE_ROUTING env var → this block. `off` restores the pre-routing
+   * behaviour exactly (an omitted model means `defaults.model`).
+   */
+  routing: z
+    .object({
+      /**
+       * `jev` = TypeSafe System One (needs a key; degrades to `rules` without one);
+       * `rules` = deterministic heuristics, no key, no network; `off` = no routing at all —
+       * an omitted `model` means `defaults.model`, exactly as before this existed.
+       *
+       * The default is `off` on purpose: routing changes which model runs a task, and that must
+       * be an explicit choice at user, project or session level, never a silent change to an
+       * existing install. Turn it on globally here, or per call with the `routing` parameter.
+       */
+      engine: z.enum(["jev", "rules", "off"]).default("off"),
+      /**
+       * USER config only, never read from a project. Whether a repo's `.model-gateway.json` may set
+       * `engine: "jev"` for itself. Allowed by default because a project can already choose any
+       * remote model through `defaults.model`; set it false to keep every routing decision on this
+       * machine, in which case a project may still ask for `rules` or `off`.
+       */
+      projectMayEnableJev: z.boolean().default(true),
+      /** Jev confidence below this goes back to the lead instead of guessing a lane */
+      threshold: z.number().min(0).max(1).default(0.7),
+      /** lane -> model spec handed to run_plan (defaults to DEFAULT_LANE_MAP). `null` escalates that lane to the lead. */
+      laneMap: z.record(z.string().nullable()).default({}),
+      /**
+       * What a sensitive task is forced onto.
+       *
+       * `strong` (default) is "care": the lane is raised to at least strong — never lowered, so a
+       * `thinker` or `local` answer stands — and the task is always independently reviewed.
+       * `local` is "data residency": everything sensitive runs on this machine, always.
+       */
+      sensitiveLane: z.enum(["local", "strong"]).default("strong"),
+      /** File globs that make a task sensitive regardless of what Jev answers (added to the built-in list) */
+      sensitivePaths: z.array(z.string()).default([]),
+      /** Noul probability at/above which Jev's own `sensitive` answer forces the sensitive lane */
+      sensitiveThreshold: z.number().min(0).max(1).default(0.5),
+      /** Hard cap on the state sent to Jev. Jev degrades with padded input, so this stays small. */
+      maxStateTokens: z.number().int().positive().default(2000),
+      /**
+       * Hard cap on state + questions for ONE request. TypeSafe rejects an oversized request with
+       * `400 max_tokens_exceeded` (64k total, 32k for state plus the longest question), so a plan
+       * that does not fit is split into several requests — and each chunk gets its own, smaller
+       * state, which is better for accuracy than one padded one.
+       */
+      maxRequestTokens: z.number().int().positive().default(24_000),
+      timeoutMs: z.number().int().positive().default(20_000),
+      /** Retries of the same TypeSafe request on 429/529/5xx/network, with backoff honouring `retry-after` */
+      retries: z.number().int().min(0).max(5).default(2),
+      /** Base backoff in ms (doubles per attempt); set 0 in tests so they stay offline and instant */
+      retryDelayMs: z.number().int().min(0).default(800),
+      /** One batched request per plan (fast, cheap) or one request per task (fully isolated questions) */
+      batch: z.enum(["plan", "task"]).default("plan"),
+      /** How many ledger scorecard lines per task tag go into Jev's state (0 = none) */
+      scorecardLines: z.number().int().min(0).max(10).default(3),
+    })
+    .default({}),
   budget: z
     .object({
       /** Hard caps in USD; 0 = unlimited. A worker/plan/day that exceeds its cap is stopped, not silently continued. */
@@ -169,7 +291,8 @@ const ConfigSchema = z.object({
         .array(
           z.object({
             match: z.union([z.string(), z.array(z.string())]),
-            action: z.enum(["deny", "review"]),
+            /** `check` runs the Jev tripwire over diffs whose changed paths match (adds reviews/blocks, never removes one). */
+            action: z.enum(["deny", "review", "check"]),
             reason: z.string().optional(),
             /** For review: require the reviewer's provider to differ from the worker's (default true) */
             differentVendor: z.boolean().default(true),
@@ -238,6 +361,10 @@ const CORE_ALIASES = {
     description: "Never leaves the machine",
     candidates: ["ollama/qwen3-coder:30b", "ollama/qwen3:8b", "vllm/default"],
   },
+  thinker: {
+    description: "Reasoning-heavy work: design questions, gnarly debugging (slower, pricier)",
+    candidates: ["deepseek/deepseek-reasoner", "deepseek/deepseek-v4-pro", "openrouter/deepseek/deepseek-v4-pro"],
+  },
   cloud: {
     description: "Ollama Cloud tier",
     candidates: ["ollama-cloud/gpt-oss:120b", "ollama-cloud/deepseek-v4-flash"],
@@ -289,17 +416,69 @@ export const DEFAULT_PRICING: Record<string, { input: number; output: number }> 
   "ollama": { input: 0, output: 0 },
   "vllm": { input: 0, output: 0 },
   "lmstudio": { input: 0, output: 0 },
+  // Google's published Standard paid-tier rates, per 1M tokens, from
+  // ai.google.dev/gemini-api/docs/pricing (fetched 2026-09-19). The Pro tier doubles above a 200k
+  // prompt, which no routing or tripwire prompt comes close to. OUTPUT IS PRICED INCLUDING THINKING
+  // TOKENS on these models, and thinking dominates — which is exactly why a reasoning model is an
+  // expensive router, and why that has to be priced rather than assumed.
+  "gemini/gemini-3.1-pro-preview": { input: 2.0, output: 12.0 },
+  "gemini/gemini-3.5-flash": { input: 1.5, output: 9.0 },
+  "gemini/gemini-3.6-flash": { input: 0.75, output: 3.75 },
+  // provider-level fallback for a gemini model with no entry of its own: the Pro tier, so an
+  // unpriced Gemini model is never accidentally reported as free.
+  "gemini": { input: 2.0, output: 12.0 },
+  // TypeSafe charges input only ($0.042/Mtok); output tokens are free.
+  "typesafe": { input: 0.042, output: 0 },
+  "typesafe/jev-latest": { input: 0.042, output: 0 },
+  "typesafe/jev-1.13.0": { input: 0.042, output: 0 },
 };
+
+/** The seven lanes Jev chooses between, and the alias each one runs on. `null` = back to the lead. */
+export const DEFAULT_LANE_MAP: Record<string, string | null> = {
+  local: "local",
+  fast: "fast",
+  strong: "strong",
+  thinker: "thinker",
+  codex_handoff: "strong",
+  lead_keeps: null,
+  unclear: null,
+};
+
+/**
+ * A config whose aliases and prices are the SHIPPED defaults, for cost figures in a report.
+ *
+ * Crew cost is meant to be comparable and reproducible: if it were priced through your local
+ * `aliases`/`pricing` overrides, the same run would print different money on different machines
+ * (and an alias pointing at a model with no price would silently cost $0). Routing *behaviour*
+ * still uses your config; only the price table is pinned.
+ */
+export function withDefaultPricing(config: GatewayConfig): GatewayConfig {
+  return { ...config, aliases: DEFAULT_ALIASES, pricing: DEFAULT_PRICING };
+}
 
 export function priceFor(config: GatewayConfig, provider: string, model: string): { input: number; output: number; priced: boolean } {
   const table = { ...DEFAULT_PRICING, ...config.pricing };
   const p = table[`${provider}/${model}`] ?? table[provider];
   return p ? { ...p, priced: true } : { input: 0, output: 0, priced: false };
 }
-export function costUsd(config: GatewayConfig, provider: string, model: string, usage: { prompt_tokens?: number; completion_tokens?: number } | undefined): { usd: number; priced: boolean } {
+/**
+ * Bill what the API says it used.
+ *
+ * `completion_tokens` is not always the whole story: Google's OpenAI-compatibility layer reports only
+ * the VISIBLE answer there while billing the thinking tokens as output. Observed directly — one
+ * request came back `completion_tokens: 2, total_tokens: 600` for a two-token answer, so 598 billed
+ * output tokens were missing from the cheap field. Under-billing a provider is not caution, it is a
+ * wrong number, and here it would have flattered break-free's own router against the baseline it is
+ * being compared with. Output is billed as the larger of `completion_tokens` and
+ * `total_tokens - prompt_tokens`, and never less than the visible completion.
+ */
+export function costUsd(config: GatewayConfig, provider: string, model: string, usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined): { usd: number; priced: boolean; output_tokens: number } {
   const p = priceFor(config, provider, model);
-  const usd = ((usage?.prompt_tokens ?? 0) * p.input + (usage?.completion_tokens ?? 0) * p.output) / 1_000_000;
-  return { usd: Math.round(usd * 1e6) / 1e6, priced: p.priced };
+  const prompt = usage?.prompt_tokens ?? 0;
+  const completion = usage?.completion_tokens ?? 0;
+  const billedOutput = Math.max(completion, (usage?.total_tokens ?? 0) - prompt);
+  const usd = (prompt * p.input + billedOutput * p.output) / 1_000_000;
+  return { usd: Math.round(usd * 1e6) / 1e6, priced: p.priced, output_tokens: billedOutput };
 }
 
 export interface LoadedConfig {
@@ -334,13 +513,31 @@ function deepMerge<T>(a: T, b: unknown): T {
 }
 
 const PROJECT_PROVIDER_KEYS = new Set(["defaultModel", "enabled", "supportsTools", "timeoutMs", "extraBody", "label"]);
-export function sanitizeProjectConfig(j: unknown): Record<string, unknown> {
+export function sanitizeProjectConfig(j: unknown, opts: { projectMayEnableJev?: boolean } = {}): Record<string, unknown> {
   if (!j || typeof j !== "object") return {};
   const src = j as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   // Only project-tunable, non-sensitive settings are copied. `github`, `mode` and `mergeAutonomy`
   // are intentionally omitted so a cloned repo can never grant itself push or merge rights.
   for (const k of ["defaults", "aliases", "fallback", "policy", "steward", "pricing"]) if (k in src) out[k] = src[k]; // policy can only add restrictions, so a project may declare it
+  // A project may tighten the tripwire (lower thresholds, enable it) but not loosen it: enabling is
+  // free, disabling is refused because a repo must not be able to switch off its own guardrail.
+  if (src.tripwire && typeof src.tripwire === "object") {
+    const t = { ...(src.tripwire as Record<string, unknown>) };
+    delete t.enabled;
+    out.tripwire = t;
+  }
+  // Routing is project-tunable, so a repo can pin its own lanes and thresholds. Whether a project
+  // may point the router at TypeSafe is the user's call: it is the same egress a project already
+  // gets from `defaults.model`, so it is allowed by default and can be locked down with
+  // `routing.projectMayEnableJev: false` in the USER config. `projectMayEnableJev` itself is never
+  // read from a project, or a repo could lift its own restriction.
+  if (src.routing && typeof src.routing === "object") {
+    const r = { ...(src.routing as Record<string, unknown>) };
+    delete r.projectMayEnableJev;
+    if (r.engine === "jev" && opts.projectMayEnableJev === false) delete r.engine;
+    out.routing = r;
+  }
   if (src.providers && typeof src.providers === "object") {
     const provs: Record<string, unknown> = {};
     for (const [name, pc] of Object.entries(src.providers as Record<string, Record<string, unknown>>)) {
@@ -367,12 +564,16 @@ export function loadConfig(opts: { workspaceRoot?: string; configPath?: string }
     raw = deepMerge(raw, userJson);
     sources.push(userPath);
   }
+  // The gate that decides whether a project file may point the router at TypeSafe. Read from the
+  // USER config only — never from the project, or a repo could lift its own restriction.
+  const userRouting = (userJson as { routing?: { projectMayEnableJev?: unknown } } | undefined)?.routing;
+  const projectMayEnableJev = userRouting?.projectMayEnableJev !== false;
   // The project file lives in a repo you may have just cloned: it is UNTRUSTED. It may tune
   // defaults/aliases/fallback and pick provider models, but never redirect keys, widen the jail,
   // or relax git/GitHub policy.
   const projectJson = readJson(projectPath);
   if (projectJson !== undefined) {
-    raw = deepMerge(raw, sanitizeProjectConfig(projectJson));
+    raw = deepMerge(raw, sanitizeProjectConfig(projectJson, { projectMayEnableJev }));
     sources.push(projectPath);
   }
   // zod fills defaults, so presence of an explicit value can only be detected on the raw merged object.
@@ -430,6 +631,8 @@ export interface ResolvedProvider {
   defaultModel: string;
   knownModels: string[];
   supportsTools: boolean;
+  /** `decision` providers answer typed questions (TypeSafe/Jev) and are never usable as a chat model. */
+  kind: "chat" | "decision";
   extraBody?: Record<string, unknown>;
   timeoutMs?: number;
   docs: string;
@@ -458,6 +661,7 @@ export function resolveProvider(config: GatewayConfig, name: string): ResolvedPr
     defaultModel: pc?.defaultModel ?? catalog?.defaultModel ?? "default",
     knownModels: catalog?.knownModels ?? [],
     supportsTools: pc?.supportsTools ?? catalog?.supportsTools ?? true,
+    kind: catalog?.kind ?? "chat",
     extraBody: catalog?.extraBody || pc?.extraBody ? { ...(catalog?.extraBody ?? {}), ...(pc?.extraBody ?? {}) } : undefined,
     timeoutMs: pc?.timeoutMs,
     docs: catalog?.docs ?? "",
