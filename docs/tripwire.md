@@ -160,9 +160,12 @@ not strictly required**, which is the cheaper of the two mistakes and the one th
 
 ### Honesty notes
 
-- **Live answers are not deterministic.** Two live captures of the seeded set gave recall 90% and 87%
-  (27/30 then 26/30) at identical thresholds; the natural corpus flagged the same 7 of 175 twice. Treat
-  a one-diff difference as noise; the recorded answers in `bench/` are what reproduce exactly.
+- **Live answers are not deterministic.** Across three live captures at identical thresholds the seeded
+  set gave recall 90%, 87%, 90% (27, 26, 27 of 30) and the natural corpus flagged 4%, 4% and 3% of 175.
+  Treat a one-diff difference as noise; the recorded answers in `bench/` are what reproduce exactly.
+  The captures were taken on two different machines (a 28-vCPU Linux box and a 10-core Apple laptop) and
+  agree on every scored metric — only latency moves, 309 ms p50 against 357 ms, both inside the target.
+  Anything the model reads slightly differently between runs moves one diff, not the result.
 - **The natural set's label is presumption, not truth.** See above — it is a realistic distribution
   with a noisy label, which is a different thing from a correct one.
 - **These are real commits, but not crew commits.** Nobody has yet run the tripwire against diffs a
