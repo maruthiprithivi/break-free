@@ -1,5 +1,5 @@
 # The suite is fully offline: a mock chat provider and an in-process TypeSafe double, no keys.
-# It runs on every push and PR so "151 tests green" is something a reader can verify themselves
+# It runs on every push and PR so "185 tests green" is something a reader can verify themselves
 # rather than take on trust.
 name: ci
 
@@ -55,14 +55,14 @@ jobs:
       - name: Build
         run: npm run build
         working-directory: model-gateway
-      # Both replay a live recording through the real client, so this needs no key. Cost and
-      # agreement are pinned by tests; here we check the commands run end to end and stay
-      # reproducible, which is the property the write-up depends on.
-      - name: Build
-        run: npm run build
-        working-directory: model-gateway
+      # All three replay a live recording through the real client, so this needs no key. The numbers
+      # are pinned by tests; here we check the commands run end to end and stay reproducible, which
+      # is the property the write-up depends on.
       - name: bf bench route
         run: node dist/cli.js bench route
+        working-directory: model-gateway
+      - name: bf bench tripwire
+        run: node dist/cli.js bench tripwire
         working-directory: model-gateway
       # `npm run build` above produced dist/, which the CLI needs.
       - name: bf scenarios (twice, must be identical)
