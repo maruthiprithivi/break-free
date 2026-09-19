@@ -43,8 +43,13 @@ whole plan in one call and hands anything below the confidence threshold back to
 guessing. `routing: "off"` (also the global default) restores the old behaviour exactly: an omitted
 model means `defaults.model`.
 
-Full guide — lanes, thresholds, sensitivity modes, ledger fields, the learning loop, and `bf route`
-/ `bf bench route` / `bf demo`: **[routing.md](routing.md)**.
+Turn it on or off at **session** (`routing: "jev"` on the call, or `BREAK_FREE_ROUTING`),
+**project** (`routing.engine` in `.model-gateway.json`) or **global** (`routing.engine` in the user
+config) level; the narrower one wins. A project file may enable Jev, and a user can veto that for
+every repo with `routing.projectMayEnableJev: false`.
+
+Full guide — lanes, thresholds, sensitivity modes, ledger fields, the learning loop, and the
+measurements from `bf route` / `bf bench route` / `bf demo` / `bf scenarios`: **[routing.md](routing.md)**.
 
 ## The ledger: long-horizon memory in the repo
 `.break-free/` is created on first use (`ledger_resume {init:true}`, `task_create`, `note_write` or a tracked `run_plan`) and is plain Markdown — commit it, diff it, or open the folder as an **Obsidian vault**:

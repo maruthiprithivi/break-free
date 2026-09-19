@@ -73,6 +73,8 @@
     "threshold": 0.7,
     "laneMap": { "local": "local", "fast": "fast", "strong": "strong", "thinker": "thinker", "codex_handoff": "strong", "lead_keeps": null, "unclear": null },
     "sensitiveLane": "strong",
+    "$comment_projectMayEnableJev": "USER config only. true (default) lets a repo's .model-gateway.json turn on jev for itself, which is the same egress it already has via defaults.model. false keeps every routing decision on this machine; a project may then still ask for rules or off.",
+    "projectMayEnableJev": true,
     "sensitivePaths": ["**/billing/**"],
     "sensitiveThreshold": 0.5,
     "maxStateTokens": 2000,

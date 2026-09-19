@@ -1,7 +1,7 @@
 {
   "note": "Recorded TypeSafe System One decisions, replayed offline through the real client so `bf bench route` and `bf demo` run with no key. Regenerate against the live API with: bf bench route --live --record bench/jev-recording.json",
   "answered_by": "jev",
-  "recorded_at": "2026-09-19T05:16:43.497Z",
+  "recorded_at": "2026-09-19T05:37:38.992Z",
   "tasks": 60,
   "decisions": {
     "rt-001": {
@@ -13,11 +13,11 @@
       "probs": {
         "unclear": 0,
         "codex_handoff": 0,
-        "lead_keeps": 0,
-        "fast": 0,
-        "thinker": 0,
         "local": 1,
-        "strong": 0
+        "fast": 0,
+        "strong": 0,
+        "thinker": 0,
+        "lead_keeps": 0
       }
     },
     "rt-002": {
@@ -29,27 +29,27 @@
       "probs": {
         "unclear": 0,
         "codex_handoff": 0,
-        "thinker": 0,
-        "fast": 0,
-        "lead_keeps": 0,
         "local": 1,
-        "strong": 0
+        "fast": 0,
+        "strong": 0,
+        "thinker": 0,
+        "lead_keeps": 0
       }
     },
     "rt-003": {
       "lane": "local",
-      "confidence": 0.91,
+      "confidence": 0.92,
       "difficulty": 1,
-      "sensitive": 0.04,
+      "sensitive": 0.05,
       "context": 0,
       "probs": {
         "unclear": 0,
         "codex_handoff": 0,
-        "thinker": 0,
-        "fast": 0.07,
-        "lead_keeps": 0,
         "local": 0.93,
-        "strong": 0
+        "fast": 0.07,
+        "strong": 0,
+        "thinker": 0,
+        "lead_keeps": 0
       }
     },
     "rt-004": {
@@ -59,13 +59,13 @@
       "sensitive": 0.03,
       "context": 0,
       "probs": {
-        "codex_handoff": 0,
         "unclear": 0,
+        "codex_handoff": 0,
+        "local": 0.96,
+        "fast": 0.04,
+        "strong": 0,
         "thinker": 0,
-        "fast": 0.03,
-        "lead_keeps": 0,
-        "local": 0.97,
-        "strong": 0
+        "lead_keeps": 0
       }
     },
     "rt-005": {
@@ -75,61 +75,61 @@
       "sensitive": 0.05,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
         "unclear": 0,
-        "thinker": 0,
-        "fast": 0,
-        "lead_keeps": 0,
+        "codex_handoff": 0,
         "local": 1,
-        "strong": 0
+        "fast": 0,
+        "strong": 0,
+        "thinker": 0,
+        "lead_keeps": 0
       }
     },
     "rt-006": {
       "lane": "local",
       "confidence": 1,
       "difficulty": 0,
-      "sensitive": 0.1,
+      "sensitive": 0.08,
       "context": 0,
       "probs": {
         "unclear": 0,
-        "codex_handoff": 0,
-        "thinker": 0,
         "fast": 0,
-        "lead_keeps": 0,
         "local": 1,
-        "strong": 0
+        "codex_handoff": 0,
+        "strong": 0,
+        "thinker": 0,
+        "lead_keeps": 0
       }
     },
     "rt-007": {
       "lane": "local",
-      "confidence": 0.88,
+      "confidence": 0.83,
       "difficulty": 2,
       "sensitive": 0.96,
       "context": 1,
       "probs": {
         "unclear": 0,
         "codex_handoff": 0,
-        "lead_keeps": 0,
+        "local": 0.87,
         "fast": 0.01,
+        "strong": 0.11,
         "thinker": 0.01,
-        "local": 0.9,
-        "strong": 0.08
+        "lead_keeps": 0
       }
     },
     "rt-008": {
       "lane": "local",
-      "confidence": 0.88,
+      "confidence": 0.86,
       "difficulty": 1,
       "sensitive": 0.97,
       "context": 1,
       "probs": {
         "unclear": 0,
         "codex_handoff": 0,
+        "local": 0.88,
+        "fast": 0.08,
+        "strong": 0.04,
         "thinker": 0,
-        "fast": 0.07,
-        "lead_keeps": 0,
-        "local": 0.9,
-        "strong": 0.03
+        "lead_keeps": 0
       }
     },
     "rt-009": {
@@ -141,91 +141,91 @@
       "probs": {
         "unclear": 0,
         "codex_handoff": 0,
-        "thinker": 0,
-        "fast": 0.15,
-        "lead_keeps": 0,
         "local": 0.83,
-        "strong": 0.02
+        "fast": 0.15,
+        "strong": 0.02,
+        "thinker": 0,
+        "lead_keeps": 0
       }
     },
     "rt-010": {
       "lane": "local",
-      "confidence": 0.6,
+      "confidence": 0.61,
       "difficulty": 1,
       "sensitive": 0.05,
       "context": 0,
       "probs": {
         "unclear": 0,
         "codex_handoff": 0,
+        "local": 0.67,
+        "fast": 0.33,
+        "strong": 0,
         "thinker": 0,
-        "fast": 0.34,
-        "lead_keeps": 0,
-        "local": 0.66,
-        "strong": 0
+        "lead_keeps": 0
       }
     },
     "rt-011": {
       "lane": "local",
       "confidence": 0.95,
       "difficulty": 0,
-      "sensitive": 0.11,
+      "sensitive": 0.12,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
         "unclear": 0,
-        "thinker": 0,
-        "fast": 0.03,
-        "lead_keeps": 0,
+        "codex_handoff": 0,
         "local": 0.95,
-        "strong": 0.02
+        "fast": 0.03,
+        "strong": 0.02,
+        "thinker": 0,
+        "lead_keeps": 0
       }
     },
     "rt-012": {
       "lane": "local",
-      "confidence": 0.98,
+      "confidence": 0.97,
       "difficulty": 1,
-      "sensitive": 0.06,
+      "sensitive": 0.07,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
         "unclear": 0,
+        "codex_handoff": 0,
+        "local": 0.97,
+        "fast": 0.03,
+        "strong": 0,
         "thinker": 0,
-        "fast": 0.01,
-        "lead_keeps": 0,
-        "local": 0.99,
-        "strong": 0
+        "lead_keeps": 0
       }
     },
     "rt-013": {
       "lane": "fast",
       "confidence": 1,
       "difficulty": 2,
-      "sensitive": 0.06,
-      "context": 1,
+      "sensitive": 0.05,
+      "context": 0,
       "probs": {
-        "codex_handoff": 0,
         "unclear": 0,
-        "thinker": 0,
         "fast": 1,
-        "lead_keeps": 0,
         "local": 0,
-        "strong": 0
+        "codex_handoff": 0,
+        "strong": 0,
+        "thinker": 0,
+        "lead_keeps": 0
       }
     },
     "rt-014": {
       "lane": "fast",
       "confidence": 1,
       "difficulty": 1,
-      "sensitive": 0.63,
+      "sensitive": 0.64,
       "context": 1,
       "probs": {
         "unclear": 0,
         "codex_handoff": 0,
-        "lead_keeps": 0,
-        "fast": 1,
-        "thinker": 0,
         "local": 0,
-        "strong": 0
+        "fast": 1,
+        "strong": 0,
+        "thinker": 0,
+        "lead_keeps": 0
       }
     },
     "rt-015": {
@@ -237,11 +237,11 @@
       "probs": {
         "unclear": 0,
         "codex_handoff": 0,
-        "lead_keeps": 0,
-        "fast": 1,
-        "thinker": 0,
         "local": 0,
-        "strong": 0
+        "fast": 1,
+        "strong": 0,
+        "thinker": 0,
+        "lead_keeps": 0
       }
     },
     "rt-016": {
@@ -251,29 +251,29 @@
       "sensitive": 0.08,
       "context": 0,
       "probs": {
-        "codex_handoff": 0,
         "unclear": 0,
-        "thinker": 0,
-        "fast": 0.89,
-        "lead_keeps": 0,
+        "codex_handoff": 0,
         "local": 0,
-        "strong": 0.11
+        "fast": 0.89,
+        "strong": 0.11,
+        "thinker": 0,
+        "lead_keeps": 0
       }
     },
     "rt-017": {
       "lane": "fast",
-      "confidence": 0.91,
+      "confidence": 0.95,
       "difficulty": 1,
-      "sensitive": 0.05,
+      "sensitive": 0.04,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
         "unclear": 0,
+        "codex_handoff": 0,
+        "local": 0.03,
+        "fast": 0.97,
+        "strong": 0,
         "thinker": 0,
-        "fast": 0.92,
-        "lead_keeps": 0,
-        "local": 0.07,
-        "strong": 0.01
+        "lead_keeps": 0
       }
     },
     "rt-018": {
@@ -284,12 +284,12 @@
       "context": 1,
       "probs": {
         "unclear": 0,
-        "codex_handoff": 0,
-        "thinker": 0,
         "fast": 1,
-        "lead_keeps": 0,
         "local": 0,
-        "strong": 0
+        "codex_handoff": 0,
+        "strong": 0,
+        "thinker": 0,
+        "lead_keeps": 0
       }
     },
     "rt-019": {
@@ -300,44 +300,44 @@
       "context": 0,
       "probs": {
         "unclear": 0,
-        "codex_handoff": 0,
-        "thinker": 0,
         "fast": 1,
-        "lead_keeps": 0,
         "local": 0,
-        "strong": 0
+        "codex_handoff": 0,
+        "strong": 0,
+        "thinker": 0,
+        "lead_keeps": 0
       }
     },
     "rt-020": {
       "lane": "fast",
-      "confidence": 0.97,
+      "confidence": 0.96,
       "difficulty": 2,
-      "sensitive": 0.82,
+      "sensitive": 0.81,
       "context": 1,
       "probs": {
+        "local": 0,
+        "strong": 0.01,
+        "codex_handoff": 0,
+        "fast": 0.97,
         "thinker": 0.01,
         "unclear": 0.01,
-        "fast": 0.97,
-        "lead_keeps": 0,
-        "strong": 0.01,
-        "local": 0,
-        "codex_handoff": 0
+        "lead_keeps": 0
       }
     },
     "rt-021": {
       "lane": "local",
-      "confidence": 0.96,
+      "confidence": 0.97,
       "difficulty": 1,
-      "sensitive": 0.09,
+      "sensitive": 0.1,
       "context": 0,
       "probs": {
-        "thinker": 0,
-        "unclear": 0,
-        "fast": 0.03,
-        "lead_keeps": 0,
-        "strong": 0,
         "local": 0.97,
-        "codex_handoff": 0
+        "strong": 0,
+        "thinker": 0,
+        "fast": 0.03,
+        "codex_handoff": 0,
+        "unclear": 0,
+        "lead_keeps": 0
       }
     },
     "rt-022": {
@@ -348,76 +348,76 @@
       "context": 0,
       "probs": {
         "thinker": 0,
-        "unclear": 0,
-        "fast": 0.97,
-        "lead_keeps": 0,
-        "strong": 0.03,
+        "strong": 0.02,
         "local": 0,
-        "codex_handoff": 0
+        "fast": 0.98,
+        "codex_handoff": 0,
+        "unclear": 0,
+        "lead_keeps": 0
       }
     },
     "rt-023": {
       "lane": "fast",
       "confidence": 0.99,
       "difficulty": 1,
-      "sensitive": 0.04,
+      "sensitive": 0.05,
       "context": 0,
       "probs": {
-        "thinker": 0,
-        "unclear": 0,
-        "fast": 0.99,
-        "lead_keeps": 0,
+        "codex_handoff": 0,
         "strong": 0.01,
+        "thinker": 0,
+        "fast": 0.99,
         "local": 0,
-        "codex_handoff": 0
+        "unclear": 0,
+        "lead_keeps": 0
       }
     },
     "rt-024": {
       "lane": "fast",
-      "confidence": 0.98,
+      "confidence": 0.99,
       "difficulty": 1,
-      "sensitive": 0.08,
+      "sensitive": 0.07,
       "context": 1,
       "probs": {
-        "thinker": 0,
-        "unclear": 0,
-        "fast": 0.99,
-        "lead_keeps": 0,
-        "strong": 0.01,
         "local": 0,
-        "codex_handoff": 0
+        "strong": 0.01,
+        "thinker": 0,
+        "fast": 0.99,
+        "codex_handoff": 0,
+        "unclear": 0,
+        "lead_keeps": 0
       }
     },
     "rt-025": {
       "lane": "fast",
-      "confidence": 0.93,
+      "confidence": 0.9,
       "difficulty": 1,
-      "sensitive": 0.04,
+      "sensitive": 0.05,
       "context": 0,
       "probs": {
-        "thinker": 0,
-        "unclear": 0,
-        "fast": 0.94,
-        "lead_keeps": 0,
+        "codex_handoff": 0,
         "strong": 0,
-        "local": 0.06,
-        "codex_handoff": 0
+        "thinker": 0,
+        "fast": 0.91,
+        "local": 0.09,
+        "unclear": 0,
+        "lead_keeps": 0
       }
     },
     "rt-026": {
       "lane": "fast",
       "confidence": 0.98,
       "difficulty": 1,
-      "sensitive": 0.09,
+      "sensitive": 0.08,
       "context": 1,
       "probs": {
+        "local": 0,
+        "strong": 0.01,
+        "codex_handoff": 0,
+        "fast": 0.99,
         "thinker": 0,
         "unclear": 0,
-        "fast": 0.99,
-        "lead_keeps": 0,
-        "strong": 0.01,
-        "local": 0,
-        "codex_handoff": 0
+        "lead_keeps": 0
       }
     },
     "rt-027": {
@@ -427,61 +427,61 @@
       "sensitive": 0.05,
       "context": 0,
       "probs": {
+        "local": 1,
+        "strong": 0,
+        "codex_handoff": 0,
+        "fast": 0,
         "thinker": 0,
         "unclear": 0,
-        "fast": 0,
-        "lead_keeps": 0,
-        "strong": 0,
-        "local": 1,
-        "codex_handoff": 0
+        "lead_keeps": 0
       }
     },
     "rt-028": {
       "lane": "fast",
       "confidence": 1,
       "difficulty": 1,
-      "sensitive": 0.06,
+      "sensitive": 0.05,
       "context": 1,
       "probs": {
-        "thinker": 0,
-        "unclear": 0,
-        "fast": 1,
-        "lead_keeps": 0,
-        "strong": 0,
         "local": 0,
-        "codex_handoff": 0
+        "strong": 0,
+        "thinker": 0,
+        "fast": 1,
+        "codex_handoff": 0,
+        "unclear": 0,
+        "lead_keeps": 0
       }
     },
     "rt-029": {
       "lane": "strong",
-      "confidence": 0.96,
+      "confidence": 0.95,
       "difficulty": 3,
       "sensitive": 0.1,
       "context": 1,
       "probs": {
+        "codex_handoff": 0,
+        "strong": 0.96,
         "thinker": 0,
-        "unclear": 0,
-        "fast": 0.03,
-        "lead_keeps": 0,
-        "strong": 0.97,
+        "fast": 0.04,
         "local": 0,
-        "codex_handoff": 0
+        "unclear": 0,
+        "lead_keeps": 0
       }
     },
     "rt-030": {
       "lane": "strong",
-      "confidence": 0.87,
+      "confidence": 0.86,
       "difficulty": 4,
       "sensitive": 0.09,
       "context": 1,
       "probs": {
-        "thinker": 0.09,
-        "unclear": 0,
-        "fast": 0,
-        "lead_keeps": 0.01,
-        "strong": 0.89,
+        "thinker": 0.1,
+        "strong": 0.88,
         "local": 0,
-        "codex_handoff": 0.01
+        "fast": 0,
+        "codex_handoff": 0.01,
+        "unclear": 0,
+        "lead_keeps": 0.01
       }
     },
     "rt-031": {
@@ -492,28 +492,28 @@
       "context": 1,
       "probs": {
         "thinker": 0,
-        "unclear": 0,
-        "fast": 0,
-        "lead_keeps": 0,
         "strong": 1,
         "local": 0,
-        "codex_handoff": 0
+        "fast": 0,
+        "codex_handoff": 0,
+        "unclear": 0,
+        "lead_keeps": 0
       }
     },
     "rt-032": {
       "lane": "strong",
-      "confidence": 0.97,
+      "confidence": 0.95,
       "difficulty": 3,
       "sensitive": 0.08,
       "context": 1,
       "probs": {
         "thinker": 0,
-        "unclear": 0,
-        "fast": 0.02,
-        "lead_keeps": 0,
-        "strong": 0.98,
+        "strong": 0.96,
         "local": 0,
-        "codex_handoff": 0
+        "fast": 0.04,
+        "codex_handoff": 0,
+        "unclear": 0,
+        "lead_keeps": 0
       }
     },
     "rt-033": {
@@ -523,124 +523,124 @@
       "sensitive": 0.08,
       "context": 1,
       "probs": {
-        "thinker": 0,
-        "unclear": 0,
-        "fast": 0,
-        "lead_keeps": 0,
-        "strong": 0.99,
         "local": 0,
-        "codex_handoff": 0.01
+        "strong": 0.99,
+        "thinker": 0,
+        "fast": 0,
+        "codex_handoff": 0.01,
+        "unclear": 0,
+        "lead_keeps": 0
       }
     },
     "rt-034": {
       "lane": "strong",
       "confidence": 0.99,
       "difficulty": 3,
-      "sensitive": 0.98,
+      "sensitive": 0.99,
       "context": 1,
       "probs": {
+        "local": 0,
+        "strong": 1,
+        "codex_handoff": 0,
+        "fast": 0,
         "thinker": 0,
         "unclear": 0,
-        "fast": 0,
-        "lead_keeps": 0,
-        "strong": 1,
-        "local": 0,
-        "codex_handoff": 0
+        "lead_keeps": 0
       }
     },
     "rt-035": {
       "lane": "strong",
-      "confidence": 0.75,
+      "confidence": 0.66,
       "difficulty": 2,
       "sensitive": 0.97,
       "context": 1,
       "probs": {
+        "local": 0,
+        "strong": 0.71,
+        "codex_handoff": 0,
+        "fast": 0.29,
         "thinker": 0,
         "unclear": 0,
-        "fast": 0.21,
-        "lead_keeps": 0,
-        "strong": 0.79,
-        "local": 0,
-        "codex_handoff": 0
+        "lead_keeps": 0
       }
     },
     "rt-036": {
       "lane": "strong",
-      "confidence": 0.98,
-      "difficulty": 2,
-      "sensitive": 0.79,
+      "confidence": 0.97,
+      "difficulty": 3,
+      "sensitive": 0.76,
       "context": 1,
       "probs": {
-        "thinker": 0,
-        "unclear": 0,
-        "fast": 0.01,
-        "lead_keeps": 0,
-        "strong": 0.99,
         "local": 0,
-        "codex_handoff": 0
+        "strong": 0.98,
+        "thinker": 0,
+        "fast": 0.02,
+        "codex_handoff": 0,
+        "unclear": 0,
+        "lead_keeps": 0
       }
     },
     "rt-037": {
       "lane": "strong",
-      "confidence": 0.92,
+      "confidence": 0.94,
       "difficulty": 3,
       "sensitive": 0.1,
       "context": 1,
       "probs": {
         "thinker": 0,
-        "unclear": 0,
-        "fast": 0.06,
-        "lead_keeps": 0,
-        "strong": 0.94,
+        "strong": 0.95,
         "local": 0,
-        "codex_handoff": 0
+        "fast": 0.05,
+        "codex_handoff": 0,
+        "unclear": 0,
+        "lead_keeps": 0
       }
     },
     "rt-038": {
       "lane": "codex_handoff",
-      "confidence": 0.43,
+      "confidence": 0.46,
       "difficulty": 4,
-      "sensitive": 0.06,
+      "sensitive": 0.05,
       "context": 1,
       "probs": {
-        "thinker": 0.03,
-        "unclear": 0,
-        "fast": 0.01,
-        "lead_keeps": 0,
-        "strong": 0.45,
         "local": 0,
-        "codex_handoff": 0.51
+        "strong": 0.43,
+        "codex_handoff": 0.54,
+        "fast": 0.01,
+        "thinker": 0.02,
+        "unclear": 0,
+        "lead_keeps": 0
       }
     },
     "rt-039": {
       "lane": "strong",
-      "confidence": 0.82,
+      "confidence": 0.83,
       "difficulty": 3,
       "sensitive": 0.08,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
+        "local": 0,
+        "fast": 0.07,
+        "unclear": 0.04,
         "strong": 0.86,
         "thinker": 0.03,
-        "fast": 0.07,
-        "local": 0,
-        "unclear": 0.04,
+        "codex_handoff": 0,
         "lead_keeps": 0
       }
     },
     "rt-040": {
       "lane": "fast",
-      "confidence": 0.9,
-      "difficulty": 2,
+      "confidence": 0.89,
+      "difficulty": 1,
       "sensitive": 0.06,
       "context": 0,
       "probs": {
-        "codex_handoff": 0,
-        "strong": 0.08,
         "local": 0,
-        "fast": 0.92,
-        "thinker": 0,
+        "fast": 0.91,
         "unclear": 0,
+        "strong": 0.09,
+        "thinker": 0,
+        "codex_handoff": 0,
         "lead_keeps": 0
       }
     },
@@ -651,12 +651,12 @@
       "sensitive": 0.08,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
-        "strong": 0.98,
         "local": 0,
         "fast": 0,
-        "thinker": 0.02,
         "unclear": 0,
+        "strong": 0.98,
+        "thinker": 0.02,
+        "codex_handoff": 0,
         "lead_keeps": 0
       }
     },
@@ -668,43 +668,43 @@
       "context": 1,
       "probs": {
         "local": 0,
-        "strong": 0.99,
-        "codex_handoff": 0,
         "fast": 0.01,
-        "thinker": 0,
         "unclear": 0,
+        "strong": 0.99,
+        "thinker": 0,
+        "codex_handoff": 0,
         "lead_keeps": 0
       }
     },
     "rt-043": {
       "lane": "strong",
-      "confidence": 0.66,
+      "confidence": 0.62,
       "difficulty": 2,
-      "sensitive": 0.92,
+      "sensitive": 0.91,
       "context": 1,
       "probs": {
-        "thinker": 0,
-        "strong": 0.72,
         "local": 0,
-        "fast": 0.28,
-        "codex_handoff": 0,
+        "thinker": 0,
         "unclear": 0,
+        "strong": 0.68,
+        "fast": 0.32,
+        "codex_handoff": 0,
         "lead_keeps": 0
       }
     },
     "rt-044": {
       "lane": "strong",
-      "confidence": 0.9,
+      "confidence": 0.91,
       "difficulty": 3,
-      "sensitive": 0.25,
+      "sensitive": 0.27,
       "context": 1,
       "probs": {
-        "codex_handoff": 0.07,
-        "strong": 0.92,
         "local": 0,
-        "fast": 0,
         "thinker": 0.01,
         "unclear": 0,
+        "strong": 0.93,
+        "fast": 0,
+        "codex_handoff": 0.06,
         "lead_keeps": 0
       }
     },
@@ -712,47 +712,47 @@
       "lane": "thinker",
       "confidence": 0.99,
       "difficulty": 3,
-      "sensitive": 0.53,
+      "sensitive": 0.56,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
-        "strong": 0,
         "local": 0.01,
         "fast": 0,
-        "thinker": 0.99,
         "unclear": 0,
+        "strong": 0,
+        "thinker": 0.99,
+        "codex_handoff": 0,
         "lead_keeps": 0
       }
     },
     "rt-046": {
       "lane": "thinker",
-      "confidence": 0.91,
+      "confidence": 0.88,
       "difficulty": 4,
-      "sensitive": 0.06,
+      "sensitive": 0.07,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
-        "strong": 0,
         "local": 0,
-        "fast": 0,
-        "thinker": 0.93,
+        "thinker": 0.9,
         "unclear": 0,
-        "lead_keeps": 0.07
+        "strong": 0,
+        "fast": 0,
+        "codex_handoff": 0,
+        "lead_keeps": 0.1
       }
     },
     "rt-047": {
       "lane": "thinker",
       "confidence": 0.87,
-      "difficulty": 3,
+      "difficulty": 4,
       "sensitive": 0.09,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
-        "strong": 0,
         "local": 0,
         "fast": 0,
-        "thinker": 0.9,
         "unclear": 0,
+        "strong": 0,
+        "thinker": 0.9,
+        "codex_handoff": 0,
         "lead_keeps": 0.1
       }
     },
@@ -760,15 +760,15 @@
       "lane": "thinker",
       "confidence": 0.93,
       "difficulty": 3,
-      "sensitive": 0.08,
+      "sensitive": 0.09,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
-        "strong": 0.02,
         "local": 0.02,
         "fast": 0,
-        "thinker": 0.94,
         "unclear": 0,
+        "strong": 0.02,
+        "thinker": 0.94,
+        "codex_handoff": 0,
         "lead_keeps": 0.02
       }
     },
@@ -776,192 +776,192 @@
       "lane": "thinker",
       "confidence": 0.99,
       "difficulty": 2,
-      "sensitive": 0.06,
+      "sensitive": 0.07,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
-        "strong": 0,
         "local": 0,
         "fast": 0,
-        "thinker": 1,
         "unclear": 0,
+        "strong": 0,
+        "thinker": 1,
+        "codex_handoff": 0,
         "lead_keeps": 0
       }
     },
     "rt-050": {
       "lane": "thinker",
-      "confidence": 0.82,
+      "confidence": 0.81,
       "difficulty": 3,
       "sensitive": 0.43,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
-        "strong": 0.01,
         "local": 0,
-        "fast": 0,
-        "thinker": 0.85,
+        "thinker": 0.84,
         "unclear": 0,
-        "lead_keeps": 0.14
+        "strong": 0.01,
+        "fast": 0,
+        "codex_handoff": 0,
+        "lead_keeps": 0.15
       }
     },
     "rt-051": {
       "lane": "thinker",
-      "confidence": 0.49,
+      "confidence": 0.47,
       "difficulty": 2,
-      "sensitive": 0.08,
+      "sensitive": 0.09,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
-        "strong": 0,
-        "local": 0.03,
+        "local": 0.04,
         "fast": 0,
-        "thinker": 0.57,
         "unclear": 0,
-        "lead_keeps": 0.4
+        "strong": 0,
+        "thinker": 0.55,
+        "codex_handoff": 0,
+        "lead_keeps": 0.41
       }
     },
     "rt-052": {
       "lane": "thinker",
-      "confidence": 0.41,
+      "confidence": 0.43,
       "difficulty": 0,
-      "sensitive": 0.1,
-      "context": 0,
+      "sensitive": 0.08,
+      "context": 1,
       "probs": {
-        "thinker": 0.5,
-        "strong": 0,
         "local": 0.14,
+        "thinker": 0.51,
+        "unclear": 0,
+        "strong": 0,
         "fast": 0,
         "codex_handoff": 0,
-        "unclear": 0,
-        "lead_keeps": 0.36
+        "lead_keeps": 0.35
       }
     },
     "rt-053": {
       "lane": "local",
-      "confidence": 0.95,
+      "confidence": 0.96,
       "difficulty": 1,
       "sensitive": 0.05,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
-        "strong": 0,
         "local": 0.96,
         "fast": 0,
-        "thinker": 0.01,
         "unclear": 0,
+        "strong": 0,
+        "thinker": 0.01,
+        "codex_handoff": 0,
         "lead_keeps": 0.03
       }
     },
     "rt-054": {
       "lane": "thinker",
-      "confidence": 0.94,
+      "confidence": 0.9,
       "difficulty": 4,
-      "sensitive": 0.17,
+      "sensitive": 0.16,
       "context": 1,
       "probs": {
-        "codex_handoff": 0,
-        "strong": 0.04,
         "local": 0,
         "fast": 0,
-        "thinker": 0.94,
         "unclear": 0,
-        "lead_keeps": 0.02
+        "strong": 0.05,
+        "thinker": 0.92,
+        "codex_handoff": 0,
+        "lead_keeps": 0.03
       }
     },
     "rt-055": {
       "lane": "strong",
-      "confidence": 0.5,
+      "confidence": 0.46,
       "difficulty": 3,
       "sensitive": 0.07,
       "context": 1,
       "probs": {
-        "codex_handoff": 0.36,
-        "strong": 0.58,
         "local": 0,
         "fast": 0.06,
-        "thinker": 0,
         "unclear": 0,
+        "strong": 0.54,
+        "thinker": 0,
+        "codex_handoff": 0.4,
         "lead_keeps": 0
       }
     },
     "rt-056": {
       "lane": "codex_handoff",
-      "confidence": 0.5,
+      "confidence": 0.52,
       "difficulty": 3,
-      "sensitive": 0.06,
+      "sensitive": 0.05,
       "context": 1,
       "probs": {
-        "thinker": 0,
-        "strong": 0.38,
         "local": 0,
         "fast": 0.04,
-        "codex_handoff": 0.58,
         "unclear": 0,
+        "strong": 0.37,
+        "thinker": 0,
+        "codex_handoff": 0.59,
         "lead_keeps": 0
       }
     },
     "rt-057": {
       "lane": "strong",
-      "confidence": 0.73,
+      "confidence": 0.76,
       "difficulty": 4,
       "sensitive": 0.11,
       "context": 1,
       "probs": {
-        "codex_handoff": 0.22,
-        "strong": 0.78,
         "local": 0,
-        "fast": 0,
         "thinker": 0,
         "unclear": 0,
+        "strong": 0.81,
+        "fast": 0,
+        "codex_handoff": 0.19,
         "lead_keeps": 0
       }
     },
     "rt-058": {
       "lane": "thinker",
-      "confidence": 0.76,
+      "confidence": 0.81,
       "difficulty": 1,
       "sensitive": 0.05,
       "context": 1,
       "probs": {
-        "unclear": 0.02,
-        "thinker": 0.8,
-        "codex_handoff": 0,
-        "lead_keeps": 0.18,
-        "fast": 0,
         "local": 0,
-        "strong": 0
+        "fast": 0,
+        "unclear": 0.02,
+        "strong": 0,
+        "thinker": 0.84,
+        "codex_handoff": 0,
+        "lead_keeps": 0.14
       }
     },
     "rt-059": {
       "lane": "thinker",
-      "confidence": 0.94,
+      "confidence": 0.91,
       "difficulty": 3,
       "sensitive": 0.07,
       "context": 1,
       "probs": {
-        "unclear": 0.03,
-        "thinker": 0.94,
-        "codex_handoff": 0,
-        "lead_keeps": 0.02,
-        "fast": 0,
         "local": 0,
-        "strong": 0.01
+        "fast": 0,
+        "unclear": 0.03,
+        "strong": 0.01,
+        "thinker": 0.93,
+        "codex_handoff": 0,
+        "lead_keeps": 0.03
       }
     },
     "rt-060": {
       "lane": "thinker",
-      "confidence": 0.9,
+      "confidence": 0.88,
       "difficulty": 2,
-      "sensitive": 0.07,
+      "sensitive": 0.08,
       "context": 1,
       "probs": {
-        "unclear": 0.02,
-        "thinker": 0.91,
-        "codex_handoff": 0,
-        "lead_keeps": 0.07,
-        "fast": 0,
         "local": 0,
-        "strong": 0
+        "fast": 0,
+        "unclear": 0.02,
+        "strong": 0,
+        "thinker": 0.9,
+        "codex_handoff": 0,
+        "lead_keeps": 0.08
       }
     }
   }

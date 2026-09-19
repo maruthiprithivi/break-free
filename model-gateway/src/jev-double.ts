@@ -36,8 +36,9 @@ export interface TypeSafeDouble {
   close(): Promise<void>;
 }
 
-const DEFAULT_DECISION: DoubleDecision = { lane: "fast", confidence: 0.9, difficulty: 2, sensitive: 0, context: 0 };
-const LANE_KEYS = ["local", "fast", "strong", "thinker", "codex_handoff", "lead_keeps", "unclear"];
+const DEFAULT_DECISION: DoubleDecision = { lane: "fast", confidence: 0.9, difficulty: 2, sensitive: 0, context: 0, };
+/** The five options the lane Choice actually offers — the double must spread mass over the same set. */
+const LANE_KEYS = ["local", "fast", "strong", "thinker", "unclear"];
 
 /** A 5-level distribution peaked at `level`; the rest of the mass spread evenly. */
 function scoreDistribution(level: number): Record<string, number> {

@@ -29,12 +29,25 @@ Three levels, highest wins, and a task with an explicit `model` is never routed 
 | Task | `model: "..."` on the task | That task. Wins over everything. |
 | Session | `routing: "jev" \| "rules" \| "off"` on the call | That `run_plan` / `delegate` call |
 | Environment | `BREAK_FREE_ROUTING=jev\|rules\|off` | Every call in that shell or harness session |
+| Project | `routing.engine` in `<repo>/.model-gateway.json` | This repo |
 | Global | `routing.engine` in `~/.config/model-gateway/config.json` | This machine |
-| Project | `routing.engine` in `<repo>/.model-gateway.json` | This repo — but a project may not turn on `jev` (see below) |
 
-**A project file cannot enable Jev.** A cloned repo must not be able to send its own source to a
-third-party model; egress stays a user-level decision. `routing.engine: "jev"` in a project config
-is ignored, and `rules`/`off` are honoured.
+All three places you would expect to stand — session, project, global — can turn Jev on **or** off,
+and the narrower one wins. A project file overrides the global setting, and a session parameter
+overrides both.
+
+**A project can enable Jev, and you can veto that.** A repo's `.model-gateway.json` is committed
+and read from the workspace, so point it at `jev` and everyone who clones that repo routes through
+TypeSafe. That is the same egress the file already has through `defaults.model`, so it is allowed by
+default — but if you want every routing decision to stay on your machine, set this in **your user
+config**, where no repo can reach it:
+
+```json
+{ "routing": { "projectMayEnableJev": false } }
+```
+
+Projects may then still ask for `rules` or `off`, just not `jev`. The flag is only ever read from
+the user config, so a repo cannot lift its own restriction.
 
 ## The engines
 
@@ -229,6 +242,57 @@ need real crew runs with `verify` outcomes, which is what the scorecards collect
 Jev is not "just rules": 71.67% vs 53.33% exact, 83.67% vs 63.27% on crew lanes, and 6.98% vs
 31.03% under-routing. The rules engine also *looks* cheaper (64.1% vs 49.4%) precisely because it
 under-routes three times as often — that is the trade the guardrail exists to catch.
+
+### Ten real workflows, routed four ways
+
+The bench scores flat subtasks. `bf scenarios` scores **work**: ten plans a user would actually hand
+to an agent — ship a feature, fix a flaky test, upgrade a dependency, add auth, chase a performance
+regression, add CI, split a god-module, add logging, harden the payment path, write a migration
+guide — 80 tasks in total. Each scenario is routed as its own plan, the way `run_plan` does it,
+through four arms: `jev`, `rules`, `off` (no routing at all — every task on `defaults.model`), and
+`lead` (the expert label, the bar to beat).
+
+Measured live, 2026-09-19 (`jev-1.13.0`):
+
+```
+right lane     jev 70%   rules 45%   off 25%   lead 100%
+under-routed   jev  4%   rules 33%   off 45%   lead   0%
+escalated      jev 17/80
+crew cost      jev $0.7823  (50.5% below all-strong, 20.8% below the lead's own picks)
+routing time   jev 6530 ms for 10 plans (653 ms/plan)   rules ~0 ms
+decision cost  $0.004036 for 10 routing calls covering 80 tasks
+```
+
+The second line is the one that matters. **Doing nothing is the most dangerous policy**: with no
+routing, 45% of tasks go to a lane weaker than the one that actually passes. Static rules get that
+to 33%; Jev gets it to 4%. And Jev's crew bill is **20.8% below the expert lead's own picks**,
+because the labels are conservative and Jev reliably finds the cheaper lane that still passes.
+
+Per-scenario detail, one line each, and the full tables: `bf scenarios`. It is offline by default
+and reproducible — the recording carries the live latency, so a replay does not report its own
+near-zero local time as the routing time, and crew cost is priced from the **shipped** alias and
+price table rather than your local overrides, or the same run would print different money on
+different machines.
+
+### What we tried and rejected
+
+Splitting `codex_handoff`, `lead_keeps` and `unclear` out of the lane Choice and into their own Noul
+questions looked obviously right: three of the seven options are not lanes, and they were diluting
+the distribution over the four that are. It was implemented, measured live, and **reverted**:
+
+| | 7-option Choice (shipped) | 5 options + Nouls |
+| --- | --- | --- |
+| exact lane agreement | 43/60 | 42/60 |
+| crew-lane agreement | 41/49 | 37/49 |
+| mean lane confidence | 0.887 | **0.921** |
+| questions per task | 4 | 6 |
+
+The dilution was real — confidence rose exactly as predicted — but it did not buy better lanes, and
+three of the four lost agreements were cosmetic (`codex_handoff` maps to `strong`, so the same model
+ran either way). A separate "does the user need to decide this?" question also could not separate a
+product decision from a technical design decision: the two groups overlapped across 0.75–0.90, so it
+fired on design questions that the `thinker` lane exists to serve. Two more questions per task for
+no measured gain is not a trade worth making, so the seven-option Choice stays.
 
 ## Honesty notes
 

@@ -425,6 +425,14 @@ export function buildState(
 /**
  * One Choice + one Score + two Nouls per task.
  *
+ * The Choice offers all seven lanes, including `codex_handoff`, `lead_keeps` and `unclear`.
+ * Splitting the last three out into their own Noul questions was tried and measured, and it did
+ * not help: exact lane agreement went 43/60 -> 42/60, crew-lane agreement 41/49 -> 37/49, and the
+ * three meta-asks cost two more questions per task (see docs/routing.md, "What we tried and
+ * rejected"). A separate "does the user need to decide this?" question could not separate a
+ * product decision from a technical design decision — the two groups overlapped on the same
+ * confidence band — so it fired on design questions that the `thinker` lane exists to serve.
+ *
  * Every instruction starts by pointing at the exact slot in the state the question is about, and
  * this is load-bearing: **TypeSafe never sends the question key to the model** ("the key is not
  * sent to the underlying model and is not used in inference"), so `core-limiter__sensitive` tells

@@ -145,6 +145,60 @@ describe("policy rules run before any model", () => {
   });
 });
 
+describe("turning Jev on and off at session, project and global level", () => {
+  /** A workspace with its own committed `.model-gateway.json`, and a separate user config. */
+  function level(project, user = {}) {
+    const ws = fs.mkdtempSync(path.join(tmp, "ws-"));
+    if (Object.keys(project).length) fs.writeFileSync(path.join(ws, ".model-gateway.json"), JSON.stringify(project));
+    const userFile = path.join(ws, "user.json");
+    fs.writeFileSync(userFile, JSON.stringify(user));
+    return loadConfig({ workspaceRoot: ws, configPath: userFile }).config;
+  }
+
+  test("global: the user config sets the engine for every repo", () => {
+    assert.equal(level({}, { routing: { engine: "jev" } }).routing.engine, "jev");
+    assert.equal(level({}, { routing: { engine: "rules" } }).routing.engine, "rules");
+    assert.equal(level({}).routing.engine, "off", "and the default is off");
+  });
+
+  test("project: a repo can turn Jev on for itself, and it beats the global setting", () => {
+    const c = level({ routing: { engine: "jev", threshold: 0.8 } }, { routing: { engine: "rules" } });
+    assert.equal(c.routing.engine, "jev");
+    assert.equal(c.routing.threshold, 0.8);
+  });
+
+  test("project: the user can veto it with projectMayEnableJev: false", () => {
+    const c = level({ routing: { engine: "jev" } }, { routing: { engine: "rules", projectMayEnableJev: false } });
+    assert.equal(c.routing.engine, "rules", "the repo's Jev request is dropped, the user's engine stands");
+    // a repo may still opt itself down, or into the offline engine
+    assert.equal(level({ routing: { engine: "off" } }, { routing: { engine: "jev" } }).routing.engine, "off");
+    assert.equal(level({ routing: { engine: "rules" } }, { routing: { engine: "jev", projectMayEnableJev: false } }).routing.engine, "rules");
+  });
+
+  test("project: a repo cannot lift the user's restriction itself", () => {
+    const c = level({ routing: { engine: "jev", projectMayEnableJev: true } }, { routing: { projectMayEnableJev: false } });
+    assert.equal(c.routing.engine, "off", "the flag is read from the user config only");
+    assert.notEqual(c.routing.projectMayEnableJev, true);
+  });
+
+  test("session: the call parameter and the env var beat both files", () => {
+    const c = level({ routing: { engine: "jev" } }, { routing: { engine: "jev" } });
+    assert.deepEqual(resolveEngine(c.routing.engine, "off", undefined), { engine: "off", source: "call" });
+    assert.deepEqual(resolveEngine(c.routing.engine, undefined, "rules"), { engine: "rules", source: "env" });
+    assert.deepEqual(resolveEngine(c.routing.engine, "off", "rules"), { engine: "off", source: "call" }, "the call wins over the env var");
+    assert.deepEqual(resolveEngine(c.routing.engine, undefined, undefined), { engine: "jev", source: "config" });
+  });
+
+  test("engine off means no routing work at all, at every level", async () => {
+    const off = level({ routing: { engine: "off" } });
+    const before = mock.requests.length;
+    const r = await routePlanTasks(off, [task("a"), task("b")], { engine: "off" });
+    assert.deepEqual(r.decisions, []);
+    assert.equal(mock.requests.length, before);
+    assert.equal(r.engine, "off");
+  });
+});
+
 describe("the rules engine is deterministic and needs no key", () => {
   const cases = [
     ["Update the README and CHANGELOG", "fast"],

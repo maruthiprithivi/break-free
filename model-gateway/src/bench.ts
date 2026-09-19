@@ -17,7 +17,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { GatewayConfig } from "./config.js";
-import { DEFAULT_LANE_MAP, priceFor } from "./config.js";
+import { DEFAULT_LANE_MAP, priceFor, withDefaultPricing } from "./config.js";
 import { resolveCandidates } from "./router.js";
 import type { RouteDecision, RoutingEngine } from "./routing.js";
 import { LANE_TIER } from "./routing.js";
@@ -112,13 +112,15 @@ export interface BenchMetrics {
 
 const round = (n: number, dp = 2) => Math.round(n * 10 ** dp) / 10 ** dp;
 
-/** Cost of one task on a lane, from the lane's mapped alias and the declared token budget. */
+/** Cost of one task on a lane, from the lane's mapped alias and the declared token budget,
+ * priced against the SHIPPED alias/price table so the figure is the same on every machine. */
 export function laneCostUsd(config: GatewayConfig, lane: string): number {
+  const priced = withDefaultPricing(config);
   const spec = (DEFAULT_LANE_MAP[lane] ?? config.routing.laneMap[lane]) as string | null | undefined;
   if (!spec) return 0; // escalated: the lead does it, no crew spend
-  const cand = resolveCandidates(config, spec, { useGlobalChain: false })[0];
+  const cand = resolveCandidates(priced, spec, { useGlobalChain: false })[0];
   if (!cand) return 0;
-  const p = priceFor(config, cand.provider.name, cand.model);
+  const p = priceFor(priced, cand.provider.name, cand.model);
   return (ASSUMED_TOKENS_PER_TASK.input * p.input + ASSUMED_TOKENS_PER_TASK.output * p.output) / 1_000_000;
 }
 

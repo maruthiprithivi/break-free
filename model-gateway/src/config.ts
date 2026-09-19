@@ -169,6 +169,13 @@ const ConfigSchema = z.object({
        * existing install. Turn it on globally here, or per call with the `routing` parameter.
        */
       engine: z.enum(["jev", "rules", "off"]).default("off"),
+      /**
+       * USER config only, never read from a project. Whether a repo's `.model-gateway.json` may set
+       * `engine: "jev"` for itself. Allowed by default because a project can already choose any
+       * remote model through `defaults.model`; set it false to keep every routing decision on this
+       * machine, in which case a project may still ask for `rules` or `off`.
+       */
+      projectMayEnableJev: z.boolean().default(true),
       /** Jev confidence below this goes back to the lead instead of guessing a lane */
       threshold: z.number().min(0).max(1).default(0.7),
       /** lane -> model spec handed to run_plan (defaults to DEFAULT_LANE_MAP). `null` escalates that lane to the lead. */
@@ -365,6 +372,18 @@ export const DEFAULT_LANE_MAP: Record<string, string | null> = {
   unclear: null,
 };
 
+/**
+ * A config whose aliases and prices are the SHIPPED defaults, for cost figures in a report.
+ *
+ * Crew cost is meant to be comparable and reproducible: if it were priced through your local
+ * `aliases`/`pricing` overrides, the same run would print different money on different machines
+ * (and an alias pointing at a model with no price would silently cost $0). Routing *behaviour*
+ * still uses your config; only the price table is pinned.
+ */
+export function withDefaultPricing(config: GatewayConfig): GatewayConfig {
+  return { ...config, aliases: DEFAULT_ALIASES, pricing: DEFAULT_PRICING };
+}
+
 export function priceFor(config: GatewayConfig, provider: string, model: string): { input: number; output: number; priced: boolean } {
   const table = { ...DEFAULT_PRICING, ...config.pricing };
   const p = table[`${provider}/${model}`] ?? table[provider];
@@ -408,19 +427,22 @@ function deepMerge<T>(a: T, b: unknown): T {
 }
 
 const PROJECT_PROVIDER_KEYS = new Set(["defaultModel", "enabled", "supportsTools", "timeoutMs", "extraBody", "label"]);
-export function sanitizeProjectConfig(j: unknown): Record<string, unknown> {
+export function sanitizeProjectConfig(j: unknown, opts: { projectMayEnableJev?: boolean } = {}): Record<string, unknown> {
   if (!j || typeof j !== "object") return {};
   const src = j as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   // Only project-tunable, non-sensitive settings are copied. `github`, `mode` and `mergeAutonomy`
   // are intentionally omitted so a cloned repo can never grant itself push or merge rights.
   for (const k of ["defaults", "aliases", "fallback", "policy", "steward", "pricing"]) if (k in src) out[k] = src[k]; // policy can only add restrictions, so a project may declare it
-  // Routing is allowed at project scope (a repo may declare its own lanes), EXCEPT that a cloned
-  // repo must not be able to turn on `jev`: that would send the repo's own task text to a
-  // third-party model. Egress stays a user-level decision.
+  // Routing is project-tunable, so a repo can pin its own lanes and thresholds. Whether a project
+  // may point the router at TypeSafe is the user's call: it is the same egress a project already
+  // gets from `defaults.model`, so it is allowed by default and can be locked down with
+  // `routing.projectMayEnableJev: false` in the USER config. `projectMayEnableJev` itself is never
+  // read from a project, or a repo could lift its own restriction.
   if (src.routing && typeof src.routing === "object") {
     const r = { ...(src.routing as Record<string, unknown>) };
-    if (r.engine === "jev") delete r.engine;
+    delete r.projectMayEnableJev;
+    if (r.engine === "jev" && opts.projectMayEnableJev === false) delete r.engine;
     out.routing = r;
   }
   if (src.providers && typeof src.providers === "object") {
@@ -449,12 +471,16 @@ export function loadConfig(opts: { workspaceRoot?: string; configPath?: string }
     raw = deepMerge(raw, userJson);
     sources.push(userPath);
   }
+  // The gate that decides whether a project file may point the router at TypeSafe. Read from the
+  // USER config only — never from the project, or a repo could lift its own restriction.
+  const userRouting = (userJson as { routing?: { projectMayEnableJev?: unknown } } | undefined)?.routing;
+  const projectMayEnableJev = userRouting?.projectMayEnableJev !== false;
   // The project file lives in a repo you may have just cloned: it is UNTRUSTED. It may tune
   // defaults/aliases/fallback and pick provider models, but never redirect keys, widen the jail,
   // or relax git/GitHub policy.
   const projectJson = readJson(projectPath);
   if (projectJson !== undefined) {
-    raw = deepMerge(raw, sanitizeProjectConfig(projectJson));
+    raw = deepMerge(raw, sanitizeProjectConfig(projectJson, { projectMayEnableJev }));
     sources.push(projectPath);
   }
   // zod fills defaults, so presence of an explicit value can only be detected on the raw merged object.

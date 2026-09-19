@@ -18,6 +18,7 @@ import { loadConfig, userConfigPath, type GatewayConfig } from "./config.js";
 import { routePlanTasks, type RouteDecision, type RouteResult, type RoutingEngine, type RouteTaskInput } from "./routing.js";
 import { ASSUMED_TOKENS_PER_TASK, benchEngineLabel, decisionArm, laneCostUsd, leadArm, loadLabeledSet, renderBenchTable, scoreArm, unmeasuredLlmArm, type LabeledTask, type RouterArm } from "./bench.js";
 import { startTypeSafeDouble, type DoubleDecision, type TypeSafeDouble } from "./jev-double.js";
+import { loadScenarios, recordScenarioDecisions, renderScenarioDigest, renderScenarioReport, routedArm, scoreScenario, staticArms, totals, type ScenarioRecording, type ScenarioScore, type ScenarioTask } from "./scenarios.js";
 
 const REPO_BENCH = new URL("../bench/", import.meta.url).pathname;
 const DEFAULT_RECORDING = path.join(REPO_BENCH, "jev-recording.json");
@@ -83,11 +84,19 @@ export function renderRouteTable(r: RouteResult): string {
   ].join("\n");
 }
 
-/** The offline decision source: a recorded set replayed through the real client and router. */
-async function offlineDouble(recordFile: string): Promise<TypeSafeDouble & { source: string }> {
-  const raw = fs.existsSync(recordFile) ? (JSON.parse(fs.readFileSync(recordFile, "utf8")) as { decisions?: Record<string, DoubleDecision> }) : { decisions: {} };
-  const double = await startTypeSafeDouble({ decisions: raw.decisions ?? {} });
-  return Object.assign(double, { source: recordFile });
+/**
+ * The offline decision source: a recorded set replayed through the real client and router.
+ *
+ * A missing recording is an error, not a silent fallback: the double would answer its default
+ * (`fast`) for every task, which looks like a plausible result and is not one. Better to say so.
+ */
+async function offlineDouble(recordFile: string): Promise<TypeSafeDouble & { source: string; record: Partial<ScenarioRecording> }> {
+  if (!fs.existsSync(recordFile)) {
+    throw new Error(`no recorded decisions at ${recordFile}\n  run this once with --live to capture them (needs TYPESAFE_API_KEY), or point --record at an existing recording`);
+  }
+  const raw = JSON.parse(fs.readFileSync(recordFile, "utf8")) as ScenarioRecording;
+  const double = await startTypeSafeDouble({ decisions: (raw.decisions ?? {}) as Record<string, DoubleDecision> });
+  return Object.assign(double, { source: recordFile, record: raw });
 }
 
 function offlineRouting(recordFile: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
@@ -275,6 +284,64 @@ function countBy(decisions: RouteDecision[]): Record<string, number> {
   return out;
 }
 
+// ------------------------------------------------------------------ bf scenarios
+async function cmdScenarios(flags: Record<string, string | boolean>): Promise<number> {
+  const setFile = typeof flags.set === "string" ? flags.set : path.join(REPO_BENCH, "scenarios.json");
+  const scenarios = loadScenarios(setFile);
+  if (!scenarios.length) {
+    console.error(`no scenarios in ${setFile}`);
+    return 2;
+  }
+  const live = flags.live === true;
+  const recordFile = typeof flags.record === "string" ? flags.record : path.join(REPO_BENCH, "scenario-recording.json");
+  const double = live ? undefined : await offlineDouble(recordFile);
+  try {
+    const jevConfig = configFor({
+      providers: double ? { typesafe: { baseUrl: double.url, apiKey: "bf-offline" } } : {},
+      routing: live ? { engine: "jev" } : offlineRouting(double!.source),
+    });
+    const rulesConfig = configFor({ routing: { engine: "rules" } });
+
+    const scores: ScenarioScore[] = [];
+    const recorded: { scenario: string; tasks: ScenarioTask[]; decisions: RouteDecision[] }[] = [];
+    const latency: Record<string, { ms: number; call_usd: number }> = {};
+    let answeredByJev = false;
+    for (const sc of scenarios) {
+      // One decision pass per scenario, the same shape run_plan uses — so the latency reported
+      // below is the latency a real plan pays for its routing.
+      const jev = await routePlanTasks(jevConfig, sc.tasks, { goal: sc.title, engine: "jev" });
+      const rules = await routePlanTasks(rulesConfig, sc.tasks, { goal: sc.title, engine: "rules" });
+      const statics = staticArms(jevConfig, sc.tasks);
+      const arms = [routedArm("jev", live ? "Jev (live)" : "Jev (replayed from a live recording)", jev), routedArm("rules", "static rules", rules), statics.off, statics.lead];
+      // Replaying answers locally in milliseconds; report the LIVE measurement instead, and say so.
+      const prev = double?.record.latency?.[sc.id];
+      scores.push(scoreScenario(jevConfig, sc, arms, live || !prev ? { jev: jev.ms, rules: rules.ms } : { jev: prev.ms, rules: rules.ms }));
+      if (jev.answered_by === "jev") answeredByJev = true;
+      if (live && jev.answered_by === "jev") {
+        recorded.push({ scenario: sc.id, tasks: sc.tasks, decisions: jev.decisions });
+        latency[sc.id] = { ms: jev.ms, call_usd: jev.cost_usd };
+      }
+    }
+
+    const t = totals(scores, {
+      jev: { label: live ? "Jev (live)" : "Jev (replayed)", measured: answeredByJev, ...(answeredByJev ? {} : { note: "Jev did not answer; the jev column is rules" }) },
+      rules: { label: "static rules", measured: true },
+      off: { label: "no routing", measured: true },
+      lead: { label: "lead picks (expert)", measured: true },
+    });
+    if (live && recorded.length) recordScenarioDecisions(recordFile, recorded, "jev", latency);
+    if (flags.json) console.log(JSON.stringify({ meta: { file: setFile, live, scenarios: scenarios.length, tasks: t.tasks }, totals: t, scores }, null, 2));
+    else {
+      console.log(renderScenarioReport(scores, t, { live, file: recordFile }));
+      console.log("\n## One line per scenario\n");
+      console.log(renderScenarioDigest(scores));
+    }
+    return 0;
+  } finally {
+    await double?.close();
+  }
+}
+
 const HELP = `bf — Break Free command line
 
   bf route --plan <file.json|file.jsonl> [--engine jev|rules|off] [--threshold 0.7] [--json]
@@ -298,6 +365,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   if (cmd === "route") return cmdRoute(flags);
   if (cmd === "bench" && sub === "route") return cmdBench(flags);
   if (cmd === "demo") return cmdDemo(flags);
+  if (cmd === "scenarios") return cmdScenarios(flags);
   console.log(HELP);
   return cmd === "help" || cmd === "--help" ? 0 : 2;
 }
