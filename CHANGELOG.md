@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.5.0 — 2026-09-19
 
 - **Fix: the suite failed under the runner's own file parallelism, not under CPU load.** `test/gateway.test.mjs` set `defaults.timeoutMs: 1500`, and config precedence makes that the client deadline for *every* mock call, so a loopback round trip under contention failed a test on a timeout unrelated to what it asserted. Two attempts to reproduce with pure CPU load failed (8 and 10 `yes` hogs, 46/46 green); running **8 concurrent instances of the file** — what the default runner does across a 10-core box — produced **4 of 8 red runs at load ~49**, and the same setup with the fix produced **8/8 green and zero timeouts**. The fixture default is now 8000 ms, and the one test that deliberately exercises the timeout path takes its 1500 ms deadline from a provider entry (`mockshort`) so the override stays load-bearing — a negative control with that deadline forced to 20 s makes the test fail, i.e. the timeout path cannot silently stop being exercised.
 - **Fix: a test that could not pass on its own.** `review returns a parsed JSON verdict...` asks for `use_git_diff: "HEAD~1"` while the fixture makes exactly one commit, so it only worked because an earlier test happened to commit a second revision — running it alone failed with `SyntaxError: Unexpected token 'E', "ERROR: git"...`, and when that earlier test flaked this one failed with it (the 197/199 pattern). It now commits its own second revision and asserts the diff names the file it committed.
