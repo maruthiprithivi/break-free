@@ -428,6 +428,15 @@ export const DEFAULT_PRICING: Record<string, { input: number; output: number }> 
   "deepseek/deepseek-v4-pro": { input: 0.55, output: 2.19 },
   "deepseek/deepseek-chat": { input: 0.27, output: 1.1 },
   "deepseek/deepseek-reasoner": { input: 0.55, output: 2.19 },
+  // DeepSeek's current published model name, from api-docs.deepseek.com/quick_start/pricing
+  // (fetched 2026-09-19). PEAK cache-miss input and peak output, not the off-peak rates (exactly
+  // half): which half of the clock a run lands in is not knowable in advance, and a report that
+  // understates is a wrong number rather than a cautious one. Cache-hit input ($0.006 peak) is
+  // cheaper than billed here; the table has one input rate, so it prices the miss.
+  // The same page notes the retired `deepseek-v4-flash` (the entry two lines up) is still served by
+  // this model at the Flash price. Re-pricing a shipped entry moves the published bench figures, so
+  // that stays a separate, re-measured change rather than a silent one.
+  "deepseek/deepseek-flash": { input: 0.3, output: 1.2 },
   "kimi/kimi-k3": { input: 0.6, output: 2.5 },
   "kimi/kimi-k2.7-code": { input: 0.6, output: 2.5 },
   "zai/glm-5.3": { input: 0.6, output: 2.2 },
