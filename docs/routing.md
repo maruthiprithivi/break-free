@@ -189,6 +189,7 @@ preview a plan, or to check one task, without spending a worker.
 bf route --plan bench/demo-plan.json --engine jev     # the route table
 bf bench route                                        # four routers, one table
 bf bench route --live --record bench/jev-recording.json   # real API, save the decisions
+bf bench route --llm gemini --live                        # add the frontier-LLM baseline
 bf demo                                               # 12-task plan, three ways
 ```
 
@@ -200,7 +201,7 @@ carrying the lane the lead would pick and the cheapest lane that actually passed
 | `lead` | The label itself — 100% by construction, and the cost baseline to beat |
 | `rules` | The deterministic engine, offline |
 | `jev` | TypeSafe System One: a recording offline, api.typesafe.ai with `--live` |
-| `llm` | A frontier model prompted as a router. Reported **unmeasured** without a provider key, never guessed |
+| `llm` | A frontier model prompted as a router. **Opt-in** (`--llm [provider/model]`): the bench is documented as offline, so it never quietly makes paid calls. Unmeasured unless asked, never guessed |
 
 `under %` is measured only over tasks the router was free to choose for; guardrail-forced tasks are
 reported separately as `forced %`. Mixing them would call a deliberately-kept-local task "too cheap".
@@ -214,7 +215,7 @@ router  exact %  crew %  ±1 tier %  under %  forced %  escal %  ms/plan  $/1000
 lead    100      100     100        0        0         13.33    0        $0       $0.537   54.7%
 rules   53.33    63.27   95.83      31.03    0         1.67     1.2      $0       $0.4258  64.1%
 jev     71.67    83.67   100        6.98     18.33     10       311.4    $0.0544  $0.6003  49.4%
-llm     unmeasured
+llm     unmeasured   (this run predates --llm)
 ```
 
 `crew %` is agreement over the 49 tasks whose expert label is a real crew lane. The other 11 are
@@ -234,7 +235,7 @@ Against the brief's targets, with the misses stated:
 | 7 | Routing cost | ≤ $0.001/plan | $0.000663 | pass |
 | 9 | Escalation band | 10–25% | 10% | pass, bottom edge |
 | 10 | Policy safety | never cheaper than policy | 18.33% forced, 0 violations | pass |
-| 11 | Beats the LLM router | ≥ 20× faster, ≥ 50× cheaper | — | unmeasured, no frontier key |
+| 11 | Beats the LLM router | ≥ 20× faster, ≥ 50× cheaper **at equal agreement (±5pt)** | 47.7× faster ✓, 45.1× cheaper ✗, **23.3pt behind on agreement** ✗ | **fail** — see below |
 
 Not measured here: criteria 2, 3 and 8 (first-pass and after-retry pass rates, calibration) — they
 need real crew runs with `verify` outcomes, which is what the scorecards collect.
@@ -242,6 +243,49 @@ need real crew runs with `verify` outcomes, which is what the scorecards collect
 Jev is not "just rules": 71.67% vs 53.33% exact, 83.67% vs 63.27% on crew lanes, and 6.98% vs
 31.03% under-routing. The rules engine also *looks* cheaper (64.1% vs 49.4%) precisely because it
 under-routes three times as often — that is the trade the guardrail exists to catch.
+
+### The frontier-LLM baseline: measured, and it does not flatter Jev
+
+Criterion 11 asks whether Jev beats "a frontier LLM prompted as a router" — ≥20× faster and ≥50×
+cheaper **at equal agreement (±5 points)**. `--llm` now measures it for real: the same 60 tasks, the
+same lane definitions Jev gets (`LANE_SPEC`, verbatim), the same task facts, batched 12 tasks per
+call exactly as the `ms/plan` column assumes, priced from the usage the API actually reports.
+
+```
+router  exact %  crew %  ±1 tier %  under %  forced %  escal %  ms/plan  $/1000   $ plan   vs strong
+jev     71.67    83.67   100        6.98     18.33     10       325.6    $0.0544  $0.6003  49.4%
+llm     95       93.88   100        6.12     0         13.33    15517    $2.4556  $0.5133  56.7%   gemini-3.1-pro-preview
+llm     91.67    89.8    100        6.12     0         13.33    12607    $1.9816  $0.545   54%     gemini-3.5-flash
+```
+
+**Verdict: criterion 11 fails, on two of its three clauses.**
+
+| | target | measured | |
+| --- | --- | --- | --- |
+| Speed | ≥ 20× faster | **47.7×** (pro), 40.6× (flash) | pass |
+| Routing cost | ≥ 50× cheaper | **45.1×** (pro), 36.4× (flash) | **miss** |
+| Agreement | within 5 points | **23.3 points behind** (pro), 20 (flash) | **fail** |
+
+The awkward part is the third row, and it is worth stating without decoration: prompted with the same
+lane definitions and the same task facts, Gemini 3.1 Pro agrees with the expert labels **95%** of the
+time against Jev's 71.67%. On 60 tasks it also picks a *cheaper* set of lanes that still pass
+(56.7% saved against all-`strong`, versus Jev's 49.4%). Jev wins on the two axes it was designed for —
+it is ~48× faster and ~45× cheaper per decision — and loses on judgement.
+
+So the honest claim is **"Jev is a cheap, fast dispatcher"**, not "Jev out-thinks a frontier model".
+The story in the brief — *the frontier model thinks, Jev decides* — survives only if you accept
+materially lower agreement with one expert's labels, and it is a cost decision, not an accuracy one.
+At routing spend of $0.0544 per 1,000 decisions, routing *every* subtask is affordable; at $2.46 it is
+a line item of its own. That is the trade, and it is the reader's to make.
+
+Two things to hold against this table:
+
+- **The baseline is not policy-constrained.** Jev's lane is post-policy (`forced 18.33%` — 11 of 60
+  tasks were kept local or pushed to `strong` by the guardrail); the LLM arm answers the raw question,
+  so part of its agreement edge is the policy layer it never had to obey. Closing that gap means
+  running the baseline's lanes through the same reconciliation, which has not been done.
+- **One set, one expert's labels, one prompt, one run each.** `lead_lane` is a single author's
+  opinion; "agreement" here means agreement with that, not with truth.
 
 ### Ten real workflows, routed four ways
 
@@ -316,10 +360,10 @@ a different object: "what did this hunk just do?". Same client, same probability
 answer, same ledger discipline; see [tripwire.md](tripwire.md) for its thresholds and its measured
 false-flag rate.
 
-### Two bugs the live API found that the mock could never have
+### Three bugs the live API found that the mock could never have
 
-Both were caught the first time real decisions were compared with the replay, and both would have
-shipped silently otherwise:
+All three were caught by running against the real API rather than the double, and all three would
+have shipped silently otherwise:
 
 1. **Jev never saw which task each question was about.** The docs say the question key *is not sent
    to the model*, so `core-limiter__sensitive` told it nothing — and a question asking about "this
@@ -332,3 +376,12 @@ shipped silently otherwise:
    `400 max_tokens_exceeded`. `routing.maxRequestTokens` (default 24k) now splits a plan into
    several requests that each fit — which also gives each chunk a smaller, untrimmed state — and
    `route`/`bf` report the request count.
+
+3. **The cost of a reasoning router was undercounted by ~4×.** Google's OpenAI-compatibility layer
+   reports only the *visible* answer in `completion_tokens` while billing the thinking tokens as
+   output; one real request came back `completion_tokens: 2, total_tokens: 600` for a two-token
+   reply. Costing the baseline from `completion_tokens` therefore charged it $0.556 per 1,000
+   decisions when the truth was $2.46 — a bug that flattered break-free's own router against the
+   exact comparison criterion 11 is about. `costUsd` now bills output as
+   `max(completion_tokens, total_tokens - prompt_tokens)`, and the arm reports how many of those
+   tokens were thinking so the number is auditable.

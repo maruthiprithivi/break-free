@@ -360,18 +360,35 @@ server.registerTool("test_provider", {
       continue;
     }
     try {
-      const r = await chatCompletion(c.provider, { model: c.model, messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 16, temperature: 0 }, { timeoutMs: 60_000 });
-      const row: Record<string, unknown> = { spec: c.spec, ok: true, ms: Date.now() - started, reply: (r.message.content ?? "").trim().slice(0, 80), usage: r.usage };
+      // Reasoning models spend output tokens thinking BEFORE producing any visible text, and on these
+      // providers the thinking is billed but not always reported in `completion_tokens`. A 16- or
+      // 64-token cap can therefore be consumed entirely by thinking, so the probe reports an empty
+      // reply and "tools may be unsupported" for a model whose tools work fine. Give the budget room
+      // and, when it runs out anyway, say THAT rather than blaming the tools.
+      const r = await chatCompletion(c.provider, { model: c.model, messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 512, temperature: 0 }, { timeoutMs: 60_000 });
+      const reply = (r.message.content ?? "").trim();
+      const row: Record<string, unknown> = {
+        spec: c.spec,
+        ok: true,
+        ms: Date.now() - started,
+        reply: reply.slice(0, 80),
+        usage: r.usage,
+        ...(!reply && r.finishReason === "length" ? { note: "the 512-token budget was spent before any visible reply — this model reasons first; raise maxTokens to reach the answer" } : {}),
+      };
       if (with_tools !== false && c.provider.supportsTools) {
         try {
           const t = await chatCompletion(c.provider, {
             model: c.model,
             messages: [{ role: "user", content: "Call the tool `ping` with argument {\"n\": 1}." }],
             tools: [{ type: "function", function: { name: "ping", description: "ping", parameters: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] } } }],
-            max_tokens: 64,
+            max_tokens: 2048,
             temperature: 0,
           }, { timeoutMs: 60_000 });
-          row.tool_calling = t.message.tool_calls?.length ? "ok" : "model answered without calling the tool (tools may be unsupported or ignored)";
+          row.tool_calling = t.message.tool_calls?.length
+            ? "ok"
+            : t.finishReason === "length"
+              ? "no call returned — the token budget ran out first (this model reasons before answering), which is NOT evidence that tools are unsupported"
+              : "model answered without calling the tool (tools may be unsupported or ignored)";
         } catch (e) {
           row.tool_calling = `error: ${(e as Error).message.slice(0, 200)}`;
         }

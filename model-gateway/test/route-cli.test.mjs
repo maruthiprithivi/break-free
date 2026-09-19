@@ -103,8 +103,13 @@ test("bf bench route scores the four routers, and pins what Jev misses as well a
 
   // every router is present, and the one that cannot run says so instead of guessing
   assert.deepEqual(Object.keys(by).sort(), ["jev", "lead", "llm", "rules"]);
+  // The frontier-LLM arm is opt-in: the bench is documented as offline, so it must not quietly make
+  // paid API calls. Unmeasured here, and it says how to measure it.
   assert.equal(by.llm.measured, false);
-  assert.match(by.llm.note, /provider key/);
+  assert.match(by.llm.note, /--llm \[provider\/model\]/);
+  // An arm that did not run must not carry derived numbers a JSON consumer could quote.
+  assert.equal(by.llm.agreement_exact_pct, 0);
+  assert.equal(by.llm.cost_per_1000_decisions_usd, 0);
 
   // the lead is the accuracy ceiling by construction: it IS the label
   assert.equal(by.lead.agreement_exact_pct, 100);

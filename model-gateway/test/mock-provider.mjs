@@ -53,6 +53,14 @@ export function startMockProvider({ apiKey = "test-key", port = 0 } = {}) {
       // Responses-shim test: echo the transcript shape so the test can assert the translation
       if (model === "shape") return reply(JSON.stringify({ roles: messages.map((m) => m.role), tools: (tools ?? []).map((t) => t.function.name), tool_msgs: messages.filter((m) => m.role === "tool").map((m) => m.tool_call_id), extra: { temperature: j.temperature, max_tokens: j.max_tokens, tool_choice: j.tool_choice } }));
 
+      // The frontier-LLM-as-router baseline answers with one lane per task id from the state it was
+      // handed. Alternating local/strong, so a test asserts the ARM's plumbing, not a model's mood.
+      if (/You route software engineering subtasks/.test(system)) {
+        let ids = [];
+        try { ids = (JSON.parse(last.content)?.tasks ?? []).map((t) => t.id); } catch { /* empty */ }
+        return reply(JSON.stringify(ids.map((id, i) => ({ id, lane: i % 2 === 1 ? "strong" : "local" }))));
+      }
+
       // Reviewer / supervisor personas answer with JSON.
       if (/independent, skeptical code reviewer/.test(system)) {
         return reply(JSON.stringify({ verdict: "revise", confidence: 0.8, summary: "mock review", issues: [{ severity: "major", file: "src/app.js", line: 1, title: "no tests", detail: "no tests", suggestion: "add tests" }], strengths: [], questions: [] }));

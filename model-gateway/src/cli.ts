@@ -16,7 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { loadConfig, userConfigPath, type GatewayConfig } from "./config.js";
 import { routePlanTasks, type RouteDecision, type RouteResult, type RoutingEngine, type RouteTaskInput } from "./routing.js";
-import { ASSUMED_TOKENS_PER_TASK, benchEngineLabel, decisionArm, laneCostUsd, leadArm, loadLabeledSet, renderBenchTable, scoreArm, unmeasuredLlmArm, type LabeledTask, type RouterArm } from "./bench.js";
+import { ASSUMED_TOKENS_PER_TASK, benchEngineLabel, decisionArm, laneCostUsd, leadArm, llmRouterArm, loadLabeledSet, renderBenchTable, scoreArm, unmeasuredLlmArm, type LabeledTask, type RouterArm } from "./bench.js";
 import { startTypeSafeDouble, type DoubleDecision, type TypeSafeDouble } from "./jev-double.js";
 import { loadScenarios, recordScenarioDecisions, renderScenarioDigest, renderScenarioReport, routedArm, scoreScenario, staticArms, totals, type ScenarioRecording, type ScenarioScore, type ScenarioTask } from "./scenarios.js";
 import { laneFor, renderValidation, summarise, toValidateTasks, type RawValidateTask, type TaskOutcome, type ValidateArm, type ValidateTask } from "./validate.js";
@@ -187,7 +187,16 @@ async function cmdBench(flags: Record<string, string | boolean>): Promise<number
     }
   }
 
-  arms.push(unmeasuredLlmArm("needs a frontier provider key: set one with the configure_provider tool, then this arm sends the same tasks through a chat model prompted as a router"));
+  // The frontier-LLM-as-router baseline (criterion 11). It is opt-in: `bf bench route` is documented
+  // as an offline command, and quietly making paid API calls from it would be a nasty surprise.
+  if (flags.llm === undefined) {
+    arms.push(unmeasuredLlmArm("not run: pass --llm [provider/model] to send the same tasks through a chat model prompted as a router (needs that provider's key, and it costs money)"));
+  } else {
+    const llmSpec = typeof flags.llm === "string" ? flags.llm : "gemini";
+    const { arm: llmArm, stats } = await llmRouterArm(configFor({}), set, { spec: llmSpec });
+    arms.push(llmArm);
+    if (llmArm.measured) console.error(`llm arm: ${stats.spec} · ${stats.chunks} call(s) · ${stats.input_tokens} in / ${stats.output_tokens} out tokens${stats.failures.length ? ` · ${stats.failures.length} unanswered` : ""}`);
+  }
 
   const metrics = arms.map((a) => scoreArm(rulesConfig, set, a));
   const meta = {
@@ -578,8 +587,8 @@ const COMMANDS: Record<string, { flags: string[]; usage: string }> = {
     usage: "bf route --plan <file.json|file.jsonl> [--engine jev|rules|off] [--threshold 0.7] [--live] [--record <file>] [--json]\n    Decide which model runs each task. Same code path run_plan uses. Nothing is run.",
   },
   "bench route": {
-    flags: ["set", "engine", "live", "record", "json"],
-    usage: "bf bench route [--set bench/route-set.jsonl] [--engine rules,jev] [--live] [--record <file>] [--json]\n    Score lead picks, static rules and Jev against the labelled set. Offline it replays\n    bench/jev-recording.json; --live calls api.typesafe.ai (needs TYPESAFE_API_KEY) and writes the\n    capture with --record. A frontier-LLM-as-router arm needs a chat provider key (e.g. GEMINI_API_KEY).",
+    flags: ["set", "engine", "live", "record", "json", "llm"],
+    usage: "bf bench route [--set bench/route-set.jsonl] [--engine rules,jev] [--live] [--llm [spec]] [--record <file>] [--json]\n    Score lead picks, static rules and Jev against the labelled set. Offline it replays\n    bench/jev-recording.json; --live calls api.typesafe.ai (needs TYPESAFE_API_KEY) and writes the\n    capture with --record. A frontier-LLM-as-router arm needs a chat provider key (e.g. GEMINI_API_KEY).",
   },
   "bench tripwire": {
     flags: ["set", "live", "record", "json"],

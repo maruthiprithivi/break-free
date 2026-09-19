@@ -416,6 +416,17 @@ export const DEFAULT_PRICING: Record<string, { input: number; output: number }> 
   "ollama": { input: 0, output: 0 },
   "vllm": { input: 0, output: 0 },
   "lmstudio": { input: 0, output: 0 },
+  // Google's published Standard paid-tier rates, per 1M tokens, from
+  // ai.google.dev/gemini-api/docs/pricing (fetched 2026-09-19). The Pro tier doubles above a 200k
+  // prompt, which no routing or tripwire prompt comes close to. OUTPUT IS PRICED INCLUDING THINKING
+  // TOKENS on these models, and thinking dominates — which is exactly why a reasoning model is an
+  // expensive router, and why that has to be priced rather than assumed.
+  "gemini/gemini-3.1-pro-preview": { input: 2.0, output: 12.0 },
+  "gemini/gemini-3.5-flash": { input: 1.5, output: 9.0 },
+  "gemini/gemini-3.6-flash": { input: 0.75, output: 3.75 },
+  // provider-level fallback for a gemini model with no entry of its own: the Pro tier, so an
+  // unpriced Gemini model is never accidentally reported as free.
+  "gemini": { input: 2.0, output: 12.0 },
   // TypeSafe charges input only ($0.042/Mtok); output tokens are free.
   "typesafe": { input: 0.042, output: 0 },
   "typesafe/jev-latest": { input: 0.042, output: 0 },
@@ -450,10 +461,24 @@ export function priceFor(config: GatewayConfig, provider: string, model: string)
   const p = table[`${provider}/${model}`] ?? table[provider];
   return p ? { ...p, priced: true } : { input: 0, output: 0, priced: false };
 }
-export function costUsd(config: GatewayConfig, provider: string, model: string, usage: { prompt_tokens?: number; completion_tokens?: number } | undefined): { usd: number; priced: boolean } {
+/**
+ * Bill what the API says it used.
+ *
+ * `completion_tokens` is not always the whole story: Google's OpenAI-compatibility layer reports only
+ * the VISIBLE answer there while billing the thinking tokens as output. Observed directly — one
+ * request came back `completion_tokens: 2, total_tokens: 600` for a two-token answer, so 598 billed
+ * output tokens were missing from the cheap field. Under-billing a provider is not caution, it is a
+ * wrong number, and here it would have flattered break-free's own router against the baseline it is
+ * being compared with. Output is billed as the larger of `completion_tokens` and
+ * `total_tokens - prompt_tokens`, and never less than the visible completion.
+ */
+export function costUsd(config: GatewayConfig, provider: string, model: string, usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined): { usd: number; priced: boolean; output_tokens: number } {
   const p = priceFor(config, provider, model);
-  const usd = ((usage?.prompt_tokens ?? 0) * p.input + (usage?.completion_tokens ?? 0) * p.output) / 1_000_000;
-  return { usd: Math.round(usd * 1e6) / 1e6, priced: p.priced };
+  const prompt = usage?.prompt_tokens ?? 0;
+  const completion = usage?.completion_tokens ?? 0;
+  const billedOutput = Math.max(completion, (usage?.total_tokens ?? 0) - prompt);
+  const usd = (prompt * p.input + billedOutput * p.output) / 1_000_000;
+  return { usd: Math.round(usd * 1e6) / 1e6, priced: p.priced, output_tokens: billedOutput };
 }
 
 export interface LoadedConfig {

@@ -17,10 +17,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { GatewayConfig } from "./config.js";
-import { DEFAULT_LANE_MAP, priceFor, withDefaultPricing } from "./config.js";
+import { costUsd, DEFAULT_LANE_MAP, priceFor, withDefaultPricing } from "./config.js";
 import { resolveCandidates } from "./router.js";
-import type { RouteDecision, RoutingEngine } from "./routing.js";
-import { LANE_TIER } from "./routing.js";
+import type { RouteDecision, RouteTaskInput, RoutingEngine } from "./routing.js";
+import { buildState, LANE_SPEC, LANES, LANE_TIER } from "./routing.js";
+import { chatCompletion, type ChatRequest } from "./client.js";
 
 /** Per-task token budget used for every cost figure in the bench. Declared, not measured. */
 export const ASSUMED_TOKENS_PER_TASK = { input: 20_000, output: 4_000 };
@@ -126,6 +127,17 @@ export function laneCostUsd(config: GatewayConfig, lane: string): number {
 
 /** Percentage of tasks whose routed lane is weaker than the cheapest lane that actually passed. */
 export function scoreArm(config: GatewayConfig, set: LabeledTask[], arm: RouterArm): BenchMetrics {
+  // An arm that did not run has no outcomes, and scoring an empty outcome map still produces numbers
+  // ("unclear" happens to match some labels) that a JSON consumer could quote. Zero them instead.
+  if (!arm.measured) {
+    return {
+      router: arm.name, label: arm.label, measured: false, ...(arm.note ? { note: arm.note } : {}), tasks: set.length,
+      agreement_exact_pct: 0, agreement_crew_lanes_pct: 0, crew_lane_tasks: 0, agreement_within_one_pct: 0,
+      under_routing_pct: 0, over_routing_pct: 0, free_choices: 0, forced_pct: 0, escalation_pct: 0,
+      ms_total: 0, ms_p50: 0, ms_per_plan: 0, cost_usd: 0, cost_per_1000_decisions_usd: 0,
+      cheapest_passing_plan_usd: 0, assumed_plan_cost_usd: 0, saved_vs_all_strong_pct: 0,
+    };
+  }
   let exact = 0;
   let crewExact = 0;
   let crewTotal = 0;
@@ -224,6 +236,157 @@ export function decisionArm(name: "rules" | "jev", label: string, decisions: Rou
 
 export function unmeasuredLlmArm(note: string): RouterArm {
   return { name: "llm", label: "frontier LLM as router", measured: false, note, ms: 0, cost_usd: 0, outcomes: new Map() };
+}
+
+/** Tasks per routing call. The bench reports `ms_per_plan` for a 12-task plan, so both routers are
+ * asked in 12-task batches and divided the same way — otherwise the LLM arm looks slow for being
+ * called 60 times where Jev is called once. */
+export const LLM_ROUTER_CHUNK = 12;
+
+export interface LlmRouterStats {
+  spec: string;
+  model: string;
+  chunks: number;
+  input_tokens: number;
+  /** Tokens the provider will bill as output, which includes thinking where the shim hides it. */
+  output_tokens: number;
+  /** Of those, the ones that were thinking: reported so the cost is auditable, not just computed. */
+  thinking_tokens: number;
+  /** False when the model is absent from the price table — the cost column would be a lie. */
+  priced: boolean;
+  /** Chunks that could not be answered or parsed, with the reason. Never silently treated as "allow". */
+  failures: string[];
+}
+
+const toRouteInput = (t: LabeledTask): RouteTaskInput => ({ id: t.id, title: t.title, task: t.task, acceptance: t.acceptance, verify: t.verify, files: t.files, tags: t.tags });
+
+/**
+ * The prompt for the frontier-LLM baseline (criterion 11).
+ *
+ * It gets the SAME lane definitions Jev gets — `LANE_SPEC`, verbatim, the same strings that go into
+ * Jev's Choice criteria — and the same task facts `buildState` hands Jev. A baseline that wins or
+ * loses on prompt wording would measure nothing; the only difference here is the model.
+ */
+export function llmRouterMessages(config: GatewayConfig, chunk: LabeledTask[]): { system: string; user: string } {
+  const lanes = LANES.map((l) => `- ${l}: ${LANE_SPEC[l].what}\n  NOT for: ${LANE_SPEC[l].not_for}\n  Examples: ${LANE_SPEC[l].examples}`).join("\n");
+  const system = [
+    "You route software engineering subtasks to the cheapest model that can do them well.",
+    `Assign each task exactly one lane:\n${lanes}`,
+    'Reply with a JSON array and nothing else — no prose, no code fences:\n[{"id":"<task id>","lane":"<lane>"}, ...]\nOne entry per task, in the order given, with the id copied exactly.',
+  ].join("\n\n");
+  const { state } = buildState(config, undefined, chunk.map(toRouteInput), []);
+  return { system, user: JSON.stringify(state) };
+}
+
+/** Tolerant of the shapes a chat model actually returns: fences, prose, or a different key name. */
+export function parseLlmRouting(text: string, ids: string[]): { lanes: Map<string, string>; bad: string[] } {
+  const lanes = new Map<string, string>();
+  const bad: string[] = [];
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  if (start === -1 || end <= start) return { lanes, bad: ["no JSON array in the reply"] };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1));
+  } catch (e) {
+    return { lanes, bad: [`unparseable JSON: ${(e as Error).message.slice(0, 80)}`] };
+  }
+  if (!Array.isArray(parsed)) return { lanes, bad: ["reply was not an array"] };
+  for (const row of parsed) {
+    if (!row || typeof row !== "object") continue;
+    const r = row as Record<string, unknown>;
+    const id = String(r.id ?? r.task_id ?? r.task ?? "").trim();
+    const lane = String(r.lane ?? r.model ?? r.choice ?? "").trim();
+    if (!id || !ids.includes(id)) {
+      bad.push(`unknown task id '${id}'`);
+      continue;
+    }
+    if (!(LANES as readonly string[]).includes(lane)) {
+      bad.push(`${id}: '${lane}' is not a lane`);
+      continue;
+    }
+    lanes.set(id, lane);
+  }
+  for (const id of ids) if (!lanes.has(id)) bad.push(`${id}: no lane returned`);
+  return { lanes, bad };
+}
+
+/**
+ * The frontier-LLM-as-router arm.
+ *
+ * Cost comes from the usage the API actually reports, priced at published list prices. On these
+ * models THE THINKING TOKENS ARE BILLED AS OUTPUT and they dominate the bill — a reasoning router is
+ * expensive because it thinks before every answer. That asymmetry is not a flaw in the comparison,
+ * it is the comparison: it is exactly what criterion 11 is asking about.
+ */
+export async function llmRouterArm(
+  config: GatewayConfig,
+  set: LabeledTask[],
+  opts: { spec: string; timeoutMs?: number; signal?: AbortSignal; maxTokens?: number },
+): Promise<{ arm: RouterArm; stats: LlmRouterStats }> {
+  const cand = resolveCandidates(config, opts.spec, { useGlobalChain: false }).find((c) => !c.provider.unusableReason);
+  const emptyStats: LlmRouterStats = { spec: opts.spec, model: "-", chunks: 0, input_tokens: 0, output_tokens: 0, thinking_tokens: 0, priced: true, failures: [] };
+  if (!cand) return { arm: unmeasuredLlmArm(`nothing usable resolves from '${opts.spec}' — set a key for that provider`), stats: emptyStats };
+
+  const chunks: LabeledTask[][] = [];
+  for (let i = 0; i < set.length; i += LLM_ROUTER_CHUNK) chunks.push(set.slice(i, i + LLM_ROUTER_CHUNK));
+
+  const outcomes = new Map<string, RouterOutcome>();
+  const failures: string[] = [];
+  let cost = 0;
+  let priced = true;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let thinkingTokens = 0;
+  const started = Date.now();
+
+  for (const chunk of chunks) {
+    const { system, user } = llmRouterMessages(config, chunk);
+    const req: ChatRequest = {
+      model: cand.model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      temperature: 0,
+      max_tokens: opts.maxTokens ?? 8000,
+    };
+    const ids = chunk.map((t) => t.id);
+    const answered = (lane: string) => ({ lane, model: `${cand.provider.name}/${cand.model}`, confidence: null, escalated: lane === "lead_keeps" || lane === "unclear" });
+    try {
+      const r = await chatCompletion(cand.provider, req, { timeoutMs: opts.timeoutMs ?? 180_000, signal: opts.signal });
+      const c = costUsd(config, cand.provider.name, cand.model, r.usage);
+      cost += c.usd;
+      priced = priced && c.priced;
+      inputTokens += r.usage?.prompt_tokens ?? 0;
+      // Billed output, not the visible reply: see costUsd for why those differ.
+      outputTokens += c.output_tokens;
+      thinkingTokens += Math.max(0, c.output_tokens - (r.usage?.completion_tokens ?? 0));
+      const { lanes, bad } = parseLlmRouting(r.message.content ?? "", ids);
+      if (bad.length) failures.push(`${chunk.length} tasks: ${bad.slice(0, 3).join("; ")}`);
+      for (const id of ids) outcomes.set(id, answered(lanes.get(id) ?? "unclear"));
+    } catch (e) {
+      const msg = (e as Error).message.slice(0, 120);
+      failures.push(`${chunk.length} tasks: ${msg}`);
+      // An unanswered chunk is ESCALATED, never guessed at — the same rule the routers themselves
+      // follow when they cannot answer.
+      for (const id of ids) outcomes.set(id, answered("unclear"));
+    }
+  }
+
+  const ms = Date.now() - started;
+  const note = [
+    `${cand.provider.name}/${cand.model}: ${chunks.length} call(s), ${inputTokens} in / ${outputTokens} out tokens${thinkingTokens ? ` (${thinkingTokens} of them thinking, billed as output)` : ""}`,
+    priced ? "" : "UNPRICED — no entry in the price table, so the cost column is not usable",
+    failures.length ? `${failures.length} chunk(s) unanswered: ${failures[0]}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return {
+    arm: { name: "llm", label: `frontier LLM as router (${cand.model})`, measured: true, ms, cost_usd: Math.round(cost * 1e6) / 1e6, outcomes, note },
+    stats: { spec: cand.provider.name + "/" + cand.model, model: cand.model, chunks: chunks.length, input_tokens: inputTokens, output_tokens: outputTokens, thinking_tokens: thinkingTokens, priced, failures },
+  };
 }
 
 /** One table anyone can read, and the same numbers as JSON for the post. */
