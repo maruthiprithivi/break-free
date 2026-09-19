@@ -14,7 +14,7 @@ import { resolveCandidates } from "./router.js";
 import { Workspace, gitRef, type Capability } from "./workspace.js";
 import { collectHarnessContext } from "./harness.js";
 import type { McpBridge } from "./mcpbridge.js";
-import type { Ledger } from "./ledger.js";
+import type { Ledger, Task } from "./ledger.js";
 import type { WorktreeRegistry } from "./worktrees.js";
 import type { HarnessController } from "./harnessctl.js";
 import { changedSince, denyPatterns, diffSince, pickDifferentVendorReviewer, reviewHits, treeSnapshot } from "./policy.js";
@@ -103,14 +103,16 @@ export async function verifyStep(ctx: Ctx, cmd: string | undefined, signal?: Abo
   try {
     return await runCommand(ctx.config, ctx.workspace.root, cmd, { signal });
   } catch (e) {
-    return { command: cmd, ok: false, exitCode: null, ms: 0, output: `verify refused: ${(e as Error).message}`, truncated: false, timedOut: false };
+    return { command: cmd, cwd: ctx.workspace.root, ok: false, exitCode: null, ms: 0, output: `verify refused: ${(e as Error).message}`, truncated: false, timedOut: false };
   }
 }
 export function verifyText(v: CommandResult | undefined): string {
   if (!v) return "";
+  // The directory belongs in the header, not buried in the child's output: a 254 from npm or an
+  // ENOENT from node reads as a broken suite unless the reader can see it ran in the wrong place.
   return `
 
-## Gateway verification (\`${v.command}\`): ${v.ok ? "PASSED" : "FAILED"} (exit ${v.exitCode ?? v.signal ?? "?"}, ${v.ms} ms)
+## Gateway verification (\`${v.command}\`): ${v.ok ? "PASSED" : "FAILED"} (exit ${v.exitCode ?? v.signal ?? "?"}, ${v.ms} ms) in ${v.cwd}
 \`\`\`
 ${v.output.slice(-4000) || "(no output)"}
 \`\`\``;
@@ -122,9 +124,11 @@ export interface VerifyMeta {
   exit: number | null;
   ms: number;
   timed_out: boolean;
+  /** Directory the command ran in — always the workspace root today; published so a failure is reproducible. */
+  cwd: string;
 }
 export function verifyMeta(v: CommandResult | undefined): VerifyMeta | null {
-  return v ? { command: v.command, ok: v.ok, exit: v.exitCode, ms: v.ms, timed_out: v.timedOut } : null;
+  return v ? { command: v.command, ok: v.ok, exit: v.exitCode, ms: v.ms, timed_out: v.timedOut, cwd: v.cwd } : null;
 }
 
 const stamp = () => new Date().toISOString();
@@ -597,6 +601,8 @@ export async function runPlan(ctx: Ctx, a: RunPlanArgs): Promise<RunPlanResult> 
   const spend = (usd: number) => { planCost += usd; if (planCap > 0 && planCost > planCap && !budgetAbort.signal.aborted) { budgetAbort.abort(new BudgetExceeded("plan", planCost, planCap)); } };
   const progress = a.progress ?? (() => {});
   const ledgerIds = new Map<string, string>();
+  /** Plan task ids whose ledger entry a re-run adopted while it was blocked: the run that succeeds closes it. */
+  const reusedBlocked = new Set<string>();
 
   // Route every task that did not name a model, in ONE decision pass: policy rules first,
   // then the engine (Jev or rules), then escalation. An explicit `model` always wins and is
@@ -628,13 +634,25 @@ export async function runPlan(ctx: Ctx, a: RunPlanArgs): Promise<RunPlanResult> 
   });
 
   if (track) {
+    // A plan task's identity across runs is (goal, task id): re-running a plan is how the lead
+    // retries, so the task an earlier run created must be found again rather than duplicated.
+    // `plan_task` is only ever written by run_plan, so a task the lead or a worker created is
+    // reached through its ledger id (the documented `id: "T-007"` path), never adopted by title.
+    const trackedKey = (goal: string | undefined, id: string) => `${goal ?? ""}\u0000${id}`;
+    const trackedByPlan = new Map<string, Task>();
+    for (const lt of ctx.ledger.listTasks()) if (lt.plan_task) trackedByPlan.set(trackedKey(lt.plan, lt.plan_task), lt);
     for (const t of tasks) {
       const d = decisions.get(t.id);
-      const existing = ctx.ledger.getTask(t.id);
+      const existing = ctx.ledger.getTask(t.id) ?? trackedByPlan.get(trackedKey(a.goal, t.id));
       if (existing) {
         ledgerIds.set(t.id, existing.id);
+        if (existing.status === "blocked") reusedBlocked.add(t.id);
+        const patch: { overridden_by?: string; verify?: string; log?: string } = {};
         // A routed task that the lead later re-ran with an explicit model keeps both facts.
-        if (t.model && existing.route_lane && existing.overridden_by !== t.model) ctx.ledger.updateTask(existing.id, { overridden_by: t.model, log: `lead overrode the ${existing.route_lane} route with explicit model ${t.model}` });
+        if (t.model && existing.route_lane && existing.overridden_by !== t.model) Object.assign(patch, { overridden_by: t.model, log: `lead overrode the ${existing.route_lane} route with explicit model ${t.model}` });
+        // The re-run's acceptance command wins: the ledger must not keep pointing at a stale one.
+        if (t.verify && t.verify !== existing.verify) Object.assign(patch, { verify: t.verify, log: `${patch.log ? `${patch.log}; ` : ""}verify command updated to \`${t.verify}\`` });
+        if (patch.log) ctx.ledger.updateTask(existing.id, patch);
         continue;
       }
       const lt = ctx.ledger.createTask({
@@ -643,10 +661,13 @@ export async function runPlan(ctx: Ctx, a: RunPlanArgs): Promise<RunPlanResult> 
         acceptance: t.acceptance,
         owner: d?.escalated ? "lead" : t.model ?? ctx.config.defaults.model,
         verify: t.verify,
+        plan: a.goal,
+        plan_task: t.id,
         tags: ["plan", ...(a.goal ? [slugTag(a.goal)] : []), ...(t.tags ?? [])],
         routing: d ? { routed_by: d.reason === "policy" ? "policy" : d.engine === "jev" ? "jev" : "rules", route_lane: d.lane, route_confidence: d.confidence ?? undefined, route_probs: formatProbs(d.probabilities) || undefined, route_ms: d.ms } : undefined,
       });
       ledgerIds.set(t.id, lt.id);
+      trackedByPlan.set(trackedKey(a.goal, t.id), lt);
     }
     // dependencies are mapped after every task has a ledger id (plan order is arbitrary)
     for (const t of tasks) if (t.depends_on?.length) ctx.ledger.updateTask(ledgerIds.get(t.id)!, { depends_on: t.depends_on.map((d) => ledgerIds.get(d) ?? d) });
@@ -710,7 +731,7 @@ export async function runPlan(ctx: Ctx, a: RunPlanArgs): Promise<RunPlanResult> 
         usage.completion += r.run.usage.completion;
         taskCost = r.run.costUsd;
         spend(taskCost);
-        if (verify && !verify.ok) throw new Error(`verification failed: ${verify.command} (exit ${verify.exit})`);
+        if (verify && !verify.ok) throw new Error(`verification failed: ${verify.command} (exit ${verify.exit}) in ${verify.cwd}`);
         const pol = r.meta.policy as { verdict?: string | null; reviewer?: string | null; review_required?: { path: string }[] } | null;
         if (pol?.verdict === "reject") throw new Error(`policy review rejected by ${pol.reviewer} (paths: ${(pol.review_required ?? []).map((h) => h.path).join(", ")})`);
         // The tripwire has the last word: a green verify plus an untouched glob is exactly the shape
@@ -736,7 +757,10 @@ export async function runPlan(ctx: Ctx, a: RunPlanArgs): Promise<RunPlanResult> 
       }
       reports.set(t.id, report);
       results.set(t.id, { id: t.id, ledger_id: lid, status: "done", model, report, verify, review: rev, ms: Date.now() - t0, meta, route: decision, ...(tripwireMeta ? { tripwire: tripwireMeta } : {}) });
-      if (lid) ctx.ledger.updateTask(lid, { status: rev?.verdict === "revise" ? "review" : "done", outcome: `${report.slice(0, 4000)}${verify ? `\n\nVerification: ${verify.ok ? "PASSED" : "FAILED"} (${verify.command})` : ""}${rev ? `\n\nReview: ${rev.verdict} — ${rev.summary ?? ""}` : ""}`, log: `done by ${model} in ${Math.round((Date.now() - t0) / 1000)}s${rev ? `; review ${rev.verdict}` : ""}` });
+      // `reusedBlocked` is the reconciliation the ledger was missing: the entry an earlier run left
+      // at blocked closes here, naming the re-run that finished it, instead of sitting blocked forever.
+      const closed = reusedBlocked.has(t.id) ? `; closes the earlier blocked attempt (re-run of plan task ${t.id}${a.goal ? ` in "${a.goal}"` : ""})` : "";
+      if (lid) ctx.ledger.updateTask(lid, { status: rev?.verdict === "revise" ? "review" : "done", outcome: `${report.slice(0, 4000)}${verify ? `\n\nVerification: ${verify.ok ? "PASSED" : "FAILED"} (${verify.command} in ${verify.cwd})` : ""}${rev ? `\n\nReview: ${rev.verdict} — ${rev.summary ?? ""}` : ""}`, log: `done by ${model} in ${Math.round((Date.now() - t0) / 1000)}s${rev ? `; review ${rev.verdict}` : ""}${closed}` });
       if (track) ctx.ledger.journal(`${t.id}${lid ? ` (${lid})` : ""} done by ${model}${verify ? `, verify ${verify.ok ? "ok" : "FAILED"}` : ""}${rev ? `, review ${rev.verdict}` : ""}`);
       if (track && decision && lid) ctx.ledger.scorecardAppend({ task: lid, plan: a.goal, lane: decision.lane, model, tags: t.tags ?? [], verify_ok: verify ? verify.ok : null, attempts, ms: Date.now() - t0, cost_usd: taskCost, at: stamp() });
       progress(`done ${t.id} (${model})`);

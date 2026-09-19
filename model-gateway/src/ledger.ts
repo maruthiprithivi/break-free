@@ -31,6 +31,14 @@ export interface Task {
   tags: string[];
   verify?: string;
   job?: string;
+  /**
+   * `run_plan` goal this task was created by, with `plan_task` the caller's task id inside that
+   * plan. Together they are the task's identity across runs: re-running a plan is how the lead
+   * retries, so it must find this task again instead of minting a second T-0NN for the same work.
+   */
+  plan?: string;
+  /** The plan's own task id (e.g. "api") — stable across re-runs, never the ledger id. */
+  plan_task?: string;
   created: string;
   updated: string;
   problem?: string;
@@ -229,11 +237,11 @@ export class Ledger {
     return `${prefix}${String(Math.max(0, ...ids) + 1).padStart(3, "0")}`;
   }
 
-  createTask(t: { id?: string; title: string; problem?: string; acceptance?: string; depends_on?: string[]; owner?: string; verify?: string; tags?: string[]; status?: TaskStatus; routing?: TaskRouting }): Task {
+  createTask(t: { id?: string; title: string; problem?: string; acceptance?: string; depends_on?: string[]; owner?: string; verify?: string; tags?: string[]; status?: TaskStatus; plan?: string; plan_task?: string; routing?: TaskRouting }): Task {
     this.ensure();
     const id = t.id ?? this.nextId();
     if (this.taskFileAnyLayer(id)) throw new Error(`task ${id} already exists`);
-    const task: Task = { id, title: t.title, status: t.status ?? "todo", owner: t.owner, depends_on: t.depends_on ?? [], tags: t.tags ?? [], verify: t.verify, created: now(), updated: now(), problem: t.problem, acceptance: t.acceptance, log: [`${now()} created`], ...t.routing };
+    const task: Task = { id, title: t.title, status: t.status ?? "todo", owner: t.owner, depends_on: t.depends_on ?? [], tags: t.tags ?? [], verify: t.verify, plan: t.plan, plan_task: t.plan_task, created: now(), updated: now(), problem: t.problem, acceptance: t.acceptance, log: [`${now()} created`], ...t.routing };
     this.saveTask(task);
     this.render();
     return task;
@@ -257,6 +265,8 @@ export class Ledger {
       tags: Array.isArray(meta.tags) ? (meta.tags as string[]) : [],
       verify: meta.verify ? String(meta.verify) : undefined,
       job: meta.job ? String(meta.job) : undefined,
+      plan: meta.plan ? String(meta.plan) : undefined,
+      plan_task: meta.plan_task ? String(meta.plan_task) : undefined,
       created: String(meta.created ?? ""),
       updated: String(meta.updated ?? ""),
       problem: section(body, "Problem"),
@@ -314,6 +324,8 @@ export class Ledger {
       tags: t.tags,
       verify: t.verify,
       job: t.job,
+      plan: t.plan,
+      plan_task: t.plan_task,
       routed_by: t.routed_by,
       route_lane: t.route_lane,
       route_confidence: t.route_confidence,
