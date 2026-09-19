@@ -1,123 +1,50 @@
 {
   "brand": {
     "name": "Break Free",
-    "tagline": "the frontier model leads, other models execute",
+    "tagline": "you say who does the work; it gets carried out, checked, and followed through",
     "repo": "github.com/maruthiprithivi/break-free",
     "install": "curl -fsSL https://raw.githubusercontent.com/maruthiprithivi/break-free/main/install.sh | bash"
   },
-  "voice": {
-    "model": "text2speech_v2",
-    "variant": "elevenlabs",
-    "voiceId": "30fc8796-ceb6-4a66-b3a7-4a145ef7f346",
-    "voiceName": "Arthur"
-  },
+  "voice": { "model": "text2speech_v2", "variant": "elevenlabs", "voiceId": "30fc8796-ceb6-4a66-b3a7-4a145ef7f346", "voiceName": "Arthur" },
   "videos": [
     {
       "id": "intro",
       "kind": "intro",
-      "title": "Why, what, and how",
-      "subtitle": "the frontier model leads, other models execute",
+      "title": "What Break Free actually does",
+      "subtitle": "you say who does the work; it gets carried out and checked",
       "poster": "hero.png",
       "chapters": [
         {
-          "id": "open",
-          "label": "",
-          "heading": "",
-          "backplate": "hero.png",
-          "scene": "title",
+          "id": "open", "label": "", "heading": "", "backplate": "hero.png",
           "lines": [
-            {
-              "id": "open-1",
-              "text": "Your best model is the expensive one. Most of the work in a task is not the hard part."
-            }
+            { "id": "open-1", "scene": "title", "text": "You are in your coding agent, and you already know what you want done and who should do it." }
           ]
         },
         {
-          "id": "why",
-          "label": "01",
-          "heading": "Why",
-          "backplate": "why.png",
-          "scene": "bottleneck",
+          "id": "why", "label": "01", "heading": "The gap", "backplate": "why.png",
           "lines": [
-            {
-              "id": "why-1",
-              "text": "Boilerplate, tests, migrations, docs, bulk edits: work that needs care, not genius."
-            },
-            {
-              "id": "why-2",
-              "text": "Run all of it on a frontier model and you pay the top rate for typing."
-            },
-            {
-              "id": "why-3",
-              "text": "Hand it to a cheap model instead and you get a confident report that nobody checked."
-            }
+            { "id": "why-1", "scene": "ask", "text": "Saying it is easy. Carrying it out is not, and knowing it was actually checked is harder still." }
           ]
         },
         {
-          "id": "what",
-          "label": "02",
-          "heading": "What",
-          "backplate": "what.png",
-          "scene": "leadcrew",
+          "id": "what", "label": "02", "heading": "What you say", "backplate": "what.png",
           "lines": [
-            {
-              "id": "what-1",
-              "text": "Break Free splits the job in two. The frontier model leads. Other models execute."
-            },
-            {
-              "id": "what-2",
-              "text": "Claude Code or Codex keeps the judgement: understanding you, decomposing, designing, reviewing, owning the result."
-            },
-            {
-              "id": "what-3",
-              "text": "DeepSeek, Kimi, GLM, MiniMax, OpenRouter, or a local Ollama model does the execution."
-            },
-            {
-              "id": "what-4",
-              "text": "They meet at one MCP server that you install once."
-            }
+            { "id": "what-1", "scene": "routing-say", "text": "Break Free takes the instruction you would give anyway. Use this for that." },
+            { "id": "what-2", "scene": "routing-model", "text": "Name a model, like DeepSeek or a local Ollama, and it runs as a delegated worker." },
+            { "id": "what-3", "scene": "routing-harness", "text": "Name another harness, like Codex or omp, and it opens there in a terminal session, on your subscription." }
           ]
         },
         {
-          "id": "how",
-          "label": "03",
-          "heading": "How",
-          "backplate": "how.png",
-          "scene": "verify",
+          "id": "how", "label": "03", "heading": "What it guarantees", "backplate": "how.png",
           "lines": [
-            {
-              "id": "how-1",
-              "text": "For every task the lead writes the instruction, the acceptance criteria, and the command that proves it."
-            },
-            {
-              "id": "how-2",
-              "text": "The gateway runs that command itself, after the worker finishes. A pass is a real exit code, not a claim."
-            },
-            {
-              "id": "how-3",
-              "text": "Independent tasks run at the same time as a dependency graph, and a failed check blocks whatever depended on it."
-            },
-            {
-              "id": "how-4",
-              "text": "Workers are jailed: no shell, no force push, no protected branches, no secrets in a diff."
-            },
-            {
-              "id": "how-5",
-              "text": "Every task, outcome and decision is written to a Markdown ledger in your repository, so the next session resumes instead of restarting."
-            }
+            { "id": "how-1", "scene": "verify", "text": "You also say how it gets checked, and the gateway runs that command itself after the worker finishes." },
+            { "id": "how-2", "scene": "followthrough", "text": "Anything you started stays open until it is resolved, so a failed run is not quietly left behind." }
           ]
         },
         {
-          "id": "close",
-          "label": "",
-          "heading": "",
-          "backplate": "hero.png",
-          "scene": "install",
+          "id": "close", "label": "", "heading": "", "backplate": "hero.png",
           "lines": [
-            {
-              "id": "close-1",
-              "text": "One command installs it, and the setup walks you through the providers, the keys and the checks."
-            }
+            { "id": "close-1", "scene": "install", "text": "You stay the one deciding. Break Free carries it out, and proves it." }
           ]
         }
       ]
@@ -125,37 +52,33 @@
     {
       "id": "delegate",
       "kind": "scenario",
-      "title": "Delegate one task",
-      "subtitle": "hand off the work, keep the verification",
+      "title": "Hand a task to another model",
+      "subtitle": "name the model, name the check",
       "poster": "delegate.png",
       "chapters": [
-        {
-          "id": "delegate",
-          "label": "01",
-          "heading": "Delegate one task",
-          "backplate": "delegate.png",
-          "scene": "delegate",
+        { "id": "delegate", "label": "01", "heading": "Hand a task to another model", "backplate": "delegate.png",
           "lines": [
-            {
-              "id": "delegate-1",
-              "text": "You have a task that needs care, not genius. Unit tests for the router."
-            },
-            {
-              "id": "delegate-2",
-              "text": "You tell the lead to delegate it, and you say how it will be proven."
-            },
-            {
-              "id": "delegate-3",
-              "text": "The gateway sends it to a cheaper model with read, write and run, plus the test command."
-            },
-            {
-              "id": "delegate-4",
-              "text": "The worker reports back, and the gateway runs the tests itself. Exit code zero, or the task failed."
-            },
-            {
-              "id": "delegate-5",
-              "text": "You review a diff that has already been tested, and your frontier quota barely moved."
-            }
+            { "id": "delegate-1", "scene": "task", "text": "The task: unit tests for the router. Worth doing well, not worth your most expensive model." },
+            { "id": "delegate-2", "scene": "say", "text": "So you say it plainly. Use DeepSeek to write them, and check them with npm test." },
+            { "id": "delegate-3", "scene": "route", "text": "DeepSeek is a model, so it is delegated, with permission to read, write and run, and nothing else." },
+            { "id": "delegate-4", "scene": "result", "text": "The gateway runs the tests itself, and you get a diff that already passed, naming the model that wrote it." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "handoff",
+      "kind": "scenario",
+      "title": "Send work to another harness",
+      "subtitle": "Codex, omp or pi, on your subscription",
+      "poster": "what.png",
+      "chapters": [
+        { "id": "handoff", "label": "02", "heading": "Send work to another harness", "backplate": "what.png",
+          "lines": [
+            { "id": "handoff-1", "scene": "task", "text": "The task: something you would rather Codex did, with its own memory, skills and tools." },
+            { "id": "handoff-2", "scene": "say", "text": "You say: use Codex for this one." },
+            { "id": "handoff-3", "scene": "route", "text": "Codex is a harness, not a model, so it opens in a real terminal session inside your repository." },
+            { "id": "handoff-4", "scene": "result", "text": "It runs on your subscription. Attach to watch it, or leave it working and read it back later." }
           ]
         }
       ]
@@ -163,113 +86,65 @@
     {
       "id": "parallel",
       "kind": "scenario",
-      "title": "Run a plan in parallel",
-      "subtitle": "a dependency graph, several vendors at once",
+      "title": "Split one job across several",
+      "subtitle": "in parallel, with the checks you named",
       "poster": "parallel.png",
       "chapters": [
-        {
-          "id": "parallel",
-          "label": "02",
-          "heading": "Run a plan in parallel",
-          "backplate": "parallel.png",
-          "scene": "parallel",
+        { "id": "parallel", "label": "03", "heading": "Split one job across several", "backplate": "parallel.png",
           "lines": [
-            {
-              "id": "parallel-1",
-              "text": "One feature is really four pieces of work: the core, its tests, the docs, and the wiring."
-            },
-            {
-              "id": "parallel-2",
-              "text": "You describe them once, with what depends on what."
-            },
-            {
-              "id": "parallel-3",
-              "text": "The core goes first. The moment its verification passes, the other three start together on different vendors."
-            },
-            {
-              "id": "parallel-4",
-              "text": "A failing check fails that task and skips everything downstream. Nothing broken moves forward."
-            },
-            {
-              "id": "parallel-5",
-              "text": "You get one consolidated report, with every verification result attached."
-            }
+            { "id": "parallel-1", "scene": "task", "text": "The task: rate limiting. Really four pieces of work, and they do not all need the same model." },
+            { "id": "parallel-2", "scene": "say", "text": "You say who does what, and what depends on what." },
+            { "id": "parallel-3", "scene": "route", "text": "The core goes first. The moment its check passes, the rest start together on the models you named." },
+            { "id": "parallel-4", "scene": "result", "text": "A failed check stops that branch, and one report comes back with every result attached." }
           ]
         }
       ]
     },
     {
-      "id": "review",
+      "id": "verdict",
       "kind": "scenario",
       "title": "Get an independent verdict",
-      "subtitle": "a different vendor reviews, a panel decides",
+      "subtitle": "from a vendor that did not write it",
       "poster": "review.png",
       "chapters": [
-        {
-          "id": "review",
-          "label": "03",
-          "heading": "Get an independent verdict",
-          "backplate": "review.png",
-          "scene": "review",
+        { "id": "verdict", "label": "04", "heading": "Get an independent verdict", "backplate": "review.png",
           "lines": [
-            {
-              "id": "review-1",
-              "text": "Before this lands, you want an opinion that is not the author's."
-            },
-            {
-              "id": "review-2",
-              "text": "Review sends the real diff to a different vendor and asks for a verdict, not a compliment."
-            },
-            {
-              "id": "review-3",
-              "text": "Back comes a structured answer: approve, revise or reject, with a file and a line for every issue."
-            },
-            {
-              "id": "review-4",
-              "text": "For a decision rather than a diff, a panel runs several models at once and a judge synthesises them."
-            },
-            {
-              "id": "review-5",
-              "text": "You still decide. You just decide with the disagreement in front of you."
-            }
+            { "id": "verdict-1", "scene": "task", "text": "The task: this is about to land, and you want it read by something that did not write it." },
+            { "id": "verdict-2", "scene": "say", "text": "You say: have Kimi review it. The real diff goes to a different vendor." },
+            { "id": "verdict-3", "scene": "result", "text": "Back comes approve, revise or reject, with a file and a line for each issue. You still decide." }
           ]
         }
       ]
     },
     {
-      "id": "ledger",
+      "id": "guard",
       "kind": "scenario",
-      "title": "Resume across sessions",
-      "subtitle": "the ledger lives in the repository",
+      "title": "Nothing gets left behind",
+      "subtitle": "the turn will not end on a failed run",
+      "poster": "how.png",
+      "chapters": [
+        { "id": "guard", "label": "05", "heading": "Nothing gets left behind", "backplate": "how.png",
+          "lines": [
+            { "id": "guard-1", "scene": "task", "text": "The work is done and pushed. This is the moment things usually get forgotten." },
+            { "id": "guard-2", "scene": "say", "text": "The push records the run it just caused, and a watcher resolves it by asking GitHub, not by asking a model." },
+            { "id": "guard-3", "scene": "route", "text": "The run fails. That failure is now open work, carrying the job that broke and a link to it." },
+            { "id": "guard-4", "scene": "result", "text": "So the turn refuses to end. You are told, before anyone walks away from it." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "resume",
+      "kind": "scenario",
+      "title": "Pick up where you left off",
+      "subtitle": "the log lives in the repository",
       "poster": "ledger.png",
       "chapters": [
-        {
-          "id": "ledger",
-          "label": "04",
-          "heading": "Resume across sessions",
-          "backplate": "ledger.png",
-          "scene": "ledger",
+        { "id": "resume", "label": "06", "heading": "Pick up where you left off", "backplate": "ledger.png",
           "lines": [
-            {
-              "id": "ledger-1",
-              "text": "Context windows end. Projects do not."
-            },
-            {
-              "id": "ledger-2",
-              "text": "Every task, decision and gotcha is written to plain Markdown inside your repository."
-            },
-            {
-              "id": "ledger-3",
-              "text": "Commit it, review it in a pull request, or open the folder as an Obsidian vault."
-            },
-            {
-              "id": "ledger-4",
-              "text": "Workers read it too, so a gotcha found once is not rediscovered by the next model."
-            },
-            {
-              "id": "ledger-5",
-              "text": "Next session, resume reads the handoff and tells you exactly where you were."
-            }
+            { "id": "resume-1", "scene": "task", "text": "Context windows end. Projects do not." },
+            { "id": "resume-2", "scene": "say", "text": "Every task, decision and gotcha was written to plain Markdown inside your repository as it happened." },
+            { "id": "resume-3", "scene": "result", "text": "You ask to resume, and it tells you what is in progress, what is blocked, and what is ready." }
           ]
         }
       ]

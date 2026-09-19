@@ -16,8 +16,8 @@ import {
   Watermark,
 } from "./ui";
 
-type Line = { id: string; text: string };
-type Chapter = { id: string; label: string; heading: string; backplate: string; scene: string; lines: Line[] };
+type Line2 = { id: string; text: string; scene: string };
+type Chapter = { id: string; label: string; heading: string; backplate: string; scene?: string; lines: Line2[] };
 type LineTiming = { id: string; startFrame: number; durationInFrames: number; audioFrames: number };
 type ChapterTiming = { id: string; startFrame: number; durationInFrames: number; lines: LineTiming[] };
 
@@ -29,7 +29,7 @@ const activeLine = (lines: LineTiming[], frame: number) => {
   return index;
 };
 
-const ChapterBlock: React.FC<{ chapter: Chapter; timing: ChapterTiming }> = ({ chapter, timing: ct }) => {
+const ChapterBlock: React.FC<{ chapter: Chapter; timing: ChapterTiming; videoId: string }> = ({ chapter, timing: ct, videoId }) => {
   const frame = useCurrentFrame();
   const envelope = useEnvelope(ct.durationInFrames, 14, 10);
   const index = activeLine(ct.lines, frame);
@@ -48,7 +48,8 @@ const ChapterBlock: React.FC<{ chapter: Chapter; timing: ChapterTiming }> = ({ c
   const lastLine = index === ct.lines.length - 1;
   const caption = Math.min(captionIn, lastLine ? 1 : captionOut);
 
-  const Scene = scenes[chapter.scene] ?? UnknownScene;
+  const line = chapter.lines[index];
+  const Scene = scenes[line.scene] ?? UnknownScene;
   const props: SceneProps = {
     stage: index,
     stageProgress,
@@ -56,13 +57,15 @@ const ChapterBlock: React.FC<{ chapter: Chapter; timing: ChapterTiming }> = ({ c
     duration: ct.durationInFrames,
     install: script.brand.install,
     repo: script.brand.repo,
+    videoId,
+    lineId: line.id,
   };
 
   return (
     <AbsoluteFill style={{ opacity: envelope }}>
       <Backplate src={chapter.backplate} duration={ct.durationInFrames} />
       <GridLines />
-      <Scene {...props} />
+      <Scene key={line.scene} {...props} />
       <ChapterHeader label={chapter.label} heading={chapter.heading} reveal={envelope} />
       <Watermark repo={script.brand.repo} />
       <Subtitles text={chapter.lines[index].text} reveal={caption} />
@@ -91,7 +94,7 @@ export const BreakFreeVideo: React.FC<{ videoId: string }> = ({ videoId }) => {
           from={vt.chapters[i].startFrame}
           durationInFrames={vt.chapters[i].durationInFrames}
         >
-          <ChapterBlock chapter={chapter as Chapter} timing={vt.chapters[i]} />
+          <ChapterBlock chapter={chapter as Chapter} timing={vt.chapters[i]} videoId={videoId} />
         </Sequence>
       ))}
     </AbsoluteFill>

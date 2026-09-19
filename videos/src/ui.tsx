@@ -9,6 +9,10 @@ import {
 } from "remotion";
 import { glow, mono, sans, theme } from "./theme";
 
+/** The caption band is reserved. Nothing on the stage may enter it, at any beat. */
+export const CAPTION_TOP = 858;
+export const STAGE_TOP = 168;
+
 /** 0 -> 1 over `length` frames starting at `from`, eased. */
 export const ramp = (frame: number, from: number, length: number) =>
   interpolate(frame, [from, from + length], [0, 1], {
@@ -371,7 +375,7 @@ export const Subtitles: React.FC<{ text: string; reveal: number }> = ({ text, re
       position: "absolute",
       left: 0,
       right: 0,
-      bottom: 82,
+      top: CAPTION_TOP + 14,
       display: "flex",
       justifyContent: "center",
       padding: "0 140px",
@@ -411,8 +415,8 @@ export const Stage: React.FC<{ children: React.ReactNode }> = ({ children }) => 
     style={{
       alignItems: "center",
       justifyContent: "center",
-      paddingTop: 170,
-      paddingBottom: 215,
+      paddingTop: STAGE_TOP,
+      paddingBottom: 1080 - CAPTION_TOP,
     }}
   >
     {children}

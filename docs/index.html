@@ -124,8 +124,8 @@
         <a href="assets/intro.mp4">Download it instead.</a>
       </video>
       <div class="meta">
-        <h1 id="title">Why, what, and how</h1>
-        <p id="blurb">Why Break Free exists, what it is, and how the verification actually works.</p>
+        <h1 id="title">What Break Free actually does</h1>
+        <p id="blurb">you say who does the work; it gets carried out and checked</p>
         <p class="sub">
           Narrated, with captions burned in. Separate track:
           <a id="vtt" href="assets/intro.vtt">WebVTT</a> &middot;
@@ -340,11 +340,13 @@ overridden_by: deepseek/deepseek-v4-pro   <i># only when you re-run a task with 
 
 <script>
   var VIDEOS = [
-    { id: "intro",    title: "Why, what, and how",        blurb: "Why Break Free exists, what it is, and how the verification actually works." },
-    { id: "delegate", title: "Delegate one task",          blurb: "Hand off the work, keep the verification." },
-    { id: "parallel", title: "Run a plan in parallel",     blurb: "A dependency graph, several vendors at once." },
-    { id: "review",   title: "Get an independent verdict", blurb: "A different vendor reviews; a panel decides." },
-    { id: "ledger",   title: "Resume across sessions",     blurb: "The ledger lives in the repository." }
+    { id: "intro", title: "What Break Free actually does", blurb: "you say who does the work; it gets carried out and checked" },
+    { id: "delegate", title: "Hand a task to another model", blurb: "name the model, name the check" },
+    { id: "handoff", title: "Send work to another harness", blurb: "Codex, omp or pi, on your subscription" },
+    { id: "parallel", title: "Split one job across several", blurb: "in parallel, with the checks you named" },
+    { id: "verdict", title: "Get an independent verdict", blurb: "from a vendor that did not write it" },
+    { id: "guard", title: "Nothing gets left behind", blurb: "the turn will not end on a failed run" },
+    { id: "resume", title: "Pick up where you left off", blurb: "the log lives in the repository" }
   ];
 
   var player = document.getElementById("player");

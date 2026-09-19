@@ -1,0 +1,17 @@
+WEBVTT
+
+1
+00:00:00.800 --> 00:00:05.933
+The work is done and pushed. This is the moment things usually get forgotten.
+
+2
+00:00:06.400 --> 00:00:14.900
+The push records the run it just caused, and a watcher resolves it by asking GitHub, not by asking a model.
+
+3
+00:00:15.367 --> 00:00:23.333
+The run fails. That failure is now open work, carrying the job that broke and a link to it.
+
+4
+00:00:23.800 --> 00:00:29.133
+So the turn refuses to end. You are told, before anyone walks away from it.
