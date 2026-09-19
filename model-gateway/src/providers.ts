@@ -14,6 +14,13 @@ export interface ProviderDefaults {
   keyEnv: string;
   /** Whether a key is needed at all (local Ollama: no) */
   requiresKey: boolean;
+  /**
+   * What this endpoint is for. `chat` providers speak the OpenAI Chat Completions
+   * dialect and may be selected for any delegate/run_plan task. `decision` providers
+   * answer typed questions (TypeSafe System One) and are NEVER reachable from chat
+   * routing — they have their own client (jev.ts) and their own lane in run_plan.
+   */
+  kind?: "chat" | "decision";
   /** Extra headers to send on every request */
   headers?: Record<string, string>;
   /** Default model used when a bare provider name is requested */
@@ -127,6 +134,21 @@ export const PROVIDER_CATALOG: Record<string, ProviderDefaults> = {
     supportsTools: true,
     docs: "https://docs.vllm.ai/",
     notes: "Generic slot: point baseUrl at LM Studio, llama.cpp server, LiteLLM, Groq, etc.",
+  },
+  typesafe: {
+    label: "TypeSafe (Jev) — decision routing",
+    baseUrl: "https://api.typesafe.ai/v1",
+    keyEnv: "TYPESAFE_API_KEY",
+    requiresKey: true,
+    kind: "decision",
+    defaultModel: "jev-latest",
+    knownModels: ["jev-latest", "jev-preview", "jev-1.13.0"],
+    supportsTools: false,
+    docs: "https://console.typesafe.ai/settings/keys",
+    notes:
+      "NOT OpenAI-compatible and NEVER used for chat: POST /v1/systemone answers typed questions (Choice/Score/Noul) against a state. " +
+      "`routing.engine: jev` uses it to pick a lane per run_plan task. Input $0.042/Mtok, output free, 429/529 on overload. " +
+      "Pin a version (jev-1.13.0) if you tune `routing.threshold` against a specific release.",
   },
 };
 

@@ -150,6 +150,54 @@ const ConfigSchema = z.object({
     .default({}),
   /** USD per 1M tokens, keyed by "provider/model" or "provider" (fallback). Unknown models cost 0 and are reported as unpriced. */
   pricing: z.record(z.object({ input: z.number().min(0), output: z.number().min(0) })).default({}),
+  /**
+   * Which model runs a `run_plan`/`delegate` task whose `model` is omitted.
+   *
+   * Precedence, highest first: the task's own `model` (never routed) → the call's `routing`
+   * parameter → the BREAK_FREE_ROUTING env var → this block. `off` restores the pre-routing
+   * behaviour exactly (an omitted model means `defaults.model`).
+   */
+  routing: z
+    .object({
+      /**
+       * `jev` = TypeSafe System One (needs a key; degrades to `rules` without one);
+       * `rules` = deterministic heuristics, no key, no network; `off` = no routing at all —
+       * an omitted `model` means `defaults.model`, exactly as before this existed.
+       *
+       * The default is `off` on purpose: routing changes which model runs a task, and that must
+       * be an explicit choice at user, project or session level, never a silent change to an
+       * existing install. Turn it on globally here, or per call with the `routing` parameter.
+       */
+      engine: z.enum(["jev", "rules", "off"]).default("off"),
+      /** Jev confidence below this goes back to the lead instead of guessing a lane */
+      threshold: z.number().min(0).max(1).default(0.7),
+      /** lane -> model spec handed to run_plan (defaults to DEFAULT_LANE_MAP). `null` escalates that lane to the lead. */
+      laneMap: z.record(z.string().nullable()).default({}),
+      /**
+       * What a sensitive task is forced onto.
+       *
+       * `strong` (default) is "care": the lane is raised to at least strong — never lowered, so a
+       * `thinker` or `local` answer stands — and the task is always independently reviewed.
+       * `local` is "data residency": everything sensitive runs on this machine, always.
+       */
+      sensitiveLane: z.enum(["local", "strong"]).default("strong"),
+      /** File globs that make a task sensitive regardless of what Jev answers (added to the built-in list) */
+      sensitivePaths: z.array(z.string()).default([]),
+      /** Noul probability at/above which Jev's own `sensitive` answer forces the sensitive lane */
+      sensitiveThreshold: z.number().min(0).max(1).default(0.5),
+      /** Hard cap on the state sent to Jev. Jev degrades with padded input, so this stays small. */
+      maxStateTokens: z.number().int().positive().default(2000),
+      timeoutMs: z.number().int().positive().default(20_000),
+      /** Retries of the same TypeSafe request on 429/529/5xx/network, with backoff honouring `retry-after` */
+      retries: z.number().int().min(0).max(5).default(2),
+      /** Base backoff in ms (doubles per attempt); set 0 in tests so they stay offline and instant */
+      retryDelayMs: z.number().int().min(0).default(800),
+      /** One batched request per plan (fast, cheap) or one request per task (fully isolated questions) */
+      batch: z.enum(["plan", "task"]).default("plan"),
+      /** How many ledger scorecard lines per task tag go into Jev's state (0 = none) */
+      scorecardLines: z.number().int().min(0).max(10).default(3),
+    })
+    .default({}),
   budget: z
     .object({
       /** Hard caps in USD; 0 = unlimited. A worker/plan/day that exceeds its cap is stopped, not silently continued. */
@@ -238,6 +286,10 @@ const CORE_ALIASES = {
     description: "Never leaves the machine",
     candidates: ["ollama/qwen3-coder:30b", "ollama/qwen3:8b", "vllm/default"],
   },
+  thinker: {
+    description: "Reasoning-heavy work: design questions, gnarly debugging (slower, pricier)",
+    candidates: ["deepseek/deepseek-reasoner", "deepseek/deepseek-v4-pro", "openrouter/deepseek/deepseek-v4-pro"],
+  },
   cloud: {
     description: "Ollama Cloud tier",
     candidates: ["ollama-cloud/gpt-oss:120b", "ollama-cloud/deepseek-v4-flash"],
@@ -289,6 +341,21 @@ export const DEFAULT_PRICING: Record<string, { input: number; output: number }> 
   "ollama": { input: 0, output: 0 },
   "vllm": { input: 0, output: 0 },
   "lmstudio": { input: 0, output: 0 },
+  // TypeSafe charges input only ($0.042/Mtok); output tokens are free.
+  "typesafe": { input: 0.042, output: 0 },
+  "typesafe/jev-latest": { input: 0.042, output: 0 },
+  "typesafe/jev-1.13.0": { input: 0.042, output: 0 },
+};
+
+/** The seven lanes Jev chooses between, and the alias each one runs on. `null` = back to the lead. */
+export const DEFAULT_LANE_MAP: Record<string, string | null> = {
+  local: "local",
+  fast: "fast",
+  strong: "strong",
+  thinker: "thinker",
+  codex_handoff: "strong",
+  lead_keeps: null,
+  unclear: null,
 };
 
 export function priceFor(config: GatewayConfig, provider: string, model: string): { input: number; output: number; priced: boolean } {
@@ -341,6 +408,14 @@ export function sanitizeProjectConfig(j: unknown): Record<string, unknown> {
   // Only project-tunable, non-sensitive settings are copied. `github`, `mode` and `mergeAutonomy`
   // are intentionally omitted so a cloned repo can never grant itself push or merge rights.
   for (const k of ["defaults", "aliases", "fallback", "policy", "steward", "pricing"]) if (k in src) out[k] = src[k]; // policy can only add restrictions, so a project may declare it
+  // Routing is allowed at project scope (a repo may declare its own lanes), EXCEPT that a cloned
+  // repo must not be able to turn on `jev`: that would send the repo's own task text to a
+  // third-party model. Egress stays a user-level decision.
+  if (src.routing && typeof src.routing === "object") {
+    const r = { ...(src.routing as Record<string, unknown>) };
+    if (r.engine === "jev") delete r.engine;
+    out.routing = r;
+  }
   if (src.providers && typeof src.providers === "object") {
     const provs: Record<string, unknown> = {};
     for (const [name, pc] of Object.entries(src.providers as Record<string, Record<string, unknown>>)) {
@@ -430,6 +505,8 @@ export interface ResolvedProvider {
   defaultModel: string;
   knownModels: string[];
   supportsTools: boolean;
+  /** `decision` providers answer typed questions (TypeSafe/Jev) and are never usable as a chat model. */
+  kind: "chat" | "decision";
   extraBody?: Record<string, unknown>;
   timeoutMs?: number;
   docs: string;
@@ -458,6 +535,7 @@ export function resolveProvider(config: GatewayConfig, name: string): ResolvedPr
     defaultModel: pc?.defaultModel ?? catalog?.defaultModel ?? "default",
     knownModels: catalog?.knownModels ?? [],
     supportsTools: pc?.supportsTools ?? catalog?.supportsTools ?? true,
+    kind: catalog?.kind ?? "chat",
     extraBody: catalog?.extraBody || pc?.extraBody ? { ...(catalog?.extraBody ?? {}), ...(pc?.extraBody ?? {}) } : undefined,
     timeoutMs: pc?.timeoutMs,
     docs: catalog?.docs ?? "",

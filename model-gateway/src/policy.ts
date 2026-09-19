@@ -20,9 +20,42 @@ export function policyRules(config: GatewayConfig): PolicyRule[] {
   return config.policy.rules.map((r) => ({ match: Array.isArray(r.match) ? r.match : [r.match], action: r.action, reason: r.reason, differentVendor: r.differentVendor }));
 }
 
+/**
+ * Translate a glob to a RegExp.
+ *
+ * Built in ONE pass on purpose. The previous chained-replace version fed its own output back
+ * through the later replacements, so the directory-group it inserted for a double-star prefix was
+ * itself rewritten, and every such pattern silently failed to match a real path. Deny rules,
+ * review rules and routing sensitivity all read globs through here, so the bug was shared by all
+ * three.
+ *
+ * A double-star-slash prefix matches any leading directories (including none), a bare double star
+ * matches anything, `*` and `?` stay within one path segment, and a pattern without a slash
+ * matches a basename anywhere.
+ */
 export function globToRegex(g: string): RegExp {
-  const re = g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*\//g, "(.*/)?").replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*").replace(/\?/g, ".");
-  return new RegExp(g.includes("/") ? `^${re}$` : `(^|/)${re}$`, "i");
+  let out = "";
+  for (let i = 0; i < g.length; i++) {
+    const c = g[i];
+    if (c === "*") {
+      if (g[i + 1] !== "*") {
+        out += "[^/]*";
+      } else {
+        i++;
+        if (g[i + 1] === "/") {
+          i++;
+          out += "(?:.*/)?";
+        } else {
+          out += ".*";
+        }
+      }
+    } else if (c === "?") {
+      out += "[^/]";
+    } else {
+      out += c.replace(/[.+^${}()|[\]\\]/, "\\$&");
+    }
+  }
+  return new RegExp(g.includes("/") ? `^${out}$` : `(^|/)${out}$`, "i");
 }
 
 export function denyPatterns(config: GatewayConfig): string[] {

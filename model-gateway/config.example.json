@@ -28,7 +28,8 @@
     "opencode":     { "apiKey": "${OPENCODE_API_KEY}" },
     "ollama-cloud": { "apiKey": "${OLLAMA_API_KEY}" },
     "ollama":       { "baseUrl": "http://localhost:11434/v1", "defaultModel": "qwen3-coder:30b" },
-    "lmstudio":     { "baseUrl": "http://localhost:1234/v1", "requiresKey": false, "defaultModel": "local-model" }
+    "lmstudio":     { "baseUrl": "http://localhost:1234/v1", "requiresKey": false, "defaultModel": "local-model" },
+    "typesafe":     { "apiKey": "${TYPESAFE_API_KEY}", "defaultModel": "jev-latest" }
   },
 
   "aliases": {
@@ -65,6 +66,23 @@
 
   "budget": { "perTaskUsd": 1, "perPlanUsd": 10, "perDayUsd": 40, "warnAt": 0.8 },
   "pricing": { "deepseek/deepseek-v4-pro": { "input": 0.55, "output": 2.19 } },
+
+  "$comment_routing": "Who picks the model when a run_plan/delegate task omits one. engine: off (default, an omitted model means defaults.model), rules (deterministic, no key, no network), or jev (TypeSafe System One; degrades to rules without a key). Override per session with the `routing` tool parameter or BREAK_FREE_ROUTING=jev|rules|off. A task's own `model` is never routed. See docs/routing.md.",
+  "routing": {
+    "engine": "rules",
+    "threshold": 0.7,
+    "laneMap": { "local": "local", "fast": "fast", "strong": "strong", "thinker": "thinker", "codex_handoff": "strong", "lead_keeps": null, "unclear": null },
+    "sensitiveLane": "strong",
+    "sensitivePaths": ["**/billing/**"],
+    "sensitiveThreshold": 0.5,
+    "maxStateTokens": 2000,
+    "timeoutMs": 20000,
+    "retries": 2,
+    "retryDelayMs": 800,
+    "batch": "plan",
+    "scorecardLines": 3
+  },
+
   "policy": {
     "rules": [
       { "match": ["infra/prod/**", "**/*.pem"], "action": "deny", "reason": "never delegated" },

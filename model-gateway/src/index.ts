@@ -22,9 +22,9 @@ import fs from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import { loadConfig, listProviderNames, redactKey, resolveProvider, saveConfigPatch, FALLBACK_REASONS, type LoadedConfig } from "./config.js";
+import { loadConfig, listProviderNames, priceFor, redactKey, resolveProvider, saveConfigPatch, FALLBACK_REASONS, type GatewayConfig, type LoadedConfig } from "./config.js";
 import { chatCompletion, listRemoteModels } from "./client.js";
-import { resolveCandidates } from "./router.js";
+import { parseSpec, resolveCandidates } from "./router.js";
 import { Workspace, CAPABILITIES } from "./workspace.js";
 import { McpBridge } from "./mcpbridge.js";
 import { JobRegistry } from "./jobs.js";
@@ -41,7 +41,9 @@ import { HarnessController } from "./harnessctl.js";
 import { appendEvents, classify, drainTo, expireCi, pendingEvents, readSnapshot, resolveCi, writeSnapshot, type FleetEvent, type FleetSnapshot } from "./fleet.js";
 import { delegate, panel, review, supervise, runPlan, type Ctx } from "./orchestrate.js";
 import { PROVIDER_CATALOG } from "./providers.js";
-import { Logger, analyze, callContext, setLogger, summarizeArgs, log as rlog } from "./logger.js";
+import { LANES, LANE_SPEC, effectiveLaneMap, routePlanTasks, resolveEngine } from "./routing.js";
+import { listModels as listJevModels, probe as probeJev } from "./jev.js";
+import { Logger, analyze, callContext, setLogger, summarizeArgs, log as rlog, type LogEvent } from "./logger.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -226,6 +228,7 @@ function providerReport(name: string) {
     api_key: p.requiresKey ? redactKey(p.apiKey) : p.apiKey ? redactKey(p.apiKey) : "(not required)",
     key_env: p.keyEnv,
     default_model: p.defaultModel,
+    kind: p.kind,
     known_models: p.knownModels,
     supports_tools: p.supportsTools,
     get_key: p.docs,
@@ -286,8 +289,9 @@ server.registerTool("list_providers", {
     const rows = await Promise.all(listProviderNames(ctx.config).map(async (n) => {
       const r: Record<string, unknown> = providerReport(n);
       if (probe && r.usable) {
+        const prov = resolveProvider(ctx.config, n)!;
         try {
-          const models = await listRemoteModels(resolveProvider(ctx.config, n)!);
+          const models = prov.kind === "decision" ? await listJevModels(prov) : await listRemoteModels(prov);
           r.probe = { ok: true, models: models.slice(0, 40), total: models.length };
         } catch (e) {
           r.probe = { ok: false, error: (e as Error).message.slice(0, 300) };
@@ -312,7 +316,7 @@ server.registerTool("list_models", {
       const p = resolveProvider(ctx.config, provider);
       if (!p) return fail(new Error(`unknown provider ${provider}`));
       if (p.unusableReason) return fail(new Error(`${provider}: ${p.unusableReason}`));
-      return json({ provider, models: await listRemoteModels(p) });
+      return json({ provider, kind: p.kind, models: p.kind === "decision" ? await listJevModels(p) : await listRemoteModels(p) });
     }
     if (spec) {
       return json({ spec, chain: resolveCandidates(ctx.config, spec).map((c) => ({ spec: c.spec, usable: !c.provider.unusableReason, reason: c.provider.unusableReason ?? null })) });
@@ -334,6 +338,19 @@ server.registerTool("test_provider", {
   inputSchema: { spec: z.string().describe("alias, provider, or provider/model"), with_tools: z.boolean().optional().describe("Also verify tool-calling works (default true)") },
 }, async ({ spec, with_tools }) => {
   const results: unknown[] = [];
+  // Decision providers (TypeSafe/Jev) are not OpenAI-compatible and deliberately never appear in
+  // a candidate chain, so probe them on their own endpoint instead of reporting "nothing resolves".
+  const parsedSpec = parseSpec(ctx.config, spec.trim());
+  const decisionProvider = parsedSpec ? resolveProvider(ctx.config, parsedSpec.provider) : undefined;
+  if (decisionProvider?.kind === "decision") {
+    if (decisionProvider.unusableReason) return fail(new Error(`${spec}: ${decisionProvider.unusableReason}`));
+    const p = await probeJev(decisionProvider);
+    rlog("route.decision", { kind: "routing", spec: `${decisionProvider.name}/${decisionProvider.defaultModel}`, ok: p.ok, ms: p.ms, probe: true, error: p.error });
+    return json({
+      spec,
+      results: [{ spec: `${decisionProvider.name}/${parsedSpec?.model ?? decisionProvider.defaultModel}`, ok: p.ok, ms: p.ms, answered_by: p.model ?? null, ...(p.error ? { error: p.error } : {}), note: "decision provider: POST /v1/systemone, not a chat completion" }],
+    });
+  }
   const cands = resolveCandidates(ctx.config, spec, { useGlobalChain: false });
   if (!cands.length) return fail(new Error(`nothing resolves from '${spec}'`));
   for (const c of cands) {
@@ -496,6 +513,7 @@ server.registerTool("delegate", {
     mcp_servers: z.array(z.string()).optional().describe("Names of YOUR other MCP servers whose tools the worker may call (see list_mcp_servers). Implies capability 'mcp'. Destructive tools are filtered out."),
     verify: z.string().optional().describe("Allow-listed command the gateway runs after the worker finishes, e.g. 'npm test' or 'pytest -q'. Its real exit code and output are appended to the report — the worker cannot fake it."),
     budget_usd: z.number().min(0).optional().describe("USD cap for this worker (default budget.perTaskUsd; 0 = unlimited). The worker is stopped when exceeded."),
+    routing: z.enum(["jev", "rules", "off"]).optional().describe("Session-level routing for this call, used only when `model` is omitted: 'jev' (TypeSafe Jev), 'rules' (deterministic, no key), 'off' (use config.defaults.model). Overrides the BREAK_FREE_ROUTING env var and routing.engine in config."),
     async: z.boolean().optional().describe("Return immediately with a job id; poll job_status / job_result. Use for long tasks."),
   },
 }, async (a) => {
@@ -581,6 +599,62 @@ server.registerTool("supervise", {
 });
 
 
+// ---- routing: policy rules first, then Jev, then the lead
+server.registerTool("route", {
+  title: "Route tasks to models",
+  description:
+    "Decide which model should run each task, without running anything. Deterministic policy rules run first (auth/secrets/migrations are forced onto the local lane and can never go remote), then the engine answers for the rest: 'jev' asks TypeSafe Jev once for the whole batch (a lane, a difficulty, a sensitivity flag and a repo-context flag per task, with probabilities and a confidence), 'rules' is a deterministic keyword engine that needs no key, 'off' returns no advice. A task below the confidence threshold, or one that needs your judgement, comes back as `escalated` with `model: null`. Returns per task: lane, model, confidence, probabilities, difficulty, flags, ms and why. run_plan calls this automatically for any task that omits `model`.",
+  inputSchema: {
+    tasks: z
+      .array(
+        z.object({
+          id: z.string().describe("Task id (used to key the answers)"),
+          title: z.string().optional(),
+          task: z.string().describe("The instructions the worker would receive"),
+          acceptance: z.string().optional(),
+          verify: z.string().optional(),
+          files: z.array(z.string()).optional().describe("Files it will touch — drives policy sensitivity"),
+          tags: z.array(z.string()).optional().describe("Tags used to look up past outcomes in the ledger scorecards"),
+        }),
+      )
+      .min(1)
+      .max(40),
+    goal: z.string().optional().describe("One line describing what the whole batch achieves"),
+    engine: z.enum(["jev", "rules", "off"]).optional().describe("Session-level override for this call"),
+    threshold: z.number().min(0).max(1).optional().describe("Confidence below which a task goes back to you (default routing.threshold)"),
+  },
+}, async (a) => {
+  try {
+    const r = await routePlanTasks(ctx.config, a.tasks, { goal: a.goal, engine: a.engine, threshold: a.threshold, scorecards: ctx.ledger.exists() ? ctx.ledger.scorecards() : [] });
+    const { engine, source } = resolveEngine(ctx.config.routing.engine, a.engine, process.env.BREAK_FREE_ROUTING);
+    return json({
+      engine: r.engine,
+      answered_by: r.answered_by,
+      engine_source: r.engine_source,
+      configured_engine: engine,
+      config_source: source,
+      threshold: r.threshold,
+      ms: r.ms,
+      cost_usd: r.cost_usd,
+      priced: r.priced,
+      batch: r.batch,
+      state_tokens: r.state_tokens,
+      state_truncated: r.state_truncated,
+      jev_model: r.jev_model ?? null,
+      degraded: r.degraded ?? null,
+      usage: r.usage,
+      escalated: r.escalated,
+      policy_hits: r.policy_hits,
+      lanes: LANES,
+      lane_map: effectiveLaneMap(ctx.config),
+      decisions: r.decisions.map((d) => ({ ...d, lane_meaning: LANE_SPEC[d.lane].what })),
+      note: r.engine === "off" ? "routing is off: an omitted model means config.defaults.model" : "advice only — pass these models to run_plan, or omit `model` there and it routes identically",
+    });
+  } catch (e) {
+    return fail(e);
+  }
+});
+
 // ---- fan-out
 const PlanTaskSchema = z.object({
   id: z.string().describe("Short unique id, e.g. 'api', 'tests', 'docs' — or an existing ledger task id (T-007) to run that task"),
@@ -595,6 +669,8 @@ const PlanTaskSchema = z.object({
   mcp_servers: z.array(z.string()).optional(),
   verify: z.string().optional().describe("Allow-listed command the gateway runs after this task; failure blocks dependants"),
   acceptance: z.string().optional().describe("Acceptance criteria (given to the worker, the reviewer and the supervisor)"),
+  files: z.array(z.string()).optional().describe("Files this task is expected to touch. Routing uses them for policy sensitivity (auth/secrets/migrations force the local lane) and to bucket repo-context need. Never enforced."),
+  tags: z.array(z.string()).optional().describe("Free-form tags. Routing looks up what worked before for these tags in the ledger scorecards, e.g. ['migration','api']."),
   supervise: z.boolean().optional().describe("Run under a supervisor loop instead of a single pass"),
   review: z.boolean().optional().describe("Independent review of this task's result (overrides plan-level review)"),
   session_id: z.string().optional(),
@@ -613,6 +689,7 @@ server.registerTool("run_plan", {
     supervisor: z.string().optional().describe("Supervisor model for tasks with supervise:true"),
     track: z.boolean().optional().describe("Record in the project ledger (default: when .break-free exists)"),
     budget_usd: z.number().min(0).optional().describe("USD cap for the whole plan (default budget.perPlanUsd); remaining tasks are cancelled when exceeded"),
+    routing: z.enum(["jev", "rules", "off"]).optional().describe("Session-level routing for this plan: 'jev' (TypeSafe Jev picks a lane per task), 'rules' (deterministic heuristics, no key), 'off' (an omitted model means config.defaults.model, exactly as before). Overrides BREAK_FREE_ROUTING and routing.engine in config. A task's own `model` is never routed."),
     async: z.boolean().optional(),
   },
 }, async (a) => {
@@ -784,6 +861,62 @@ server.registerTool("note_review", {
 });
 
 // ---- cost & budget
+/**
+ * What routing saved in the window: the same token usage replayed at the `strong` alias's list
+ * price, minus what the routing calls themselves cost. This is an estimate of what these exact
+ * calls would have cost on strong — it is not a re-run, and it ignores cache and context reuse.
+ */
+function routingSavings(config: GatewayConfig, crewEvents: LogEvent[], since: string) {
+  const strongCand = resolveCandidates(config, "strong", { useGlobalChain: false })[0];
+  const routePlans = logger?.tail(50_000, (e) => e.kind === "route.plan" && String(e.ts) >= since) ?? [];
+  const routingUsd = (logger?.tail(50_000, (e) => e.kind === "route.decision" && String(e.ts) >= since) ?? []).reduce((a, e) => a + Number(e.cost_usd ?? 0), 0);
+  const latencies = routePlans.map((e) => Number(e.ms ?? 0)).filter((n) => n > 0).sort((a, b) => a - b);
+  const tasks = routePlans.reduce((a, e) => a + Number(e.tasks ?? 0), 0);
+  const escalations = routePlans.reduce((a, e) => a + Number(e.escalations ?? 0), 0);
+  const routing = {
+    plans: routePlans.length,
+    tasks,
+    escalations,
+    escalation_rate: tasks ? Math.round((escalations / tasks) * 1000) / 1000 : null,
+    ms_p50: latencies.length ? latencies[Math.floor((latencies.length - 1) * 0.5)] : null,
+    ms_max: latencies.length ? latencies[latencies.length - 1] : null,
+    usd: Math.round(routingUsd * 1e6) / 1e6,
+  };
+  if (!strongCand) {
+    return { measured: false, reason: "the `strong` alias resolves to no usable candidate — add one to aliases.strong to enable the replay estimate", routing };
+  }
+  const price = priceFor(config, strongCand.provider.name, strongCand.model);
+  let actual = 0;
+  let replay = 0;
+  let tokensIn = 0;
+  let tokensOut = 0;
+  for (const e of crewEvents) {
+    const u = e.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
+    const pi = u?.prompt_tokens ?? 0;
+    const po = u?.completion_tokens ?? 0;
+    actual += Number(e.cost_usd ?? 0);
+    tokensIn += pi;
+    tokensOut += po;
+    replay += (pi * price.input + po * price.output) / 1_000_000;
+  }
+  const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
+  const saved = replay - actual;
+  return {
+    measured: true,
+    actual_crew_usd: r6(actual),
+    all_strong_replay_usd: r6(replay),
+    saved_usd: r6(saved),
+    saved_pct: replay > 0 ? Math.round((saved / replay) * 1000) / 10 : null,
+    routing_usd: routing.usd,
+    net_saved_usd: r6(saved - routingUsd),
+    crew_calls: crewEvents.length,
+    tokens: { input: tokensIn, output: tokensOut },
+    priced_on: strongCand.spec,
+    routing,
+    assumption: "the all-`strong` replay prices the SAME token usage at strong's list price; it estimates what these calls would have cost on strong, it is not a re-run, and it ignores prompt-cache and context-reuse differences",
+  };
+}
+
 server.registerTool("cost_report", {
   title: "Spend report",
   description: "USD spent per day and per provider from the runtime log (list prices; edit `pricing` in config for exact rates), today's spend against budget.perDayUsd, unpriced calls, and the current caps.",
@@ -805,7 +938,7 @@ server.registerTool("cost_report", {
   const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
   const today = ctx.spentTodayUsd();
   const cap = ctx.config.budget.perDayUsd;
-  return json({ window_days: days ?? 7, total_usd: r6(Object.values(byDay).reduce((a, b) => a + b, 0)), by_day: Object.fromEntries(Object.entries(byDay).sort().map(([k, v]) => [k, r6(v)])), by_provider: Object.fromEntries(Object.entries(byProvider).map(([k, v]) => [k, { ...v, usd: r6(v.usd) }])), by_model: Object.fromEntries(Object.entries(byModel).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, r6(v)])), today_usd: today, budget: ctx.config.budget, today_vs_day_cap: cap ? `${Math.round((today / cap) * 100)}%${today / cap >= ctx.config.budget.warnAt ? " — WARNING" : ""}` : "no daily cap", unpriced_calls: unpriced, pricing_note: "list prices from DEFAULT_PRICING merged with config.pricing; set pricing[\"provider/model\"] = {input, output} USD per 1M tokens to correct" });
+  return json({ window_days: days ?? 7, total_usd: r6(Object.values(byDay).reduce((a, b) => a + b, 0)), by_day: Object.fromEntries(Object.entries(byDay).sort().map(([k, v]) => [k, r6(v)])), by_provider: Object.fromEntries(Object.entries(byProvider).map(([k, v]) => [k, { ...v, usd: r6(v.usd) }])), by_model: Object.fromEntries(Object.entries(byModel).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, r6(v)])), today_usd: today, budget: ctx.config.budget, today_vs_day_cap: cap ? `${Math.round((today / cap) * 100)}%${today / cap >= ctx.config.budget.warnAt ? " — WARNING" : ""}` : "no daily cap", unpriced_calls: unpriced, routing_savings: routingSavings(ctx.config, events, since), pricing_note: "list prices from DEFAULT_PRICING merged with config.pricing; set pricing[\"provider/model\"] = {input, output} USD per 1M tokens to correct them. Unknown models are reported as unpriced." });
 });
 server.registerTool("configure_budget", {
   title: "Set spend caps and prices",

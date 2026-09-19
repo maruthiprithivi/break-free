@@ -86,7 +86,7 @@ and follow it exactly, including the verification steps and the final report.
 |---|---|---|
 | Talks to you; decomposes the goal into self-contained tasks with dependencies | Executes one task each, in parallel, with jailed tools | Schedules the graph with bounded concurrency; hands prerequisite reports to dependants |
 | Writes acceptance criteria and **the `verify` command** for each task | Runs tests itself (`run` capability) before reporting | **Runs `verify` after the worker** — a real exit code, which cannot be faked; failure blocks dependants |
-| Decides which vendor does what (`fast`/`strong`/`local`, a different vendor for review) | Records decisions and gotchas it hits (`ledger_note`) | Routes with fallback; injects CLAUDE.md/AGENTS.md, skills and ledger knowledge into every worker |
+| Decides which vendor does what (`fast`/`strong`/`local`, a different vendor for review) — or lets **routing** decide, with [Jev](docs/routing.md) picking a lane per task when no model is named | Records decisions and gotchas it hits (`ledger_note`) | Routes with fallback; injects CLAUDE.md/AGENTS.md, skills and ledger knowledge into every worker |
 | Reads the consolidated report, diffs and verdicts; pushes back; commits; owns the result | | Tracks every task, outcome and verification in `.break-free/` so any later session resumes |
 
 Two things do the real work. `verify` is a shell command **the gateway runs after the worker finishes**, so a pass is an exit code rather than a claim. The ledger is plain Markdown inside your repository, so the next session — or the next person — starts from what already happened.
@@ -115,6 +115,7 @@ The `run_plan` dependency graph, the ledger and how it survives merges, worktree
 | [docs/install.md](docs/install.md) | every installer flag, each prompt explained, scopes, the manual path, troubleshooting |
 | [AGENT-INSTALL.md](AGENT-INSTALL.md) | the same install, written for a coding agent to carry out |
 | [docs/usage.md](docs/usage.md) | `run_plan`, the ledger, worktrees, guardrails, model specs, fallback, other harnesses |
+| [docs/routing.md](docs/routing.md) | letting Jev (or deterministic rules) pick the model per task, and measuring it with `bf bench route` |
 | [docs/architecture.md](docs/architecture.md) | the operating model, the tool surface, repository layout |
 | [docs/harness.md](docs/harness.md) | running Claude Code or Codex *on* DeepSeek, Kimi or Ollama; tmux harness sub-agents |
 | [docs/operations.md](docs/operations.md) | the runtime log and diagnosing problems, operational notes, `break-free-github-flow` |

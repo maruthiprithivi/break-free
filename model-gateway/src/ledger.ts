@@ -37,6 +37,40 @@ export interface Task {
   acceptance?: string;
   outcome?: string;
   log: string[];
+  /** Routing provenance — why this task ran on the model it ran on. */
+  routed_by?: string; // "jev" | "rules" | "policy" | "lead"
+  route_lane?: string;
+  route_confidence?: number;
+  /** Lane distribution as `fast=0.83 strong=0.11` (frontmatter values must stay scalar). */
+  route_probs?: string;
+  route_ms?: number;
+  /** Set when the lead later replaced a routed lane with an explicit model. */
+  overridden_by?: string;
+}
+
+/** The routing block a caller may pass to `createTask`. */
+export type TaskRouting = Pick<Task, "routed_by" | "route_lane" | "route_confidence" | "route_probs" | "route_ms" | "overridden_by">;
+
+/**
+ * One line of routing evidence in `.break-free/scorecards.jsonl`: what lane ran a task, on what
+ * model, and whether the gateway's own verify passed. This is the feedback loop — the next plan's
+ * Jev state quotes these as `migration: fast 0/2 verify pass, strong 1/1`. Structured JSONL rather
+ * than prose in a task body, because prose cannot be aggregated reliably.
+ */
+export interface ScorecardRecord {
+  /** Ledger task id */
+  task: string;
+  /** `run_plan` id or goal slug, so a whole plan can be replayed */
+  plan?: string;
+  lane: string;
+  model: string;
+  tags: string[];
+  /** `null` when the task had no verify command — excluded from pass rates rather than counted as a pass */
+  verify_ok: boolean | null;
+  attempts: number;
+  ms: number;
+  cost_usd: number;
+  at: string;
 }
 
 export interface Note {
@@ -195,11 +229,11 @@ export class Ledger {
     return `${prefix}${String(Math.max(0, ...ids) + 1).padStart(3, "0")}`;
   }
 
-  createTask(t: { id?: string; title: string; problem?: string; acceptance?: string; depends_on?: string[]; owner?: string; verify?: string; tags?: string[]; status?: TaskStatus }): Task {
+  createTask(t: { id?: string; title: string; problem?: string; acceptance?: string; depends_on?: string[]; owner?: string; verify?: string; tags?: string[]; status?: TaskStatus; routing?: TaskRouting }): Task {
     this.ensure();
     const id = t.id ?? this.nextId();
     if (this.taskFileAnyLayer(id)) throw new Error(`task ${id} already exists`);
-    const task: Task = { id, title: t.title, status: t.status ?? "todo", owner: t.owner, depends_on: t.depends_on ?? [], tags: t.tags ?? [], verify: t.verify, created: now(), updated: now(), problem: t.problem, acceptance: t.acceptance, log: [`${now()} created`] };
+    const task: Task = { id, title: t.title, status: t.status ?? "todo", owner: t.owner, depends_on: t.depends_on ?? [], tags: t.tags ?? [], verify: t.verify, created: now(), updated: now(), problem: t.problem, acceptance: t.acceptance, log: [`${now()} created`], ...t.routing };
     this.saveTask(task);
     this.render();
     return task;
@@ -229,6 +263,12 @@ export class Ledger {
       acceptance: section(body, "Acceptance criteria"),
       outcome: section(body, "Outcome"),
       log: logSec.split("\n").map((l) => l.replace(/^- /, "").trim()).filter(Boolean),
+      routed_by: meta.routed_by ? String(meta.routed_by) : undefined,
+      route_lane: meta.route_lane ? String(meta.route_lane) : undefined,
+      route_confidence: meta.route_confidence !== undefined && meta.route_confidence !== "" ? Number(meta.route_confidence) : undefined,
+      route_probs: meta.route_probs ? String(meta.route_probs) : undefined,
+      route_ms: meta.route_ms !== undefined && meta.route_ms !== "" ? Number(meta.route_ms) : undefined,
+      overridden_by: meta.overridden_by ? String(meta.overridden_by) : undefined,
     };
   }
 
@@ -265,7 +305,24 @@ export class Ledger {
   }
 
   private saveTask(t: Task): void {
-    const meta = { id: t.id, title: t.title, status: t.status, owner: t.owner, depends_on: t.depends_on, tags: t.tags, verify: t.verify, job: t.job, created: t.created, updated: t.updated };
+    const meta = {
+      id: t.id,
+      title: t.title,
+      status: t.status,
+      owner: t.owner,
+      depends_on: t.depends_on,
+      tags: t.tags,
+      verify: t.verify,
+      job: t.job,
+      routed_by: t.routed_by,
+      route_lane: t.route_lane,
+      route_confidence: t.route_confidence,
+      route_probs: t.route_probs,
+      route_ms: t.route_ms,
+      overridden_by: t.overridden_by,
+      created: t.created,
+      updated: t.updated,
+    };
     const body = [
       `# ${t.id} ${t.title}`,
       "",
@@ -385,6 +442,33 @@ export class Ledger {
     const f = path.join(this.dir, "journal", `${day()}.md`);
     if (!fs.existsSync(f)) fs.writeFileSync(f, `# Journal ${day()}\n\n`);
     fs.appendFileSync(f, `- ${now().slice(11, 19)} ${line.replace(/\s+/g, " ").trim()}\n`);
+  }
+
+  // ---- scorecards (the routing feedback loop)
+  /** Append one routing outcome. Append-only JSONL: parallel workers never rewrite each other's lines. */
+  scorecardAppend(rec: ScorecardRecord): void {
+    this.ensure();
+    const f = path.join(this.dir, "scorecards.jsonl");
+    fs.appendFileSync(f, JSON.stringify(rec) + "\n");
+  }
+
+  /** Every scorecard line visible to this ledger, overlay included, oldest first. Malformed lines are skipped, not fatal. */
+  scorecards(): ScorecardRecord[] {
+    const out: ScorecardRecord[] = [];
+    for (const layer of this.layers()) {
+      const f = path.join(layer, "scorecards.jsonl");
+      if (!fs.existsSync(f)) continue;
+      for (const line of fs.readFileSync(f, "utf8").split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const r = JSON.parse(line) as ScorecardRecord;
+          if (r && typeof r.task === "string" && typeof r.lane === "string") out.push({ ...r, tags: Array.isArray(r.tags) ? r.tags : [], verify_ok: r.verify_ok ?? null, cost_usd: Number(r.cost_usd ?? 0), ms: Number(r.ms ?? 0), attempts: Number(r.attempts ?? 1) });
+        } catch {
+          /* a half-written or hand-edited line must not break routing */
+        }
+      }
+    }
+    return out;
   }
 
   static journalIn(dir: string): { day: string; lines: string[] }[] {

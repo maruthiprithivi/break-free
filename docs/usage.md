@@ -29,6 +29,23 @@ run_plan({
 ```
 `tests`, `docs` and `wire` run in parallel once `core` is done and receive its report as context; a failing `verify` fails the task and skips its dependants; a reviewer `reject` fails it, `revise` marks it for your attention; every task lands in the ledger with outcome and verification. `workers.maxConcurrency` (default 4) caps parallelism.
 
+## Routing: when you'd rather not name a model
+Drop `model` from a task and let routing pick the lane:
+
+```jsonc
+run_plan({ goal: "rate limiting", routing: "jev", tasks: [ … ] })   // session-level
+```
+
+Add `files` and `tags` per task so policy and the scorecards have something to work with — `files`
+decides sensitivity (auth, secrets, migrations force a stronger lane *and* an automatic review),
+`tags` join the ledger's scorecards so a lane that keeps failing stops being chosen. Jev answers a
+whole plan in one call and hands anything below the confidence threshold back to you instead of
+guessing. `routing: "off"` (also the global default) restores the old behaviour exactly: an omitted
+model means `defaults.model`.
+
+Full guide — lanes, thresholds, sensitivity modes, ledger fields, the learning loop, and `bf route`
+/ `bf bench route` / `bf demo`: **[routing.md](routing.md)**.
+
 ## The ledger: long-horizon memory in the repo
 `.break-free/` is created on first use (`ledger_resume {init:true}`, `task_create`, `note_write` or a tracked `run_plan`) and is plain Markdown — commit it, diff it, or open the folder as an **Obsidian vault**:
 

@@ -1,0 +1,308 @@
+#!/usr/bin/env node
+/**
+ * `bf` — the Break Free command line.
+ *
+ *   bf route  --plan <file> [--engine jev|rules|off] [--threshold 0.7] [--json]
+ *   bf bench route [--set <file>] [--engine rules,jev] [--live] [--record <file>] [--json]
+ *   bf demo [--plan <file>] [--live] [--json]
+ *
+ * `bf route`, `bf bench route` and `bf demo` call the same functions `run_plan` calls, so what
+ * you see here is what the gateway does — not a reimplementation. Offline (the default) the Jev
+ * arm answers from a recorded decision set replayed through the real TypeSafe client; `--live`
+ * calls api.typesafe.ai and needs TYPESAFE_API_KEY.
+ */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { loadConfig, userConfigPath, type GatewayConfig } from "./config.js";
+import { routePlanTasks, type RouteDecision, type RouteResult, type RoutingEngine, type RouteTaskInput } from "./routing.js";
+import { ASSUMED_TOKENS_PER_TASK, benchEngineLabel, decisionArm, laneCostUsd, leadArm, loadLabeledSet, renderBenchTable, scoreArm, unmeasuredLlmArm, type LabeledTask, type RouterArm } from "./bench.js";
+import { startTypeSafeDouble, type DoubleDecision, type TypeSafeDouble } from "./jev-double.js";
+
+const REPO_BENCH = new URL("../bench/", import.meta.url).pathname;
+const DEFAULT_RECORDING = path.join(REPO_BENCH, "jev-recording.json");
+
+interface Parsed {
+  cmd: string;
+  sub?: string;
+  flags: Record<string, string | boolean>;
+}
+
+export function parseArgs(argv: string[]): Parsed {
+  const positional = argv.filter((a) => !a.startsWith("--"));
+  const [cmd = "help", sub] = positional;
+  const flags: Record<string, string | boolean> = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (!a.startsWith("--")) continue;
+    const key = a.slice(2);
+    const next = argv[i + 1];
+    if (next && !next.startsWith("--")) {
+      flags[key] = next;
+      i++;
+    } else flags[key] = true;
+  }
+  return { cmd, sub, flags };
+}
+
+/** A config for a CLI run: the user's own file plus explicit overrides, in a throwaway path. */
+export function configFor(over: { providers?: Record<string, unknown>; routing?: Record<string, unknown> }): GatewayConfig {
+  const userPath = userConfigPath();
+  const userJson = fs.existsSync(userPath) ? (JSON.parse(fs.readFileSync(userPath, "utf8")) as Record<string, unknown>) : {};
+  const merged = {
+    ...userJson,
+    providers: { ...((userJson.providers as Record<string, unknown>) ?? {}), ...(over.providers ?? {}) },
+    routing: { ...((userJson.routing as Record<string, unknown>) ?? {}), ...(over.routing ?? {}) },
+  };
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bf-cli-")), "config.json");
+  fs.writeFileSync(file, JSON.stringify(merged));
+  return loadConfig({ workspaceRoot: process.cwd(), configPath: file }).config;
+}
+
+export function readPlan(file: string): { goal?: string; tasks: (RouteTaskInput & { tags?: string[]; files?: string[] })[] } {
+  const text = fs.readFileSync(file, "utf8");
+  if (file.endsWith(".jsonl")) return { tasks: text.split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as RouteTaskInput) };
+  const parsed = JSON.parse(text) as { goal?: string; tasks?: RouteTaskInput[] } | RouteTaskInput[];
+  return Array.isArray(parsed) ? { tasks: parsed } : { goal: parsed.goal, tasks: parsed.tasks ?? [] };
+}
+
+export function renderRouteTable(r: RouteResult): string {
+  if (!r.decisions.length) return `routing is ${r.engine}: an omitted model means config.defaults.model (nothing was routed)`;
+  const cols = ["task", "lane", "model", "conf", "diff", "sens", "ctx", "why"];
+  const rows = r.decisions.map((d): string[] => [d.id, d.lane, d.model ?? "— lead", d.confidence?.toFixed(2) ?? "—", String(d.difficulty), d.sensitive ? "yes" : "no", d.needs_repo_context ? "yes" : "no", d.reason + (d.policy_hits.length ? ` (${d.policy_hits[0]})` : "")]);
+  const widths = cols.map((c, i) => Math.max(c.length, ...rows.map((row) => row[i].length)));
+  const fmt = (row: string[]) => row.map((c, i) => c.padEnd(widths[i])).join("  ").trimEnd();
+  const msPerTask = r.decisions.length ? Math.round(r.ms / r.decisions.length) : 0;
+  return [
+    fmt(cols),
+    fmt(cols.map((c) => "-".repeat(c.length))),
+    ...rows.map(fmt),
+    "",
+    `engine ${r.answered_by}${r.degraded ? ` (degraded: ${r.degraded})` : ""} · ${r.decisions.length} tasks in ${r.ms} ms (${msPerTask} ms/task) · $${r.cost_usd.toFixed(6)}${r.priced ? "" : " (unpriced)"} · state ${r.state_tokens} tokens${r.state_truncated ? " (trimmed)" : ""}`,
+    `escalated ${r.escalated}/${r.decisions.length} · policy hits ${r.policy_hits}`,
+  ].join("\n");
+}
+
+/** The offline decision source: a recorded set replayed through the real client and router. */
+async function offlineDouble(recordFile: string): Promise<TypeSafeDouble & { source: string }> {
+  const raw = fs.existsSync(recordFile) ? (JSON.parse(fs.readFileSync(recordFile, "utf8")) as { decisions?: Record<string, DoubleDecision> }) : { decisions: {} };
+  const double = await startTypeSafeDouble({ decisions: raw.decisions ?? {} });
+  return Object.assign(double, { source: recordFile });
+}
+
+function offlineRouting(recordFile: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { engine: "jev", retryDelayMs: 0, ...extra };
+}
+
+// ------------------------------------------------------------------ bf route
+async function cmdRoute(flags: Record<string, string | boolean>): Promise<number> {
+  const planFile = typeof flags.plan === "string" ? flags.plan : undefined;
+  if (!planFile) {
+    console.error("usage: bf route --plan <file.json|file.jsonl> [--engine jev|rules|off] [--threshold 0.7]");
+    return 2;
+  }
+  const engine = (typeof flags.engine === "string" ? flags.engine : "rules") as RoutingEngine;
+  const offline = engine === "jev" && flags.live !== true;
+  const double = offline ? await offlineDouble(typeof flags.record === "string" ? flags.record : DEFAULT_RECORDING) : undefined;
+  try {
+    const config = configFor({
+      providers: double ? { typesafe: { baseUrl: double.url, apiKey: "bf-offline" } } : {},
+      routing: { engine, ...(typeof flags.threshold === "string" ? { threshold: Number(flags.threshold) } : {}), ...(offline ? offlineRouting(double!.source) : {}) },
+    });
+    const { goal, tasks } = readPlan(planFile);
+    const result = await routePlanTasks(config, tasks, { goal, engine });
+    console.log(flags.json ? JSON.stringify(result, null, 2) : renderRouteTable(result));
+    return 0;
+  } finally {
+    await double?.close();
+  }
+}
+
+// ------------------------------------------------------------------ bf bench route
+export function writeRecording(file: string, set: LabeledTask[], decisions: RouteDecision[], answeredBy: string): void {
+  const byId = new Map(decisions.map((d) => [d.id, d]));
+  const out = {
+    note: "Recorded TypeSafe System One decisions, replayed offline through the real client so `bf bench route` and `bf demo` run with no key. Regenerate against the live API with: bf bench route --live --record bench/jev-recording.json",
+    answered_by: answeredBy,
+    recorded_at: new Date().toISOString(),
+    tasks: set.length,
+    decisions: Object.fromEntries(
+      set.map((t) => {
+        const d = byId.get(t.id);
+        return [t.id, { lane: d?.proposed_lane ?? "unclear", confidence: d?.confidence ?? 0, difficulty: d?.difficulty ?? 2, sensitive: d?.sensitive_prob ?? 0, context: d?.needs_repo_context ? 1 : 0, probs: d?.probabilities ?? null }];
+      }),
+    ),
+  };
+  fs.writeFileSync(file, JSON.stringify(out, null, 2) + "\n");
+  console.error(`wrote ${file}`);
+}
+
+async function cmdBench(flags: Record<string, string | boolean>): Promise<number> {
+  const setFile = typeof flags.set === "string" ? flags.set : path.join(REPO_BENCH, "route-set.jsonl");
+  const set = loadLabeledSet(setFile);
+  const live = flags.live === true;
+  const recordFile = typeof flags.record === "string" ? flags.record : DEFAULT_RECORDING;
+  const arms: RouterArm[] = [leadArm(set)];
+
+  const rulesConfig = configFor({ routing: { engine: "rules" } });
+  const rulesStart = Date.now();
+  const rules = await routePlanTasks(rulesConfig, set, { engine: "rules" });
+  arms.push(decisionArm("rules", "static rules", rules.decisions, Date.now() - rulesStart, 0));
+
+  if (flags.engine === undefined || String(flags.engine).includes("jev")) {
+    const double = live ? undefined : await offlineDouble(recordFile);
+    try {
+      const config = configFor({
+        providers: double ? { typesafe: { baseUrl: double.url, apiKey: "bf-offline" } } : {},
+        routing: live ? { engine: "jev" } : offlineRouting(double!.source),
+      });
+      const started = Date.now();
+      const r = await routePlanTasks(config, set, { engine: "jev" });
+      const ms = Date.now() - started;
+      const label = live ? "Jev (live api.typesafe.ai)" : "Jev (replayed recording)";
+      if (r.answered_by !== "jev") {
+        arms.push({ name: "jev", label, measured: false, note: `Jev did not answer: ${r.degraded ?? "unknown"}`, ms, cost_usd: r.cost_usd, outcomes: new Map() });
+      } else {
+        arms.push({ ...decisionArm("jev", label, r.decisions, ms, r.cost_usd), note: `${r.usage.input_tokens} input tokens, ${r.batch} batch, ${r.escalated} escalated` });
+        if (live) writeRecording(recordFile, set, r.decisions, r.answered_by);
+      }
+    } finally {
+      await double?.close();
+    }
+  }
+
+  arms.push(unmeasuredLlmArm("needs a frontier provider key: set one with the configure_provider tool, then this arm sends the same tasks through a chat model prompted as a router"));
+
+  const metrics = arms.map((a) => scoreArm(rulesConfig, set, a));
+  const meta = {
+    set: setFile,
+    tasks: set.length,
+    engine: benchEngineLabel(live ? "jev" : "recorded"),
+    live,
+    assumed: `costs assume ${ASSUMED_TOKENS_PER_TASK.input.toLocaleString()} input + ${ASSUMED_TOKENS_PER_TASK.output.toLocaleString()} output tokens per task at list prices`,
+  };
+  console.log(flags.json ? JSON.stringify({ meta, metrics }, null, 2) : renderBenchTable(metrics, meta));
+  return 0;
+}
+
+// ------------------------------------------------------------------ bf demo
+async function cmdDemo(flags: Record<string, string | boolean>): Promise<number> {
+  const planFile = typeof flags.plan === "string" ? flags.plan : path.join(REPO_BENCH, "demo-plan.json");
+  const { goal = "", tasks } = readPlan(planFile);
+  const live = flags.live === true;
+  const sensitiveLane = flags["sensitive-lane"] === "local" ? "local" : "strong";
+  const recordFile = typeof flags.record === "string" ? flags.record : path.join(REPO_BENCH, "demo-recording.json");
+  const double = live ? undefined : await offlineDouble(recordFile);
+  try {
+    const jevConfig = configFor({
+      providers: double ? { typesafe: { baseUrl: double.url, apiKey: "bf-offline" } } : {},
+      routing: { ...(live ? { engine: "jev" } : offlineRouting(double!.source)), sensitiveLane },
+    });
+    const rulesConfig = configFor({ routing: { engine: "rules" } });
+    const offConfig = configFor({ routing: { engine: "off" } });
+
+    const started = Date.now();
+    const jev = await routePlanTasks(jevConfig, tasks, { goal, engine: "jev" });
+    const jevMs = Date.now() - started;
+    const rules = await routePlanTasks(rulesConfig, tasks, { goal, engine: "rules" });
+    const none = await routePlanTasks(offConfig, tasks, { goal, engine: "off" });
+
+    const crewCost = (r: RouteResult) => tasks.reduce((sum, t) => sum + laneCostUsd(jevConfig, r.decisions.find((d) => d.id === t.id)?.lane ?? "unclear"), 0);
+    const strongCost = laneCostUsd(jevConfig, "strong") * tasks.length;
+    const jevCrew = crewCost(jev);
+    const rulesCrew = crewCost(rules);
+    const offCrew = laneCostUsd(jevConfig, "fast") * tasks.length;
+    const summary = {
+      goal,
+      plan_file: planFile,
+      tasks: tasks.length,
+      with_jev: { answered_by: jev.answered_by, routing_ms: jevMs, routing_usd: jev.cost_usd, state_tokens: jev.state_tokens, escalated: jev.escalated, policy_hits: jev.policy_hits, crew_cost_usd: round4(jevCrew), vs_all_strong_pct: round1(((strongCost - jevCrew) / strongCost) * 100), lanes: countBy(jev.decisions) },
+      without_jev_rules: { crew_cost_usd: round4(rulesCrew), lanes: countBy(rules.decisions), escalated: rules.escalated },
+      without_jev_off: { model: offConfig.defaults.model, crew_cost_usd: round4(offCrew), note: "every task runs on defaults.model — what Break Free did before routing existed" },
+      all_strong_usd: round4(strongCost),
+      assumed_tokens_per_task: ASSUMED_TOKENS_PER_TASK,
+      sensitive_lane: sensitiveLane,
+      mode: live ? "live" : "recorded decisions replayed through the real code path",
+    };
+
+    if (flags.json) {
+      console.log(JSON.stringify({ summary, with_jev: jev.decisions, without_jev_rules: rules.decisions }, null, 2));
+      return 0;
+    }
+    console.log(`# bf demo — "${goal}" (${tasks.length} tasks)\n`);
+    console.log("## With Jev — one call routes the whole plan\n");
+    console.log(renderRouteTable(jev));
+    console.log("\n## Without Jev — deterministic rules\n");
+    console.log(renderRouteTable(rules));
+    console.log("\n## Without Jev — routing off (pre-routing behaviour)\n");
+    console.log(renderRouteTable(none));
+    console.log("\n## Cost (assumed budget per task, list prices)\n");
+    console.log(`  Jev:        $${summary.with_jev.crew_cost_usd} crew + $${jev.cost_usd.toFixed(6)} routing — ${summary.with_jev.vs_all_strong_pct}% cheaper than all-strong`);
+    console.log(`  rules:      $${summary.without_jev_rules.crew_cost_usd} crew`);
+    console.log(`  all strong: $${summary.all_strong_usd} crew`);
+    console.log(`  latency:    ${jevMs} ms for ${tasks.length} tasks (${Math.round(jevMs / tasks.length)} ms/task), state ${jev.state_tokens} tokens`);
+    const escalated = jev.decisions.filter((d) => d.escalated);
+    if (escalated.length) {
+      console.log("\n## Handed back to the lead\n");
+      for (const d of escalated) console.log(`  ${d.id}: ${d.reason}${d.confidence !== null ? ` (confidence ${d.confidence.toFixed(2)})` : ""} — lanes ${formatLanes(d.probabilities)}`);
+    }
+    const policy = jev.decisions.filter((d) => d.policy_hits.length || d.requires_review);
+    if (policy.length) {
+      console.log(`\n## Guardrail (sensitiveLane: ${summary.sensitive_lane}) — these get an independent review\n`);
+      for (const d of policy) console.log(`  ${d.id}: lane ${d.lane}${d.policy_hits.length ? ` (policy: ${d.policy_hits.join(", ")})` : ` (sensitive p=${d.sensitive_prob?.toFixed(2)})`}${d.lane === "local" ? " — data stays on this machine" : ""}`);
+    }
+    console.log(`\n${summary.mode}`);
+    return 0;
+  } finally {
+    await double?.close();
+  }
+}
+
+function formatLanes(probs: Record<string, number> | null): string {
+  if (!probs) return "n/a";
+  return Object.entries(probs)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([k, v]) => `${k} ${Number(v).toFixed(2)}`)
+    .join(" ");
+}
+
+const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
+const round1 = (n: number) => Math.round(n * 10) / 10;
+function countBy(decisions: RouteDecision[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const d of decisions) out[d.lane] = (out[d.lane] ?? 0) + 1;
+  return out;
+}
+
+const HELP = `bf — Break Free command line
+
+  bf route --plan <file.json|file.jsonl> [--engine jev|rules|off] [--threshold 0.7] [--json]
+      Decide which model runs each task. Same code path run_plan uses.
+
+  bf bench route [--set bench/route-set.jsonl] [--engine rules,jev] [--live] [--record <file>] [--json]
+      Score lead-picks, static rules and Jev against the labeled set.
+      Offline it replays bench/jev-recording.json; --live calls api.typesafe.ai
+      (needs TYPESAFE_API_KEY) and saves the decisions with --record.
+
+  bf demo [--plan bench/demo-plan.json] [--live] [--json]
+      One plan routed three ways: Jev, deterministic rules, and routing off.
+
+Environment
+  TYPESAFE_API_KEY      live Jev
+  BREAK_FREE_ROUTING    session-wide override: jev | rules | off
+`;
+
+export async function main(argv = process.argv.slice(2)): Promise<number> {
+  const { cmd, sub, flags } = parseArgs(argv);
+  if (cmd === "route") return cmdRoute(flags);
+  if (cmd === "bench" && sub === "route") return cmdBench(flags);
+  if (cmd === "demo") return cmdDemo(flags);
+  console.log(HELP);
+  return cmd === "help" || cmd === "--help" ? 0 : 2;
+}
+
+// Only run when executed, never when imported by a test.
+const entry = process.argv[1] ? path.resolve(process.argv[1]) : "";
+const self = path.resolve(new URL(import.meta.url).pathname);
+if (entry === self) process.exitCode = await main();

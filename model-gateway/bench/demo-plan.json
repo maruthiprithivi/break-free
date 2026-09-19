@@ -1,0 +1,114 @@
+{
+  "goal": "Add rate limiting with tests, docs, a migration and a CLI flag",
+  "note": "The hero plan from the demo. No task names a model: routing decides all twelve.",
+  "tasks": [
+    {
+      "id": "design",
+      "title": "Decide the limiter algorithm and where the state lives",
+      "task": "Decide between a fixed-window counter and a sliding-window log for the rate limiter, and say where the counters live (in-process vs shared store). Write the decision down with the trade-offs and pick one.",
+      "acceptance": "A short decision note naming the algorithm, the store, and the reason the alternative was rejected.",
+      "verify": "npm test",
+      "files": ["docs/decisions/rate-limiting.md"],
+      "tags": ["design", "api"]
+    },
+    {
+      "id": "core-limiter",
+      "title": "Implement the limiter core",
+      "task": "Implement the rate limiter core in src/limiter/index.ts using the decided algorithm: a pure function that takes a key, a limit, a window and a clock, and returns allow/deny with the remaining budget.",
+      "acceptance": "Pure, clock-injected, no I/O; unit-tested at the boundary values.",
+      "verify": "npx tsc --noEmit",
+      "files": ["src/limiter/index.ts", "src/limiter/types.ts", "test/limiter.test.ts"],
+      "tags": ["core", "api"]
+    },
+    {
+      "id": "middleware",
+      "title": "Wire the limiter into the request pipeline",
+      "task": "Add an express middleware in src/middleware/rate-limit.ts that calls the limiter core and returns 429 with Retry-After when the budget is exhausted. Keep the core free of framework types.",
+      "acceptance": "Requests over the limit get 429 and Retry-After; under the limit they pass through unchanged.",
+      "verify": "npm test",
+      "files": ["src/middleware/rate-limit.ts", "src/app.ts"],
+      "tags": ["api", "middleware"]
+    },
+    {
+      "id": "store",
+      "title": "Add the shared counter store",
+      "task": "Implement the counter store behind the interface from the core, with an in-memory implementation for tests and a Redis implementation selected by config.",
+      "acceptance": "Both implementations satisfy the same interface tests; the Redis one is skipped when REDIS_URL is unset.",
+      "verify": "npm test",
+      "files": ["src/limiter/store.ts", "src/limiter/store-redis.ts", "src/config.ts"],
+      "tags": ["core", "storage"]
+    },
+    {
+      "id": "migration",
+      "title": "Add the migration for the rate-limit table",
+      "task": "Add db/migrations/0031_rate_limit_buckets.sql creating the buckets table with a composite primary key on (key, window_start) and an index on window_start for the cleanup job.",
+      "acceptance": "Migration applies cleanly and rolls back; db/schema.sql regenerated.",
+      "verify": "npm test",
+      "files": ["db/migrations/0031_rate_limit_buckets.sql", "db/schema.sql"],
+      "tags": ["migration", "storage"]
+    },
+    {
+      "id": "config-flag",
+      "title": "Add the --rate-limit flag",
+      "task": "Add a --rate-limit <n> CLI flag that overrides the configured per-key limit for one process, defaulting to the config value.",
+      "acceptance": "--help shows it; an invalid value exits non-zero with a clear message.",
+      "verify": "npm test",
+      "files": ["src/cli.ts"],
+      "tags": ["cli"]
+    },
+    {
+      "id": "unit-tests",
+      "title": "Unit-test the limiter at its boundaries",
+      "task": "Add unit tests covering exactly-at-limit, one-over-limit, window rollover and clock going backwards.",
+      "acceptance": "The four boundary cases are covered and fail if the boundary logic changes.",
+      "verify": "npm test",
+      "files": ["test/limiter.test.ts"],
+      "tags": ["tests"]
+    },
+    {
+      "id": "integration-tests",
+      "title": "Integration-test the 429 response",
+      "task": "Add an integration test that drives the app over the request pipeline and asserts the 429 status, the Retry-After header and that the counter resets when the window rolls over.",
+      "acceptance": "Green locally and in CI; no test depends on wall-clock sleeps longer than one window.",
+      "verify": "npm test",
+      "files": ["test/rate-limit.integration.test.ts"],
+      "tags": ["tests"]
+    },
+    {
+      "id": "readme",
+      "title": "Document rate limiting in the README",
+      "task": "Add a README section describing the limiter, the new config keys and the --rate-limit flag, with the default limits.",
+      "acceptance": "A reader can configure a limit without reading the source.",
+      "verify": "npm test",
+      "files": ["README.md"],
+      "tags": ["docs"]
+    },
+    {
+      "id": "changelog",
+      "title": "Add the changelog entry",
+      "task": "Add an entry under Unreleased describing the rate limiter, the new flag and the migration.",
+      "acceptance": "Entry present, follows the existing format.",
+      "verify": "npm test",
+      "files": ["CHANGELOG.md"],
+      "tags": ["docs"]
+    },
+    {
+      "id": "cleanup-job",
+      "title": "Add the bucket cleanup job",
+      "task": "Add a scheduled job that deletes buckets whose window_start is older than the longest configured window, with a test using an injected clock.",
+      "acceptance": "Old rows are removed and recent ones are kept; the injected clock makes the test deterministic.",
+      "verify": "npm test",
+      "files": ["src/jobs/cleanup.ts", "test/cleanup.test.ts", "src/scheduler.ts"],
+      "tags": ["core", "storage"]
+    },
+    {
+      "id": "flaky-test",
+      "title": "Fix the flaky scheduler test",
+      "task": "test/scheduler.test.ts fails about one run in five in CI with a timeout. Work out why and fix it.",
+      "acceptance": "The test passes 50 consecutive local runs and no longer depends on real timers.",
+      "verify": "npm test",
+      "files": ["test/scheduler.test.ts"],
+      "tags": ["tests", "flaky"]
+    }
+  ]
+}
