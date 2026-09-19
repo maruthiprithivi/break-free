@@ -5,11 +5,15 @@
  *   bf route  --plan <file> [--engine jev|rules|off] [--threshold 0.7] [--json]
  *   bf bench route [--set <file>] [--engine rules,jev] [--live] [--record <file>] [--json]
  *   bf demo [--plan <file>] [--live] [--json]
+ *   bf ab --plan <file> [--workspace <git repo>] [--json]
  *
  * `bf route`, `bf bench route` and `bf demo` call the same functions `run_plan` calls, so what
  * you see here is what the gateway does — not a reimplementation. Offline (the default) the Jev
  * arm answers from a recorded decision set replayed through the real TypeSafe client; `--live`
  * calls api.typesafe.ai and needs TYPESAFE_API_KEY.
+ *
+ * `bf ab` and `bf validate` are the two commands that RUN real work; everything else here only
+ * decides or scores. `bf ab` runs one plan under both arms and compares what the scorecards say.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -20,6 +24,10 @@ import { ASSUMED_TOKENS_PER_TASK, benchEngineLabel, decisionArm, laneCostUsd, le
 import { startTypeSafeDouble, type DoubleDecision, type TypeSafeDouble } from "./jev-double.js";
 import { loadScenarios, recordScenarioDecisions, renderScenarioDigest, renderScenarioReport, routedArm, scoreScenario, staticArms, totals, type ScenarioRecording, type ScenarioScore, type ScenarioTask } from "./scenarios.js";
 import { exitCodeFor, laneFor, renderValidation, summarise, toValidateTasks, type RawValidateTask, type TaskOutcome, type ValidateArm, type ValidateTask } from "./validate.js";
+import { abExitCode, renderAb, summariseAb, toAbRows, type AbArmInput, type AbArmName, type AbSavings } from "./ab.js";
+import { Ledger } from "./ledger.js";
+import { resolveCandidates } from "./router.js";
+import type { PlanTask } from "./orchestrate.js";
 import { renderTripwireMetrics, runTripwire, scoreTripwire, TRIPWIRE_CHECKS, type TripwireOutcome } from "./tripwire.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -443,6 +451,16 @@ async function cmdBenchTripwire(flags: Record<string, string | boolean>): Promis
 }
 
 // ------------------------------------------------------------------ bf validate
+
+/**
+ * The text blocks of a tool reply. Read field by field rather than asserted into a shape: this is
+ * another process's answer, and a reply without content must read as empty, not as a lie.
+ */
+function asText(reply: unknown): string {
+  if (!reply || typeof reply !== "object" || !("content" in reply) || !Array.isArray(reply.content)) return "";
+  return reply.content.map((c) => (c && typeof c === "object" && "type" in c && c.type === "text" && "text" in c && typeof c.text === "string" ? c.text : "")).join("\n");
+}
+
 /**
  * Runs real work to check the labels. The workspace is reset to HEAD between runs so each arm
  * starts from the same tree — which means it must be clean when you start, and it removes
@@ -486,14 +504,6 @@ async function cmdValidate(flags: Record<string, string | boolean>): Promise<num
 
   const config = configFor({ routing: withRouting ? { engine: "jev" } : {} });
 
-  /**
-   * The text blocks of a tool reply. Read field by field rather than asserted into a shape: this is
-   * another process's answer, and a reply without content must read as empty, not as a lie.
-   */
-  const asText = (reply: unknown): string => {
-    if (!reply || typeof reply !== "object" || !("content" in reply) || !Array.isArray(reply.content)) return "";
-    return reply.content.map((c) => (c && typeof c === "object" && "type" in c && c.type === "text" && "text" in c && typeof c.text === "string" ? c.text : "")).join("\n");
-  };
   const entry = new URL("./index.js", import.meta.url).pathname;
   const transport = new StdioClientTransport({ command: process.execPath, args: [entry, "--workspace", ws, "--config", userConfigPath()], env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)) as Record<string, string>, stderr: "pipe" });
   const client = new Client({ name: "bf-validate", version: "0" });
@@ -607,6 +617,189 @@ async function cmdValidate(flags: Record<string, string | boolean>): Promise<num
   return exitCodeFor(report);
 }
 
+// ------------------------------------------------------------------ bf ab
+/**
+ * One plan, two arms, one commit: arm A routed, arm B with every lane pinned to `strong`.
+ *
+ * Issue #22's criteria 2, 3 and 8 are about what the router does on real work, and `bf validate`
+ * cannot answer them: it compares the lanes the LABELS name. Nothing had ever run the SAME plan
+ * twice and compared what verify said, so this does — once with the configured routing engine, once
+ * with the whole crew on the `strong` alias — and reads the comparison back out of the scorecard
+ * lines the gateway wrote. Pass/fail is the scorecard `verify_ok` field, the gateway's own exit
+ * code; no worker's report text is consulted anywhere.
+ *
+ * Two servers, not one, and that is load-bearing. Arm B's pin is a config fact (`routing.laneMap`),
+ * not a per-task one: `run_plan` never routes a task that names a `model`, and a task that was not
+ * routed writes NO scorecard — so pinning every task with `model: <strong>` would leave the
+ * all-strong arm with nothing to report and the comparison would have one side. Mapping every lane
+ * to strong runs the whole plan on strong through the same routing path, so both arms produce
+ * scorecards. The engine travels on the `run_plan` call for the second reason `bf validate` found
+ * the hard way: a spawned server reads the user's config, whose `routing.engine` defaults to `off`.
+ *
+ * The workspace is reset to HEAD between passes (arm A, arm B, then each arm's retry) so every pass
+ * starts from the same commit — that is what makes it "the same commit twice" rather than "arm B
+ * inheriting arm A's edits". As with `bf validate`, that means it must be clean to start.
+ */
+async function cmdAb(flags: Record<string, string | boolean>): Promise<number> {
+  const planFile = typeof flags.plan === "string" ? flags.plan : undefined;
+  if (!planFile) {
+    console.error("usage: bf ab --plan <file.json> [--workspace <git repo>] [--engine jev|rules|off] [--json] [--force]");
+    return 2;
+  }
+  const ws = path.resolve(typeof flags.workspace === "string" ? flags.workspace : process.cwd());
+  const engine = typeof flags.engine === "string" ? (flags.engine as RoutingEngine) : undefined;
+  const { goal, tasks: rawTasks } = readPlan(planFile);
+  if (!rawTasks.length) {
+    console.error(`no tasks in ${planFile}`);
+    return 2;
+  }
+  // Only the fields `run_plan` takes, so a plan file with extra keys (a `title`, say) cannot be
+  // rejected by the tool's own schema.
+  const tasks: PlanTask[] = rawTasks.map((t) => ({
+    id: t.id,
+    task: t.task,
+    ...(t.acceptance ? { acceptance: t.acceptance } : {}),
+    ...(t.verify ? { verify: t.verify } : {}),
+    ...(t.files ? { files: t.files } : {}),
+    ...(t.tags ? { tags: t.tags } : {}),
+  }));
+
+  const git = (args: string[]) => spawnSync("git", ["-C", ws, ...args], { encoding: "utf8" });
+  const clean = git(["status", "--porcelain"]);
+  if (clean.status !== 0) {
+    console.error(`${ws} is not a git repository — bf ab needs one so both arms start from the same commit`);
+    return 2;
+  }
+  if (clean.stdout.trim() && flags.force !== true) {
+    console.error(`${ws} has uncommitted changes.\n  bf ab resets the tree to HEAD between passes; commit, stash, or pass --force.`);
+    return 2;
+  }
+  console.error(
+    `bf ab: workspace ${ws}\n` +
+      `  the plan runs TWICE on this commit (routed, then all-strong), plus one retry pass per arm, and it spends real money.\n` +
+      `  reset to HEAD between passes, and files the runs add are deleted. Do not edit files there while this runs.`,
+  );
+
+  const baseConfig = configFor({});
+  const strongCand = resolveCandidates(baseConfig, "strong", { useGlobalChain: false }).find((c) => !c.provider.unusableReason);
+  if (!strongCand) {
+    console.error("the `strong` alias resolves to no usable candidate, so there is no all-strong arm to compare against — set aliases.strong in your config");
+    return 2;
+  }
+  const strongSpec = strongCand.spec;
+
+  const userPath = userConfigPath();
+  const userJson = fs.existsSync(userPath) ? (JSON.parse(fs.readFileSync(userPath, "utf8")) as Record<string, unknown>) : {};
+  const userRouting = (userJson.routing as Record<string, unknown>) ?? {};
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bf-ab-"));
+  const routedConfig = path.join(tmp, "routed.json");
+  fs.writeFileSync(routedConfig, JSON.stringify(userJson));
+  const strongConfig = path.join(tmp, "all-strong.json");
+  fs.writeFileSync(
+    strongConfig,
+    JSON.stringify({
+      ...userJson,
+      routing: { ...userRouting, laneMap: { ...((userRouting.laneMap as Record<string, unknown>) ?? {}), local: strongSpec, fast: strongSpec, strong: strongSpec, thinker: strongSpec, codex_handoff: strongSpec } },
+    }),
+  );
+
+  const entry = new URL("./index.js", import.meta.url).pathname;
+  const stdio = (configPath: string) =>
+    new StdioClientTransport({ command: process.execPath, args: [entry, "--workspace", ws, "--config", configPath], env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)) as Record<string, string>, stderr: "pipe" });
+  const connect = async (configPath: string, name: string) => {
+    const client = new Client({ name, version: "0" });
+    await client.connect(stdio(configPath));
+    return client;
+  };
+
+  const resetTree = () => {
+    git(["checkout", "--", "."]);
+    git(["clean", "-fdq"]);
+  };
+  // The ledger must exist BEFORE the arms run: `run_plan` only writes a scorecard when it is
+  // tracking, and an untracked plan writes nothing for this command to read.
+  const ledger = new Ledger(ws);
+  if (!ledger.exists()) ledger.init();
+  const rowsFor = (planName: string) => toAbRows(ledger.scorecards().filter((r) => r.plan === planName), new Map(ledger.listTasks().map((t) => [t.id, t])));
+  const routedByFor = (ledgerTaskId: string) => new Map(ledger.listTasks().map((t) => [t.id, t])).get(ledgerTaskId)?.routed_by;
+
+  /** One pass of one arm. A failed tool call is reported and the run continues: the scorecards already written are still evidence. */
+  const runPass = async (client: Client, planName: string, passTasks: PlanTask[]): Promise<void> => {
+    resetTree();
+    try {
+      const reply = await client.callTool({ name: "run_plan", arguments: { goal: planName, tasks: passTasks, ...(engine ? { routing: engine } : {}) } });
+      if (reply.isError) console.error(`  ${planName}: ${asText(reply).slice(0, 400)}`);
+    } catch (e) {
+      console.error(`  ${planName}: ${(e as Error).message.slice(0, 300)}`);
+    }
+  };
+
+  const label = goal ?? path.basename(planFile);
+  const byId = new Map(tasks.map((t) => [t.id, t] as const));
+  const inputs: AbArmInput[] = [];
+  const routedBy: string[] = [];
+  for (const arm of ["routed", "strong"] as AbArmName[]) {
+    const planName = `${label} [bf ab: ${arm}]`;
+    const retryName = `${planName} retry`;
+    console.error(`  ${arm}: running ${tasks.length} task(s)`);
+    const client = await connect(arm === "routed" ? routedConfig : strongConfig, `bf-ab-${arm}`);
+    try {
+      await runPass(client, planName, tasks);
+      const first = rowsFor(planName);
+      if (arm === "routed")
+        for (const r of first) {
+          const rb = routedByFor(r.task);
+          if (rb && !routedBy.includes(rb)) routedBy.push(rb);
+        }
+      // Criterion 3 is "after ONE retry": only the tasks whose verify failed, re-run with the
+      // failure's own command handed to the worker. Not a re-run of the plan — that would measure
+      // a different thing and double the bill.
+      const retryTasks: PlanTask[] = [];
+      for (const r of first) {
+        if (r.verify_ok !== false || !r.plan_task) continue;
+        const t = byId.get(r.plan_task);
+        if (!t) continue;
+        retryTasks.push({
+          ...t,
+          task: `A previous attempt at this task ran and its verify command failed, so the task is not complete.\n  command: ${t.verify}\n  ledger: ${r.task}\nThe gateway's verify step records no output, so diagnose it yourself: run that command and find the actual failure before changing anything.\n\n${t.task}`,
+        });
+      }
+      if (retryTasks.length) {
+        console.error(`  ${arm}: retrying ${retryTasks.length} task(s) whose verify failed`);
+        await runPass(client, retryName, retryTasks);
+      }
+      inputs.push({ name: arm, label: arm === "routed" ? `arm A routed (${engine ?? baseConfig.routing.engine} engine)` : `arm B all-strong (every lane -> ${strongSpec})`, rows: first, retry_rows: rowsFor(retryName) });
+    } finally {
+      await client.close();
+    }
+  }
+
+  // The window figure from `cost_report`, fetched after both arms so it covers both: it is a
+  // window total (every call in the window, not only this plan), which is why the per-arm split
+  // above is summed from the scorecards and this is quoted for what it is.
+  let savings: AbSavings | undefined;
+  try {
+    const client = await connect(routedConfig, "bf-ab-report");
+    try {
+      const report = JSON.parse(asText(await client.callTool({ name: "cost_report", arguments: { days: 1 } }))) as { routing_savings?: AbSavings };
+      savings = report.routing_savings;
+    } finally {
+      await client.close();
+    }
+  } catch (e) {
+    console.error(`  cost_report unavailable: ${(e as Error).message.slice(0, 200)}`);
+  }
+
+  const report = summariseAb({ tasks: tasks.map((t) => ({ id: t.id, verify: t.verify })) }, inputs);
+  const engineLabel = engine
+    ? `--engine ${engine}`
+    : `the configured engine (config routing.engine = ${baseConfig.routing.engine})${routedBy.length ? `, tasks routed by ${routedBy.join("/")}` : " — NO task was routed, so arm A is not a routed arm"}`;
+  const meta = { workspace: ws, plan: planFile, engine: engineLabel, strong: strongSpec, ...(savings ? { savings } : {}) };
+  if (flags.json) console.log(JSON.stringify({ meta: { workspace: ws, plan: planFile, engine: engineLabel, strong: strongSpec }, report, savings: savings ?? null }, null, 2));
+  else console.log(renderAb(report, meta));
+  return abExitCode(report);
+}
+
 const HELP = `bf — Break Free command line
 
   bf route --plan <file> [--engine jev|rules|off]    decide which model runs each task
@@ -615,6 +808,7 @@ const HELP = `bf — Break Free command line
   bf demo [--live]                                   one plan routed three ways
   bf scenarios [--live]                              ten real workflows, routed four ways
   bf validate --workspace <git repo>                 do the labels hold? (RESETS the workspace)
+  bf ab --plan <file>                                one plan, two arms: routed vs all-strong (RESETS the workspace)
 
   bf <command> --help                                what that command takes
 
@@ -663,6 +857,20 @@ const COMMANDS: Record<string, { flags: string[]; usage: string }> = {
       "    THE WORKSPACE IS RESET TO HEAD BETWEEN RUNS. It must be clean to start (--force overrides),\n" +
       "    it defaults to the current directory, and it will delete files the runs added. Do not edit\n" +
       "    files in it while a validation is running.",
+  },
+  ab: {
+    flags: ["plan", "workspace", "engine", "json", "force"],
+    usage:
+      "bf ab --plan <file.json> [--workspace <git repo>] [--engine jev|rules|off] [--json] [--force]\n" +
+      "    One plan, run twice on the current commit: arm A with the configured routing engine, arm B with\n" +
+      "    every lane pinned to the `strong` alias. Prints criteria 2 (first-pass verify rate per arm and\n" +
+      "    the gap), 3 (the same after one retry) and 8 (the >=0.8 confidence band's verify failure rate\n" +
+      "    against the <0.5 band), plus each arm's spend. Every pass/fail is the scorecard `verify_ok`\n" +
+      "    field — the gateway's own exit code, never a worker's report. A task with no verify command, and\n" +
+      "    a row with no verify result, are excluded and counted; a criterion that misses its target prints\n" +
+      "    as MISS and exits non-zero.\n" +
+      "    THE WORKSPACE IS RESET TO HEAD BETWEEN PASSES. It must be clean to start (--force overrides),\n" +
+      "    it defaults to the current directory, and it will delete files the runs added.",
   },
   help: { flags: [], usage: "bf help" },
 };
