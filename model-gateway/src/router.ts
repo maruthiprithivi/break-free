@@ -13,6 +13,7 @@
 import { chatCompletion, ProviderError, type ChatRequest, type ChatResponse } from "./client.js";
 import { resolveProvider, tierFor, type GatewayConfig, type ResolvedProvider, type FallbackReason } from "./config.js";
 import { log as rlog } from "./logger.js";
+import { getBreaker } from "./breaker.js";
 import { costUsd } from "./config.js";
 
 export interface Candidate {
@@ -187,7 +188,18 @@ export async function routeChat(
   const log = opts.log ?? (() => {});
   const fb = config.fallback;
 
+  const breaker = getBreaker(config);
+
   for (const cand of candidates) {
+    // A provider known to be dead costs nothing to skip and a full timeout to try.
+    const openUntil = breaker.openUntil(cand.provider.name);
+    if (openUntil) {
+      const secs = Math.max(1, Math.round((openUntil - Date.now()) / 1000));
+      attempts.push({ spec: cand.spec, ok: false, reason: "circuit_open", error: `${cand.provider.name} circuit open for another ${secs}s after repeated timeouts`, ms: 0 });
+      rlog("route.attempt", { spec: cand.spec, ok: false, reason: "circuit_open", ms: 0, skipped: true });
+      log(`skip ${cand.spec}: circuit open for another ${secs}s`);
+      continue; // never abort the chain over a provider we already know is dead
+    }
     if (cand.provider.unusableReason) {
       attempts.push({ spec: cand.spec, ok: false, reason: cand.provider.requiresKey && !cand.provider.apiKey ? "no_key" : "bad_request", error: cand.provider.unusableReason, ms: 0 });
       rlog("route.attempt", { spec: cand.spec, ok: false, reason: attempts.at(-1)!.reason, error: cand.provider.unusableReason, ms: 0, skipped: true });
@@ -202,6 +214,7 @@ export async function routeChat(
         const req = buildRequest(cand);
         const response = await chatCompletion(cand.provider, req, { timeoutMs: cand.provider.timeoutMs ?? opts.timeoutMs ?? config.defaults.timeoutMs, signal: opts.signal });
         attempts.push({ spec: cand.spec, ok: true, ms: Date.now() - started });
+        breaker.clear(cand.provider.name);
         const cost = costUsd(config, cand.provider.name, cand.model, response.usage);
         rlog("route.attempt", { spec: cand.spec, ok: true, ms: Date.now() - started, try: t + 1, usage: response.usage, finish: response.finishReason, cost_usd: cost.usd, priced: cost.priced });
         return { response, used: cand, attempts, costUsd: cost.usd, priced: cost.priced };
@@ -211,8 +224,15 @@ export async function routeChat(
         log(`fail ${cand.spec}: [${err.reason}] ${err.message}`);
         rlog("route.attempt", { spec: cand.spec, ok: false, reason: err.reason, status: err.status, error: err.message.slice(0, 300), ms: Date.now() - started, try: t + 1 });
         if (opts.signal?.aborted) throw err;
+        // Only host-level symptoms count as strikes: a 401 or an unknown model says
+        // nothing about whether the host is answering.
+        if (err.reason === "timeout" || err.reason === "network") {
+          if (breaker.record(cand.provider.name, err.message)) log(`circuit open: ${cand.provider.name} skipped for the next ${Math.round(config.fallback.breaker.cooldownMs / 1000)}s`);
+        }
         const transient = TRANSIENT.includes(err.reason);
-        if (transient && t < maxTries - 1) {
+        // Retrying a candidate whose circuit just opened would pay its timeout twice
+        // for evidence we already have.
+        if (transient && t < maxTries - 1 && !breaker.openUntil(cand.provider.name)) {
           await sleep(fb.retryDelayMs * (t + 1));
           continue; // retry same candidate
         }

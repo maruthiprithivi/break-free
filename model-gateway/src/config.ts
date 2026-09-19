@@ -43,7 +43,7 @@ const AliasSchema = z.union([
   }),
 ]);
 
-export const FALLBACK_REASONS = ["rate_limit", "server_error", "timeout", "network", "auth", "not_found", "bad_request", "no_key"] as const;
+export const FALLBACK_REASONS = ["rate_limit", "server_error", "timeout", "network", "auth", "not_found", "bad_request", "no_key", "circuit_open"] as const;
 export type FallbackReason = (typeof FALLBACK_REASONS)[number];
 
 const ConfigSchema = z.object({
@@ -81,6 +81,16 @@ const ConfigSchema = z.object({
       minTier: z.number().int().min(1).max(3).optional(),
       /** Permit falling back below minTier once the floor is exhausted */
       allowDowngrade: z.boolean().default(false),
+      /** Skip a provider that keeps timing out instead of paying its timeout on every call */
+      breaker: z
+        .object({
+          enabled: z.boolean().default(true),
+          /** Consecutive timeout/network failures before the provider is skipped */
+          failures: z.number().int().min(1).default(2),
+          /** How long it stays skipped; the first call after it lapses is a trial */
+          cooldownMs: z.number().int().min(1000).default(300000),
+        })
+        .default({}),
     })
     .default({}),
   providers: z.record(ProviderConfigSchema).default({}),
