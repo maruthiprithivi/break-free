@@ -196,6 +196,13 @@ const CapabilitySchema = z.array(z.enum(CAPABILITIES as [string, ...string[]])).
   "What the delegated model may do. read = files/grep/diff (jailed to workspace). write = create/edit files (+ ledger_note/ledger_task_log when a ledger exists). git = branch/commit/push (never protected branches, never force). github = issues/PRs/Actions via gh (implies git). run = run_command for allow-listed test/build/lint commands (workers.allowedCommands). mcp = tools of the MCP servers named in mcp_servers. Default: [\"read\"].",
 ) as unknown as z.ZodType<import("./workspace.js").Capability[]>;
 
+const MinTierSchema = z.number().int().min(1).max(3).optional().describe(
+  "Never route below this competence tier. Default: the tier of the model you asked for, so a request for a capable model is never silently answered by a weak one.",
+);
+const AllowDowngradeSchema = z.boolean().optional().describe(
+  "Permit falling below the floor once every candidate at or above it has failed. Default: config.fallback.allowDowngrade.",
+);
+
 const ShapeSchema = z.enum(["ship", "scout"]).optional().describe(
   "Task shape: 'ship' uses the requested capabilities (default); 'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
 );
@@ -519,6 +526,8 @@ server.registerTool("delegate", {
     session_id: z.string().optional().describe("Persist/continue conversation history under this id"),
     capabilities: CapabilitySchema.optional(),
     shape: ShapeSchema,
+    min_tier: MinTierSchema,
+    allow_downgrade: AllowDowngradeSchema,
     context: z.string().optional().describe("Background the worker needs (design notes, relevant snippets, prior decisions)"),
     role: z.string().optional().describe("Persona, e.g. 'security engineer', 'technical writer'"),
     instructions: z.string().optional().describe("Extra standing rules appended to the system prompt"),
@@ -598,6 +607,8 @@ server.registerTool("supervise", {
     max_rounds: z.number().int().min(1).max(10).optional().describe("Default 3"),
     capabilities: CapabilitySchema.optional(),
     shape: ShapeSchema,
+    min_tier: MinTierSchema,
+    allow_downgrade: AllowDowngradeSchema,
     acceptance_criteria: z.string().optional(),
     context: z.string().optional(),
     session_id: z.string().optional(),
@@ -679,6 +690,8 @@ const PlanTaskSchema = z.object({
   model: z.string().optional().describe("Alias/provider/model for this task (default config.defaults.model). Mix vendors freely."),
   capabilities: CapabilitySchema.optional(),
   shape: ShapeSchema,
+  min_tier: MinTierSchema,
+  allow_downgrade: AllowDowngradeSchema,
   depends_on: z.array(z.string()).optional().describe("Task ids that must finish first; their reports are given to this worker as context"),
   context: z.string().optional(),
   role: z.string().optional(),

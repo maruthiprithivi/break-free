@@ -156,6 +156,22 @@ Say it to the agent — "use kimi-k3 for `fast` from now on", "switch deepseek t
 ## Fallback semantics
 For each candidate in order: transient failures (429, 5xx, timeout, network) are retried `retriesPerCandidate` times with backoff, then the next candidate is tried; missing key / disabled / 401 / unknown model skip immediately to the next; `bad_request` (400) stops, because the request itself is wrong. After the alias/explicit list, `fallback.chain` is appended. `retryOn` controls which reasons are allowed to fall through. Every tool result ends with `meta: {"model": "…", "fallback_attempts": […]}`.
 
+## The tier floor: fallback never quietly gets weaker
+
+Fallback used to mean "anything that answers". A task pinned to a frontier model could land on a small local one and grind for half an hour, and the only sign was the `model` field in `meta`.
+
+Every model has a **tier** — 3 frontier, 2 solid, 1 small/local — from `DEFAULT_TIERS`, overridable per provider or per `provider/model` in `tiers`. The floor for a call is the tier of the model you actually asked for, so a request for tier 3 is never answered by tier 1 behind your back. Candidates below the floor are not tried, and if the ones above it all fail, the error names what was held back:
+
+```
+All 1 candidate(s) failed:
+  - deepseek/deepseek-v4-pro: [auth] HTTP 401 invalid api key
+
+Not tried, below the tier 3 floor: ollama/qwen3-coder:30b (tier 1)
+Pass allow_downgrade:true to use them anyway, or min_tier to move the floor.
+```
+
+Per call, `delegate`, `supervise` and each `run_plan` task take `min_tier` (move the floor: `1` accepts anything, `3` demands frontier) and `allow_downgrade` (drop the floor once everything above it has failed). Globally, `fallback.minTier` pins one floor for every call and `fallback.allowDowngrade` restores the old permissive behaviour. A downgrade that does happen is reported rather than silent: `meta` carries `requested_model`, `tier` and `downgraded`, and `run_plan` prints `route: strong -> ollama/qwen3-coder:30b (auth) [tier 3 -> 1]`. Falling back within a tier is not a downgrade and stays quiet.
+
 ## Project modes
 
 One named mode derives the git and GitHub policy, instead of setting three flags and hoping they agree:

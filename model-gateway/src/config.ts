@@ -77,6 +77,10 @@ const ConfigSchema = z.object({
       /** Retries of the SAME candidate before moving on (only for rate_limit/server_error/timeout/network) */
       retriesPerCandidate: z.number().int().min(0).default(1),
       retryDelayMs: z.number().int().min(0).default(1500),
+      /** Never fall back below this competence tier unless allowDowngrade is set */
+      minTier: z.number().int().min(1).max(3).optional(),
+      /** Permit falling back below minTier once the floor is exhausted */
+      allowDowngrade: z.boolean().default(false),
     })
     .default({}),
   providers: z.record(ProviderConfigSchema).default({}),
@@ -148,6 +152,8 @@ const ConfigSchema = z.object({
       idleMs: z.number().int().positive().default(5 * 60_000),
     })
     .default({}),
+  /** Competence tier per model, keyed like `pricing`: "provider/model" first, then "provider". 3 carries a multi-file task, 2 scoped work, 1 single-file mechanical work. */
+  tiers: z.record(z.number().int().min(1).max(3)).default({}),
   /**
    * The tripwire: a sub-second Jev check on what a crew diff actually does, run after `verify`
    * passes. It exists because glob rules see paths, not intent — a model that adds `.skip` to a
@@ -432,6 +438,43 @@ export const DEFAULT_PRICING: Record<string, { input: number; output: number }> 
   "typesafe/jev-latest": { input: 0.042, output: 0 },
   "typesafe/jev-1.13.0": { input: 0.042, output: 0 },
 };
+
+/**
+ * Shipped tiers, so a floor works with no configuration. Anything unlisted resolves
+ * to 2: the honest middle. Assuming 3 reintroduces the silent-downgrade bug; assuming
+ * 1 makes every newly released model useless until somebody classifies it.
+ */
+export const DEFAULT_TIERS: Record<string, number> = {
+  "deepseek/deepseek-v4-pro": 3,
+  "kimi/kimi-k3": 3,
+  "kimi/kimi-k2.7-code": 3,
+  "zai/glm-5.3": 3,
+  "minimax/MiniMax-M3": 3,
+  "ollama-cloud/gpt-oss:120b": 3,
+  "deepseek/deepseek-v4-flash": 2,
+  "zai/glm-5.3-flash": 2,
+  "minimax/MiniMax-M2.7": 2,
+  "ollama/qwen3-coder:30b": 2,
+  "ollama/devstral:24b": 2,
+  "ollama/qwen3:8b": 1,
+  "ollama/gpt-oss:20b": 1,
+  "ollama/deepseek-r1:14b": 1,
+  // Provider-level floor: any local model nobody has classified is small by default,
+  // which is exactly the case that caused a tier 3 task to land on an 8B model.
+  ollama: 1,
+};
+
+/** Tier for a model: exact "provider/model", then "provider", user config before defaults, then 2. */
+export function tierFor(config: GatewayConfig, provider: string, model: string): number {
+  const user = config.tiers ?? {};
+  return (
+    user[`${provider}/${model}`] ??
+    user[provider] ??
+    DEFAULT_TIERS[`${provider}/${model}`] ??
+    DEFAULT_TIERS[provider] ??
+    2
+  );
+}
 
 /** The seven lanes Jev chooses between, and the alias each one runs on. `null` = back to the lead. */
 export const DEFAULT_LANE_MAP: Record<string, string | null> = {

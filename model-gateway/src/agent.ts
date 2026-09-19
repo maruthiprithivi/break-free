@@ -5,7 +5,7 @@
  */
 import type { ChatMessage, ChatRequest, ToolCall } from "./client.js";
 import type { GatewayConfig } from "./config.js";
-import { aliasParams, resolveCandidates, routeChat, type Attempt, type Candidate } from "./router.js";
+import { aliasParams, resolveCandidatesWithFloor, routeChat, tierOfSpec, type Attempt, type Candidate } from "./router.js";
 import { githubTools } from "./github.js";
 import { Workspace, type Capability, type WorkerTool } from "./workspace.js";
 import { log as rlog } from "./logger.js";
@@ -16,6 +16,15 @@ export type TaskShape = "ship" | "scout";
 /** Resolve the effective capabilities for a task shape. A scout is always read-only. */
 export function resolveCapabilities(shape: TaskShape | undefined, capabilities: Capability[] | undefined): Capability[] {
   return shape === "scout" ? ["read"] : [...(capabilities ?? ["read"])];
+}
+
+export interface RouteNotice {
+  requested: string;
+  used: string;
+  reason?: string;
+  requestedTier?: number;
+  usedTier?: number;
+  downgraded: boolean;
 }
 
 export interface RunOptions {
@@ -34,6 +43,16 @@ export interface RunOptions {
   /** USD cap for this worker run (default config.budget.perTaskUsd; 0 = unlimited) */
   budgetUsd?: number;
   log?: (s: string) => void;
+  /** Competence floor for the router: candidates below it are excluded before any call is made. */
+  minTier?: number;
+  /** Reporting floor used to detect a downward tier crossing (differs from minTier only when downgrading is allowed). */
+  derivedTier?: number;
+  /** The model spec the caller asked for (for route reporting). */
+  requestedModel?: string;
+  /** Whether downgrading was allowed (used for the route reason when no failure occurred). */
+  allowDowngrade?: boolean;
+  /** Called once, the moment the first candidate answers, with route/downgrade metadata. */
+  onRoute?: (notice: RouteNotice) => void;
 }
 
 export class BudgetExceeded extends Error {
@@ -67,7 +86,7 @@ export function selectTools(config: GatewayConfig, ws: Workspace | undefined, ca
 }
 
 export async function runWorker(config: GatewayConfig, opts: RunOptions): Promise<RunResult> {
-  const candidates = resolveCandidates(config, opts.model);
+  const { candidates, skipped } = resolveCandidatesWithFloor(config, opts.model, { minTier: opts.minTier });
   const ap = aliasParams(config, opts.model);
   const tools = [...selectTools(config, opts.workspace, opts.capabilities), ...(opts.extraTools ?? [])];
   const byName = new Map(tools.map((t) => [t.spec.function.name, t]));
@@ -98,9 +117,21 @@ export async function runWorker(config: GatewayConfig, opts: RunOptions): Promis
       max_tokens: opts.maxTokens ?? ap.maxTokens ?? config.defaults.maxTokens,
       response_format: opts.jsonMode && !tools.length ? { type: "json_object" } : undefined,
     });
-    const r = await routeChat(config, pinned ?? candidates, build, { signal: opts.signal, log: opts.log });
+    const r = await routeChat(config, pinned ?? candidates, build, { signal: opts.signal, log: opts.log, minTier: opts.minTier, skipped });
     attempts.push(...r.attempts);
     used = r.used;
+    if (!pinned && opts.onRoute) {
+      const usedTier = tierOfSpec(config, r.used.spec);
+      const downgraded = opts.derivedTier !== undefined && usedTier !== undefined && usedTier < opts.derivedTier;
+      opts.onRoute({
+        requested: opts.requestedModel ?? opts.model ?? config.defaults.model,
+        used: r.used.spec,
+        reason: r.attempts.filter((a) => !a.ok).at(-1)?.reason ?? (opts.allowDowngrade ? "allow_downgrade" : undefined),
+        requestedTier: opts.derivedTier,
+        usedTier,
+        downgraded,
+      });
+    }
     // Pin to the provider that answered: tool_call ids and tool-message semantics are provider-specific,
     // so a mid-loop switch would replay a foreign transcript. Fallback happens only before the first answer.
     pinned = [r.used];
