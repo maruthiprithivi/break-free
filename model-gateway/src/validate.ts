@@ -31,6 +31,21 @@ export interface ValidateTask {
   cheapest_passing_lane: string;
 }
 
+/** A raw row from either set: `bench/route-set.jsonl` calls the lead's lane `lead_lane`. */
+export type RawValidateTask = Omit<ValidateTask, "lane"> & { lane?: string; lead_lane?: string };
+
+/**
+ * Normalise rows from either shipped set into validate tasks, and refuse anything incomplete.
+ *
+ * The two datasets are different artefacts and kept their own field names; rather than rewrite 60
+ * committed rows (and the decision recordings keyed off them), the difference is absorbed here.
+ */
+export function toValidateTasks(raw: RawValidateTask[]): ValidateTask[] {
+  return raw
+    .map((t) => ({ ...t, lane: t.lane ?? t.lead_lane ?? "" }))
+    .filter((t) => t.id && t.task && t.verify && t.lane && t.cheapest_passing_lane) as ValidateTask[];
+}
+
 export type ValidateArm = "claimed" | "lead" | "jev";
 
 export interface TaskOutcome {
@@ -73,6 +88,12 @@ export interface ValidationReport {
   };
   verdict: string;
   rows: TaskOutcome[];
+  /**
+   * Tasks whose `verify` command already passed on the untouched tree, so it cannot discriminate:
+   * the work is either unnecessary or the check is too weak. Excluded from the label maths — a
+   * verify that cannot fail would report a clean result no matter what the worker did.
+   */
+  unfalsifiable: string[];
   /** Where the lanes came from, for the footer. */
   lane_map: Record<string, string | null>;
 }
@@ -81,13 +102,15 @@ export function laneFor(config: GatewayConfig, lane: string): string | null {
   return (config.routing.laneMap[lane] ?? DEFAULT_LANE_MAP[lane]) ?? null;
 }
 
-export function summarise(outcomes: TaskOutcome[], tasks: ValidateTask[], config: GatewayConfig): ValidationReport {
+export function summarise(outcomes: TaskOutcome[], tasks: ValidateTask[], config: GatewayConfig, unfalsifiable: string[] = []): ValidationReport {
   const arms: Record<ValidateArm, ArmValidation> = {
     claimed: emptyArm(),
     lead: emptyArm(),
     jev: emptyArm(),
   };
+  const skipped = new Set(unfalsifiable);
   for (const o of outcomes) {
+    if (skipped.has(o.task)) continue;
     const a = arms[o.arm];
     a.runs++;
     if (o.error) a.errored++;
@@ -98,19 +121,20 @@ export function summarise(outcomes: TaskOutcome[], tasks: ValidateTask[], config
   }
   for (const a of Object.values(arms)) a.pass_pct = a.runs ? Math.round((a.passed / a.runs) * 100) : 0;
 
-  const claimed = outcomes.filter((o) => o.arm === "claimed" && !o.error && o.verify_ok !== null);
+  const claimed = outcomes.filter((o) => o.arm === "claimed" && !o.error && o.verify_ok !== null && !skipped.has(o.task));
   const passed = claimed.filter((o) => o.verify_ok === true).length;
   const failed = claimed.length - passed;
   const passPct = claimed.length ? Math.round((passed / claimed.length) * 100) : 0;
   const labelsHold = claimed.length > 0 && failed === 0;
 
   return {
-    tasks: tasks.length,
-    runs: outcomes.length,
+    tasks: tasks.length - skipped.size,
+    runs: outcomes.filter((o) => !skipped.has(o.task)).length,
     arms,
     label_validation: { checked: claimed.length, passed, failed, pass_pct: passPct, labels_hold: labelsHold },
-    verdict: verdictFor(claimed.length, passed, failed, arms),
-    rows: outcomes,
+    verdict: verdictFor(claimed.length, passed, failed, arms, skipped.size),
+    rows: outcomes.filter((o) => !skipped.has(o.task)),
+    unfalsifiable: [...skipped],
     lane_map: Object.fromEntries(tasks.flatMap((t) => [[t.cheapest_passing_lane, laneFor(config, t.cheapest_passing_lane)], [t.lane, laneFor(config, t.lane)]] as [string, string | null][])),
   };
 }
@@ -123,8 +147,12 @@ function emptyArm(): ArmValidation {
  * The sentence the write-up depends on. Worded so a partial result cannot be read as a clean one:
  * a lane that fails even once on the work it was supposed to handle is not a cheap lane.
  */
-function verdictFor(checked: number, passed: number, failed: number, arms: Record<ValidateArm, ArmValidation>): string {
-  if (checked === 0) return "nothing was verified — every run was unverified or errored, so this says nothing about the labels";
+function verdictFor(checked: number, passed: number, failed: number, arms: Record<ValidateArm, ArmValidation>, skipped: number): string {
+  if (checked === 0) {
+    return skipped > 0
+      ? `nothing was checked: all ${skipped} task(s) had a verify command that already passed on the untouched tree, so it cannot tell whether the work was done. Point this at tasks whose verify actually fails first.`
+      : "nothing was verified — every run was unverified or errored, so this says nothing about the labels";
+  }
   const jev = arms.jev.runs ? ` Jev's own lane passed ${arms.jev.passed}/${arms.jev.runs}.` : "";
   if (failed === 0) {
     return `the labelled cheapest lane passed verify in all ${checked} checked runs, so the savings estimate is not yet contradicted.${jev}`;
@@ -161,6 +189,7 @@ export function renderValidation(r: ValidationReport, meta: { workspace: string;
     "",
     `  claimed cheapest lane: ${r.label_validation.passed}/${r.label_validation.checked} passed (${r.label_validation.pass_pct}%)`,
     `  VERDICT  ${r.verdict}`,
+    ...(r.unfalsifiable.length ? ["", `  excluded as unfalsifiable (verify already passed before any work): ${r.unfalsifiable.join(", ")}`] : []),
     "",
     `lanes come from ${Object.entries(r.lane_map).map(([k, v]) => `${k}->${v ?? "lead"}`).join(", ")}`,
   ].join("\n");

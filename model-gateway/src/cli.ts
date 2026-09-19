@@ -19,10 +19,12 @@ import { routePlanTasks, type RouteDecision, type RouteResult, type RoutingEngin
 import { ASSUMED_TOKENS_PER_TASK, benchEngineLabel, decisionArm, laneCostUsd, leadArm, loadLabeledSet, renderBenchTable, scoreArm, unmeasuredLlmArm, type LabeledTask, type RouterArm } from "./bench.js";
 import { startTypeSafeDouble, type DoubleDecision, type TypeSafeDouble } from "./jev-double.js";
 import { loadScenarios, recordScenarioDecisions, renderScenarioDigest, renderScenarioReport, routedArm, scoreScenario, staticArms, totals, type ScenarioRecording, type ScenarioScore, type ScenarioTask } from "./scenarios.js";
-import { laneFor, renderValidation, summarise, type TaskOutcome, type ValidateArm, type ValidateTask } from "./validate.js";
+import { laneFor, renderValidation, summarise, toValidateTasks, type RawValidateTask, type TaskOutcome, type ValidateArm, type ValidateTask } from "./validate.js";
+import { renderTripwireMetrics, runTripwire, scoreTripwire, TRIPWIRE_CHECKS, type TripwireOutcome } from "./tripwire.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { spawnSync } from "node:child_process";
+import { runCommand } from "./runcmd.js";
 
 const REPO_BENCH = new URL("../bench/", import.meta.url).pathname;
 const DEFAULT_RECORDING = path.join(REPO_BENCH, "jev-recording.json");
@@ -51,13 +53,14 @@ export function parseArgs(argv: string[]): Parsed {
 }
 
 /** A config for a CLI run: the user's own file plus explicit overrides, in a throwaway path. */
-export function configFor(over: { providers?: Record<string, unknown>; routing?: Record<string, unknown> }): GatewayConfig {
+export function configFor(over: { providers?: Record<string, unknown>; routing?: Record<string, unknown>; tripwire?: Record<string, unknown> }): GatewayConfig {
   const userPath = userConfigPath();
   const userJson = fs.existsSync(userPath) ? (JSON.parse(fs.readFileSync(userPath, "utf8")) as Record<string, unknown>) : {};
   const merged = {
     ...userJson,
     providers: { ...((userJson.providers as Record<string, unknown>) ?? {}), ...(over.providers ?? {}) },
     routing: { ...((userJson.routing as Record<string, unknown>) ?? {}), ...(over.routing ?? {}) },
+    tripwire: { ...((userJson.tripwire as Record<string, unknown>) ?? {}), ...(over.tripwire ?? {}) },
   };
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bf-cli-")), "config.json");
   fs.writeFileSync(file, JSON.stringify(merged));
@@ -346,6 +349,66 @@ async function cmdScenarios(flags: Record<string, string | boolean>): Promise<nu
   }
 }
 
+// ------------------------------------------------------------------ bf bench tripwire
+async function cmdBenchTripwire(flags: Record<string, string | boolean>): Promise<number> {
+  const setFile = typeof flags.set === "string" ? flags.set : path.join(REPO_BENCH, "tripwire-set.jsonl");
+  if (!fs.existsSync(setFile)) {
+    console.error(`no seeded diff set at ${setFile}`);
+    return 2;
+  }
+  const rows = fs.readFileSync(setFile, "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as { id: string; task: string; acceptance?: string; hunk: string; label: "bad" | "clean"; kinds: string[] });
+  const live = flags.live === true;
+  const recordFile = typeof flags.record === "string" ? flags.record : path.join(REPO_BENCH, "tripwire-recording.json");
+  const double = live ? undefined : await offlineDouble(recordFile);
+  try {
+    const config = configFor({ providers: double ? { typesafe: { baseUrl: double.url, apiKey: "bf-offline" } } : {}, routing: live ? { engine: "jev" } : offlineRouting(double!.source), tripwire: { enabled: true } });
+    const outcomes: TripwireOutcome[] = [];
+    const recorded: Record<string, DoubleDecision> = {};
+    for (const row of rows) {
+      // Offline, the double is keyed `<taskId>__<question>`; every row here asks about `h0`, so the
+      // recorded decision for THIS row has to be re-seeded under that key before the call. Reading it
+      // from `double.record` (the loaded recording) is what makes the offline replay real — seeding
+      // `recorded`, which is only filled on a live run, replayed nothing at all.
+      if (double) double.setDecisions({ h0: (double.record.decisions?.[row.id] as DoubleDecision) ?? {} });
+      const r = await runTripwire(config, row.hunk, row.task, { acceptance: row.acceptance });
+      const h = r.hunks[0];
+      const fired: string[] = h
+        ? TRIPWIRE_CHECKS.filter((c) => {
+            const v = h.flags[c.key];
+            return typeof v === "number" && v >= config.tripwire.reviewAt;
+          }).map((c) => c.key)
+        : [];
+      if (h && typeof h.flags.risk === "number" && h.flags.risk >= config.tripwire.reviewRisk) fired.push("risk");
+      outcomes.push({ id: row.id, verdict: h?.verdict ?? "allow", fired, ms: r.ms, cost_usd: r.cost_usd, priced: r.priced, ran: r.ran });
+      if (live && h) {
+        recorded[row.id] = {
+          lane: "fast",
+          confidence: 0.9,
+          difficulty: 2,
+          sensitive: 0,
+          context: 0,
+          test_weakened: h.flags.test_weakened ?? 0,
+          security_touch: h.flags.security_touch ?? 0,
+          destructive_data: h.flags.destructive_data ?? 0,
+          scope_creep: h.flags.scope_creep ?? 0,
+          risk: h.flags.risk ?? 0,
+          risk_confidence: h.flags.confidence ?? 0.8,
+        };
+      }
+    }
+    const metrics = scoreTripwire(rows, outcomes);
+    if (live && Object.keys(recorded).length) {
+      fs.writeFileSync(recordFile, JSON.stringify({ note: "Recorded TypeSafe decisions for bench/tripwire-set.jsonl, captured live. Replayed offline through the real client so `bf bench tripwire` needs no key. Regenerate: bf bench tripwire --live --record bench/tripwire-recording.json", answered_by: "jev", diffs: rows.length, decisions: recorded }, null, 2) + "\n");
+      console.error(`wrote ${recordFile}`);
+    }
+    if (flags.json) console.log(JSON.stringify({ meta: { set: setFile, live, diffs: rows.length }, metrics, outcomes }, null, 2));
+    else console.log(renderTripwireMetrics(metrics, { set: setFile, live, targetsShown: true }));
+    return 0;
+  } finally {
+    await double?.close();
+  }
+}
+
 // ------------------------------------------------------------------ bf validate
 /**
  * Runs real work to check the labels. The workspace is reset to HEAD between runs so each arm
@@ -357,8 +420,10 @@ async function cmdValidate(flags: Record<string, string | boolean>): Promise<num
   const ws = path.resolve(typeof flags.workspace === "string" ? flags.workspace : process.cwd());
   const limit = typeof flags.tasks === "string" ? Number(flags.tasks) : 3;
   const withRouting = flags["with-routing"] === true;
-  const tasksFile = setFile.endsWith(".jsonl") ? loadLabeledSet(setFile) : loadScenarios(setFile).flatMap((s) => s.tasks);
-  const tasks = (tasksFile as ValidateTask[]).filter((t) => t.verify).slice(0, Math.max(1, limit));
+  // Either shipped set works: the 60-task JSONL and the scenario file differ only in what they
+  // call the lead's lane, which `toValidateTasks` absorbs.
+  const raw = setFile.endsWith(".jsonl") ? (loadLabeledSet(setFile) as unknown as RawValidateTask[]) : (loadScenarios(setFile).flatMap((s) => s.tasks) as unknown as RawValidateTask[]);
+  const tasks = toValidateTasks(raw).slice(0, Math.max(1, limit));
   if (!tasks.length) {
     console.error(`no tasks with a verify command in ${setFile}`);
     return 2;
@@ -414,11 +479,22 @@ async function cmdValidate(flags: Record<string, string | boolean>): Promise<num
   };
 
   const outcomes: TaskOutcome[] = [];
+  const unfalsifiable: string[] = [];
   try {
+    // Before spending a single worker call: a verify command that already passes on the untouched
+    // tree cannot tell whether the work was done, so any "pass" from it is vacuous. Skip those
+    // tasks rather than report a clean result that means nothing.
     for (const t of tasks) {
+      const pre = await runCommand(config, ws, t.verify ?? "", { timeoutMs: 120_000 }).catch(() => undefined);
+      if (pre?.ok && flags["include-unfalsifiable"] !== true) {
+        unfalsifiable.push(t.id);
+        console.error(`  skip ${t.id}: \`${t.verify}\` already passes on the untouched tree, so it cannot discriminate`);
+      }
+    }
+    for (const t of tasks) {
+      if (unfalsifiable.includes(t.id)) continue;
       resetTree();
-      const claimed = laneFor(config, t.cheapest_passing_lane);
-      outcomes.push(await runOn(t, "claimed", claimed));
+      outcomes.push(await runOn(t, "claimed", laneFor(config, t.cheapest_passing_lane)));
       resetTree();
       outcomes.push(await runOn(t, "lead", laneFor(config, t.lane)));
       if (withRouting) {
@@ -435,7 +511,7 @@ async function cmdValidate(flags: Record<string, string | boolean>): Promise<num
     await client.close();
   }
 
-  const report = summarise(outcomes, tasks, config);
+  const report = summarise(outcomes, tasks, config, unfalsifiable);
   if (flags.json) console.log(JSON.stringify({ meta: { workspace: ws, set: setFile, with_routing: withRouting }, report }, null, 2));
   else console.log(renderValidation(report, { workspace: ws, set: setFile, withRouting }));
   return report.label_validation.failed > 0 ? 1 : 0;
@@ -463,6 +539,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   const { cmd, sub, flags } = parseArgs(argv);
   if (cmd === "route") return cmdRoute(flags);
   if (cmd === "bench" && sub === "route") return cmdBench(flags);
+  if (cmd === "bench" && sub === "tripwire") return cmdBenchTripwire(flags);
   if (cmd === "demo") return cmdDemo(flags);
   if (cmd === "scenarios") return cmdScenarios(flags);
   if (cmd === "validate") return cmdValidate(flags);

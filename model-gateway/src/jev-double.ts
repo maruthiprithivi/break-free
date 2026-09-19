@@ -20,6 +20,14 @@ export interface DoubleDecision {
   sensitive: number;
   /** Probability that it needs repo context (Noul) */
   context: number;
+  /** Tripwire flags (Nouls, 0..1). */
+  test_weakened?: number;
+  security_touch?: number;
+  destructive_data?: number;
+  scope_creep?: number;
+  /** Tripwire risk on the 0..4 scale (Score), and the confidence returned with it. */
+  risk?: number;
+  risk_confidence?: number;
   probs?: Record<string, number> | null;
 }
 
@@ -100,6 +108,11 @@ export async function startTypeSafeDouble(opts: { decisions?: Record<string, Dou
         else if (kind === "difficulty") answers[key] = { type: "score", score: d.difficulty, legend: { "0": "trivial", "1": "mechanical", "2": "ordinary", "3": "multi-file", "4": "cross-cutting" }, probabilities: scoreDistribution(d.difficulty), confidence: 0.8 };
         else if (kind === "sensitive") answers[key] = { type: "noul", noul: d.sensitive };
         else if (kind === "needs_repo_context") answers[key] = { type: "noul", noul: d.context };
+        else if (kind === "test_weakened") answers[key] = { type: "noul", noul: d.test_weakened ?? 0 };
+        else if (kind === "security_touch") answers[key] = { type: "noul", noul: d.security_touch ?? 0 };
+        else if (kind === "destructive_data") answers[key] = { type: "noul", noul: d.destructive_data ?? 0 };
+        else if (kind === "scope_creep") answers[key] = { type: "noul", noul: d.scope_creep ?? 0 };
+        else if (kind === "risk") answers[key] = { type: "score", score: d.risk ?? 0, legend: { "0": "cosmetic", "1": "local", "2": "wider blast radius", "3": "risky", "4": "incident" }, probabilities: scoreDistribution(Math.max(0, Math.min(4, Math.round(d.risk ?? 0)))), confidence: d.risk_confidence ?? 0.8 };
       }
       // Deterministic usage derived from the request itself, so cost assertions are stable.
       json(200, { model, answers, usage: { input_tokens: Math.ceil(raw.length / 4), output_tokens: 0 } });

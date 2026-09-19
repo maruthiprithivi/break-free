@@ -309,6 +309,13 @@ no measured gain is not a trade worth making, so the seven-option Choice stays.
   clearly better than static rules and misses the brief's exact-agreement target — both are in the
   table above rather than the second one being quietly dropped.
 
+### The same model, pointed at diffs instead of tasks
+
+Routing answers "who should do this?" — the tripwire asks Jev the same kind of typed question about
+a different object: "what did this hunk just do?". Same client, same probability-and-confidence
+answer, same ledger discipline; see [tripwire.md](tripwire.md) for its thresholds and its measured
+false-flag rate.
+
 ### Two bugs the live API found that the mock could never have
 
 Both were caught the first time real decisions were compared with the replay, and both would have

@@ -148,6 +148,57 @@ const ConfigSchema = z.object({
       idleMs: z.number().int().positive().default(5 * 60_000),
     })
     .default({}),
+  /**
+   * The tripwire: a sub-second Jev check on what a crew diff actually does, run after `verify`
+   * passes. It exists because glob rules see paths, not intent — a model that adds `.skip` to a
+   * failing test, loosens an assertion or drops a guard passes every sensible glob and a green
+   * verify.
+   *
+   * It is ADDITIVE: a glob-triggered review is never removed, only added to. Disabled until a
+   * `policy.rules` entry with `action: "check"` scopes it to some paths.
+   */
+  tripwire: z
+    .object({
+      enabled: z.boolean().default(true),
+      /**
+       * Probability at or above which a hunk is BLOCKED — a hard rejection of the task.
+       *
+       * Deliberately near certainty. A block is the most expensive mistake the tripwire can make
+       * (it rejects work that may be fine), and on the calibration set lowering this to 0.8 bought
+       * no extra recall while false-blocking 5 clean diffs. Everything from `reviewAt` up to this
+       * is still reviewed, so the catch rate does not depend on it.
+       */
+      blockAt: z.number().min(0).max(1).default(0.99),
+      /** Risk score at or above which a hunk is blocked (0..4 scale). */
+      blockRisk: z.number().min(0).max(4).default(3.5),
+      /**
+       * Probability at or above which a hunk is sent for a full review.
+       *
+       * Calibrated against `bench/tripwire-set.jsonl`, not guessed: at 0.5 this flagged 51% of the
+       * 100 clean diffs, because a Noul just over half is a coin flip rather than a finding. 0.95
+       * is where recall on planted diffs is still 90% while false flags fall to 14%.
+       */
+      reviewAt: z.number().min(0).max(1).default(0.95),
+      /** Risk score at or above which a hunk is sent for a full review. Above 2.5 it changes nothing. */
+      reviewRisk: z.number().min(0).max(4).default(2.5),
+      /**
+       * Below this confidence on the risk score, a hunk is reviewed rather than trusted.
+       *
+       * 0 disables the gate, and that is the calibrated default: Jev's confidence on the risk Score
+       * is low on 48% of CLEAN diffs and 67% of bad ones, so it does not separate the two and gating
+       * on it flagged half the clean set. Kept as a knob because it may separate them on your data.
+       */
+      confidenceThreshold: z.number().min(0).max(1).default(0),
+      /**
+       * Let an all-clean, confident tripwire stand in for a BLANKET plan-level review
+       * (`review: true` on every task). It never replaces a glob-triggered review.
+       */
+      skipPlanReview: z.boolean().default(false),
+      /** Cap the work: hunks beyond this are dropped, and the result says so only via the count. */
+      maxHunks: z.number().int().positive().default(40),
+      maxHunkChars: z.number().int().positive().default(4000),
+    })
+    .default({}),
   /** USD per 1M tokens, keyed by "provider/model" or "provider" (fallback). Unknown models cost 0 and are reported as unpriced. */
   pricing: z.record(z.object({ input: z.number().min(0), output: z.number().min(0) })).default({}),
   /**
@@ -231,7 +282,8 @@ const ConfigSchema = z.object({
         .array(
           z.object({
             match: z.union([z.string(), z.array(z.string())]),
-            action: z.enum(["deny", "review"]),
+            /** `check` runs the Jev tripwire over diffs whose changed paths match (adds reviews/blocks, never removes one). */
+            action: z.enum(["deny", "review", "check"]),
             reason: z.string().optional(),
             /** For review: require the reviewer's provider to differ from the worker's (default true) */
             differentVendor: z.boolean().default(true),
@@ -434,6 +486,13 @@ export function sanitizeProjectConfig(j: unknown, opts: { projectMayEnableJev?: 
   // Only project-tunable, non-sensitive settings are copied. `github`, `mode` and `mergeAutonomy`
   // are intentionally omitted so a cloned repo can never grant itself push or merge rights.
   for (const k of ["defaults", "aliases", "fallback", "policy", "steward", "pricing"]) if (k in src) out[k] = src[k]; // policy can only add restrictions, so a project may declare it
+  // A project may tighten the tripwire (lower thresholds, enable it) but not loosen it: enabling is
+  // free, disabling is refused because a repo must not be able to switch off its own guardrail.
+  if (src.tripwire && typeof src.tripwire === "object") {
+    const t = { ...(src.tripwire as Record<string, unknown>) };
+    delete t.enabled;
+    out.tripwire = t;
+  }
   // Routing is project-tunable, so a repo can pin its own lanes and thresholds. Whether a project
   // may point the router at TypeSafe is the user's call: it is the same egress a project already
   // gets from `defaults.model`, so it is allowed by default and can be locked down with

@@ -85,10 +85,27 @@
     "scorecardLines": 3
   },
 
+  "$comment_tripwire": "A sub-second Jev check on what a crew diff actually DOES, run after verify passes: is a hunk weakening a test, destroying data, touching security, or wider than asked? Additive — it can add a review or a block, never remove one. It only runs for paths an action:\"check\" rule matches, so it costs nothing until you scope it. Thresholds are calibrated against bench/tripwire-set.jsonl (130 labelled diffs): recall 90%, false flags 14%, 0 false blocks, 309ms p50, $0.043 per 1,000 diffs. See docs/tripwire.md.",
+  "tripwire": {
+    "enabled": true,
+    "blockAt": 0.99,
+    "blockRisk": 3.5,
+    "reviewAt": 0.95,
+    "reviewRisk": 2.5,
+    "$comment_confidenceThreshold": "0 disables the gate, which is the calibrated default: Jev's confidence on the risk Score is low on 48% of CLEAN diffs and 67% of bad ones, so gating on it flags half the clean set.",
+    "confidenceThreshold": 0,
+    "$comment_skipPlanReview": "false (default): a clean tripwire does not replace a blanket plan-level review. true lets all three gates clean (no denied path, required checks passed, nothing flagged) stand in for it, and the report says so.",
+    "skipPlanReview": false,
+    "maxHunks": 40,
+    "maxHunkChars": 4000
+  },
+
+  "$comment_policy": "Enforced by the gateway, not by prompt text. deny: workers cannot read or write matching paths. review: an independent review by a DIFFERENT vendor runs on matching changes. check: runs the tripwire over diffs touching matching paths.",
   "policy": {
     "rules": [
       { "match": ["infra/prod/**", "**/*.pem"], "action": "deny", "reason": "never delegated" },
-      { "match": "src/auth/**", "action": "review", "reason": "auth changes need a second vendor's review" }
+      { "match": "src/auth/**", "action": "review", "reason": "auth changes need a second vendor's review" },
+      { "match": ["src/**/*.ts", "db/migrations/**"], "action": "check", "reason": "a green test run is not proof the diff is honest" }
     ]
   },
   "steward": { "verify": "npm test", "archiveDoneAfterDays": 30, "journalKeepDays": 90 },
