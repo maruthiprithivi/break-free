@@ -31,11 +31,36 @@ function bf(args, { expectFail = false } = {}) {
   }
 }
 
-test("bf help explains the three commands", () => {
+test("bf help lists every command, including the ones that cost money", () => {
   const out = bf(["help"]);
-  assert.match(out, /bf route --plan/);
-  assert.match(out, /bf bench route/);
+  for (const c of ["bf route --plan", "bf bench route", "bf bench tripwire", "bf demo", "bf scenarios", "bf validate --workspace"]) {
+    assert.ok(out.includes(c), `help should mention \`${c}\``);
+  }
   assert.match(out, /TYPESAFE_API_KEY/);
+  assert.match(out, /GEMINI_API_KEY/);
+});
+
+test("bf <command> --help prints usage and does NOT run the command", () => {
+  // Regression: `--help` was handled only at the top level, so `bf validate --help` executed validate
+  // with its defaults — and validate resets its workspace to HEAD between runs. Probing the CLI for
+  // help reset a repository's uncommitted work. It has to print and exit.
+  const out = bf(["validate", "--help"]);
+  assert.match(out, /bf validate \[--set/);
+  assert.match(out, /THE WORKSPACE IS RESET TO HEAD BETWEEN RUNS/);
+  assert.doesNotMatch(out, /^workspace\s+\//m, "help must not run a validation");
+
+  const trip = bf(["bench", "tripwire", "--help"]);
+  assert.match(trip, /bf bench tripwire/);
+  assert.match(trip, /refused rather than scored/);
+});
+
+test("an unknown flag is an error, not a silent default", () => {
+  // The same shape as the bug above: an unrecognised flag used to be ignored, so a typo ran the
+  // command with ITS defaults — for validate, the whole shipped set against the current directory.
+  const out = bf(["validate", "--taks", "1"], { expectFail: true });
+  assert.match(out, /bf validate: unknown flag --taks/);
+  assert.match(out, /bf validate --help/);
+  assert.doesNotMatch(out, /^workspace\s+\//m, "an unknown flag must not run the command");
 });
 
 test("bf route prints a route table and refuses without a plan", () => {

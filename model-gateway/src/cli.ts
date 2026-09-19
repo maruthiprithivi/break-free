@@ -463,6 +463,12 @@ async function cmdValidate(flags: Record<string, string | boolean>): Promise<num
     console.error(`${ws} has uncommitted changes.\n  bf validate resets the tree to HEAD between runs; commit, stash, or pass --force.`);
     return 2;
   }
+  // Say it out loud. This command resets a git tree repeatedly and cannot tell a worker's edit from
+  // yours, so the only real protection is that you know it is running and do not edit there meanwhile.
+  console.error(
+    `bf validate: workspace ${ws}\n` +
+      `  reset to HEAD between runs, and files the runs add are deleted. Do not edit files there while this runs.`,
+  );
 
   const config = configFor({ routing: withRouting ? { engine: "jev" } : {} });
   const configFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bf-validate-")), "config.json");
@@ -543,24 +549,80 @@ async function cmdValidate(flags: Record<string, string | boolean>): Promise<num
 
 const HELP = `bf — Break Free command line
 
-  bf route --plan <file.json|file.jsonl> [--engine jev|rules|off] [--threshold 0.7] [--json]
-      Decide which model runs each task. Same code path run_plan uses.
+  bf route --plan <file> [--engine jev|rules|off]    decide which model runs each task
+  bf bench route [--live]                            score four routers against the labelled set
+  bf bench tripwire [--live]                         score the diff check on labelled diffs
+  bf demo [--live]                                   one plan routed three ways
+  bf scenarios [--live]                              ten real workflows, routed four ways
+  bf validate --workspace <git repo>                 do the labels hold? (RESETS the workspace)
 
-  bf bench route [--set bench/route-set.jsonl] [--engine rules,jev] [--live] [--record <file>] [--json]
-      Score lead-picks, static rules and Jev against the labeled set.
-      Offline it replays bench/jev-recording.json; --live calls api.typesafe.ai
-      (needs TYPESAFE_API_KEY) and saves the decisions with --record.
-
-  bf demo [--plan bench/demo-plan.json] [--live] [--json]
-      One plan routed three ways: Jev, deterministic rules, and routing off.
+  bf <command> --help                                what that command takes
 
 Environment
-  TYPESAFE_API_KEY      live Jev
+  TYPESAFE_API_KEY      live Jev (routing and the tripwire)
+  GEMINI_API_KEY        the frontier-LLM-as-router baseline (bf bench route)
   BREAK_FREE_ROUTING    session-wide override: jev | rules | off
 `;
 
+/**
+ * Every command's flags, and its own `--help`.
+ *
+ * This table exists because `bf validate --help` used to RUN the command with its defaults: `--help`
+ * was handled only at the top level, and unknown flags were silently ignored. `bf validate` resets
+ * its workspace to HEAD between runs, so a probing or mistyped invocation could reset a repository —
+ * and one did. Now `--help` prints and exits, and an unknown flag is an error rather than a default.
+ */
+const COMMANDS: Record<string, { flags: string[]; usage: string }> = {
+  route: {
+    flags: ["plan", "engine", "threshold", "live", "record", "json"],
+    usage: "bf route --plan <file.json|file.jsonl> [--engine jev|rules|off] [--threshold 0.7] [--live] [--record <file>] [--json]\n    Decide which model runs each task. Same code path run_plan uses. Nothing is run.",
+  },
+  "bench route": {
+    flags: ["set", "engine", "live", "record", "json"],
+    usage: "bf bench route [--set bench/route-set.jsonl] [--engine rules,jev] [--live] [--record <file>] [--json]\n    Score lead picks, static rules and Jev against the labelled set. Offline it replays\n    bench/jev-recording.json; --live calls api.typesafe.ai (needs TYPESAFE_API_KEY) and writes the\n    capture with --record. A frontier-LLM-as-router arm needs a chat provider key (e.g. GEMINI_API_KEY).",
+  },
+  "bench tripwire": {
+    flags: ["set", "live", "record", "json"],
+    usage: "bf bench tripwire [--set bench/tripwire-set.jsonl] [--live] [--record <file>] [--json]\n    Score the diff check against a labelled set. Offline it replays bench/tripwire-recording.json;\n    --live needs TYPESAFE_API_KEY and writes the capture with --record.\n    A recording that does not cover the set is refused rather than scored.",
+  },
+  demo: {
+    flags: ["plan", "live", "record", "json", "sensitive-lane"],
+    usage: "bf demo [--plan bench/demo-plan.json] [--live] [--record <file>] [--sensitive-lane local|strong] [--json]\n    One plan routed three ways: Jev, deterministic rules, and routing off.",
+  },
+  scenarios: {
+    flags: ["set", "live", "record", "json"],
+    usage: "bf scenarios [--set bench/scenarios.json] [--live] [--record <file>] [--json]\n    Ten real workflows, routed four ways (jev, rules, off, lead).",
+  },
+  validate: {
+    flags: ["set", "workspace", "tasks", "with-routing", "json", "force", "include-unfalsifiable"],
+    usage:
+      "bf validate [--set bench/route-set.jsonl] --workspace <git repo> [--tasks 3] [--with-routing] [--json] [--force]\n" +
+      "    Do the labels hold? Runs each task on the lane the label calls cheapest AND on the lane a\n" +
+      "    lead would pick, then reads the gateway's own verify exit code.\n" +
+      "    THE WORKSPACE IS RESET TO HEAD BETWEEN RUNS. It must be clean to start (--force overrides),\n" +
+      "    it defaults to the current directory, and it will delete files the runs added. Do not edit\n" +
+      "    files in it while a validation is running.",
+  },
+  help: { flags: [], usage: "bf help" },
+};
+
 export async function main(argv = process.argv.slice(2)): Promise<number> {
   const { cmd, sub, flags } = parseArgs(argv);
+  const key = sub && COMMANDS[`${cmd} ${sub}`] ? `${cmd} ${sub}` : cmd;
+  const spec = COMMANDS[key];
+
+  if (cmd === "help" || cmd === "--help" || flags.help === true) {
+    console.log(spec && cmd !== "help" ? `bf ${key}\n\n${spec.usage}` : HELP);
+    return 0;
+  }
+  if (spec) {
+    const unknown = Object.keys(flags).filter((f) => !spec.flags.includes(f));
+    if (unknown.length) {
+      console.error(`bf ${key}: unknown flag${unknown.length > 1 ? "s" : ""} ${unknown.map((u) => `--${u}`).join(", ")}\n  bf ${key} --help`);
+      return 2;
+    }
+  }
+
   if (cmd === "route") return cmdRoute(flags);
   if (cmd === "bench" && sub === "route") return cmdBench(flags);
   if (cmd === "bench" && sub === "tripwire") return cmdBenchTripwire(flags);
