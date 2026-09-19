@@ -289,6 +289,8 @@ export interface RouteResult {
   jev_model?: string;
   escalated: number;
   policy_hits: number;
+  /** How many TypeSafe requests the plan needed (1 unless it was too big for one context). */
+  requests: number;
   /** State size we sent, and whether it had to be trimmed to fit the budget. */
   state_tokens: number;
   state_truncated: boolean;
@@ -420,32 +422,74 @@ export function buildState(
   return { state, tokens, truncated: true };
 }
 
-/** One Choice + one Score + two Nouls per task. Question ids are built from the task id and mapped back in code. */
+/**
+ * One Choice + one Score + two Nouls per task.
+ *
+ * Every instruction starts by pointing at the exact slot in the state the question is about, and
+ * this is load-bearing: **TypeSafe never sends the question key to the model** ("the key is not
+ * sent to the underlying model and is not used in inference"), so `core-limiter__sensitive` tells
+ * Jev nothing. A question that says "this subtask" while the state holds twelve of them is
+ * answered about the plan as a whole — which is exactly what the live API did: every task in a
+ * plan containing a migration came back `sensitive`, `difficulty 4`, confidence ~0.5. The docs'
+ * remedy is the same one applied here: name the part of the state you mean.
+ */
 export function buildQuestions(tasks: RouteTaskInput[]): Record<string, JevQuestion> {
   const questions: Record<string, JevQuestion> = {};
-  for (const t of tasks) {
+  tasks.forEach((t, i) => {
+    const pointer = `Answer about ONLY the subtask at state.tasks[${i}] (id \`${t.id}\`${t.title ? `, titled "${t.title}"` : ""}). Ignore every other subtask in the state.`;
     questions[`${t.id}__lane`] = {
       type: "choice",
-      instructions: "Which lane should run this subtask? Answer with the option whose description fits the subtask, not the one that sounds most impressive. If two lanes both fit, pick the cheaper one. If the subtask cannot be judged from the text given, choose `unclear`.",
+      instructions: `${pointer} Which lane should run that subtask? Answer with the option whose description fits it, not the one that sounds most impressive. If two lanes both fit, pick the cheaper one. If the subtask cannot be judged from the text given, choose \`unclear\`.`,
       criteria: LANE_SPEC,
     };
     questions[`${t.id}__difficulty`] = {
       type: "score",
-      instructions: "How hard is this subtask for an experienced engineer who has the repository open?",
+      instructions: `${pointer} How hard is that subtask for an experienced engineer who has the repository open?`,
       criteria: DIFFICULTY_LEVELS,
     };
     questions[`${t.id}__sensitive`] = {
       type: "noul",
-      instructions: "Does this subtask touch authentication, secrets, credentials, passwords, payments, billing, or a database migration?",
+      instructions: `${pointer} Does that subtask touch authentication, secrets, credentials, passwords, payments, billing, or a database migration?`,
       criteria: { true: "It edits or reasons about auth, secrets, credentials, payments or a migration", false: "It does not touch any of those" },
     };
     questions[`${t.id}__needs_repo_context`] = {
       type: "noul",
-      instructions: "Does doing this subtask correctly require understanding several modules of the repository at once, rather than one file?",
+      instructions: `${pointer} Does doing that subtask correctly require understanding several modules of the repository at once, rather than one file?`,
       criteria: { true: "It cannot be done from one file alone", false: "One file, or a self-contained detail, is enough" },
     };
-  }
+  });
   return questions;
+}
+
+/**
+ * Split a plan into requests that each fit the model's context.
+ *
+ * Greedy and deterministic: tasks are taken in the order given, and a task joins the current
+ * request only while state + questions stay within `routing.maxRequestTokens`. Measured in
+ * estimated tokens against the real payload, because the questions are not free — a lane question
+ * carries all seven option rubrics, so 60 tasks in one request is roughly 30k tokens of questions
+ * alone and TypeSafe answers `400 max_tokens_exceeded`.
+ *
+ * A single task that cannot fit gets a request to itself and is sent anyway: the state ladder in
+ * `buildState` has already trimmed it as far as it goes, and refusing to route at all would be
+ * worse than routing with a warning.
+ */
+export function planRequests(config: GatewayConfig, goal: string | undefined, tasks: RouteTaskInput[], scorecards: ScorecardRecord[]): RouteTaskInput[][] {
+  const budget = config.routing.maxRequestTokens;
+  const out: RouteTaskInput[][] = [];
+  let current: RouteTaskInput[] = [];
+  for (const t of tasks) {
+    const candidate = [...current, t];
+    const fits = current.length === 0 || estimateTokens(buildState(config, goal, candidate, scorecards).state) + estimateTokens(buildQuestions(candidate)) <= budget;
+    if (fits) {
+      current = candidate;
+    } else {
+      out.push(current);
+      current = [t];
+    }
+  }
+  if (current.length) out.push(current);
+  return out;
 }
 
 // ------------------------------------------------------------------ the router
@@ -491,6 +535,7 @@ export async function routePlanTasks(config: GatewayConfig, tasks: RouteTaskInpu
     batch: config.routing.batch,
     escalated: 0,
     policy_hits: 0,
+    requests: 0,
     state_tokens: 0,
     state_truncated: false,
   };
@@ -511,6 +556,7 @@ export async function routePlanTasks(config: GatewayConfig, tasks: RouteTaskInpu
   let answered_by: RoutingEngine = engine;
   let stateTokens = 0;
   let stateTruncated = false;
+  let requestsCount = 0;
 
   if (engine === "jev") {
     const provider = resolveProvider(config, "typesafe");
@@ -521,33 +567,29 @@ export async function routePlanTasks(config: GatewayConfig, tasks: RouteTaskInpu
     } else {
       try {
         const scorecards = opts.scorecards ?? [];
-        const builds = batch === "plan" ? [tasks] : tasks.map((t) => [t]);
+        // A plan that fits the context is one request; a bigger one is split. Either way the
+        // answers come back keyed by question id, which `jevDecision` reads per task.
+        const requests = batch === "plan" ? planRequests(config, opts.goal, tasks, scorecards) : tasks.map((t) => [t]);
         const collected = new Map<string, { answers: Record<string, unknown>; ms: number }>();
-        if (batch === "plan") {
-          const { state, tokens, truncated } = buildState(config, opts.goal, tasks, scorecards);
-          stateTokens = tokens;
-          stateTruncated = truncated;
-          const res = await systemOne(config, provider, { state, model: provider.defaultModel, questions: buildQuestions(tasks) }, { signal: opts.signal, log });
-          collected.set("__plan", { answers: res.answers as Record<string, unknown>, ms: res.ms });
-          usage = res.usage;
-          cost_usd = res.costUsd;
-          priced = res.priced;
-          jevModel = res.model;
-        } else {
-          for (const one of builds) {
-            const { state, tokens, truncated } = buildState(config, opts.goal, one, scorecards);
-            stateTokens += tokens;
-            stateTruncated = stateTruncated || truncated;
-            const res = await systemOne(config, provider, { state, model: provider.defaultModel, questions: buildQuestions(one) }, { signal: opts.signal, log });
-            collected.set(one[0].id, { answers: res.answers as Record<string, unknown>, ms: res.ms });
-            usage.input_tokens += res.usage.input_tokens;
-            usage.output_tokens += res.usage.output_tokens;
-            cost_usd += res.costUsd;
-            priced = priced && res.priced;
-            jevModel = res.model;
-          }
+        const results = await Promise.all(
+          requests.map(async (chunk) => {
+            const { state, tokens, truncated } = buildState(config, opts.goal, chunk, scorecards);
+            const res = await systemOne(config, provider, { state, model: provider.defaultModel, questions: buildQuestions(chunk) }, { signal: opts.signal, log });
+            return { chunk, answers: res.answers as Record<string, unknown>, ms: res.ms, tokens, truncated, res };
+          }),
+        );
+        for (const r of results) {
+          for (const t of r.chunk) collected.set(t.id, { answers: r.answers, ms: r.ms });
+          stateTokens += r.tokens;
+          stateTruncated = stateTruncated || r.truncated;
+          usage.input_tokens += r.res.usage.input_tokens;
+          usage.output_tokens += r.res.usage.output_tokens;
+          cost_usd += r.res.costUsd;
+          priced = priced && r.res.priced;
+          jevModel = r.res.model;
         }
-        decisions = tasks.map((t) => jevDecision(t, config, laneMap, threshold, policy.get(t.id) ?? [], collected.get(batch === "plan" ? "__plan" : t.id)!));
+        requestsCount = requests.length;
+        decisions = tasks.map((t) => jevDecision(t, config, laneMap, threshold, policy.get(t.id) ?? [], collected.get(t.id)!));
       } catch (e) {
         const msg = e instanceof JevError ? e.message : (e as Error).message;
         degraded = msg;
@@ -572,6 +614,7 @@ export async function routePlanTasks(config: GatewayConfig, tasks: RouteTaskInpu
     ms: Date.now() - started,
     cost_usd,
     state_tokens: stateTokens,
+    requests: requestsCount,
     batch,
     degraded: degraded ?? null,
   });
@@ -588,6 +631,7 @@ export async function routePlanTasks(config: GatewayConfig, tasks: RouteTaskInpu
     jev_model: jevModel,
     escalated: decisions.filter((d) => d.escalated).length,
     policy_hits: policyHits,
+    requests: requestsCount,
     state_tokens: stateTokens,
     state_truncated: stateTruncated,
     degraded,

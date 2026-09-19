@@ -78,7 +78,7 @@ export function renderRouteTable(r: RouteResult): string {
     fmt(cols.map((c) => "-".repeat(c.length))),
     ...rows.map(fmt),
     "",
-    `engine ${r.answered_by}${r.degraded ? ` (degraded: ${r.degraded})` : ""} · ${r.decisions.length} tasks in ${r.ms} ms (${msPerTask} ms/task) · $${r.cost_usd.toFixed(6)}${r.priced ? "" : " (unpriced)"} · state ${r.state_tokens} tokens${r.state_truncated ? " (trimmed)" : ""}`,
+    `engine ${r.answered_by}${r.degraded ? ` (degraded: ${r.degraded})` : ""} · ${r.decisions.length} tasks in ${r.ms} ms (${msPerTask} ms/task)${r.requests > 1 ? ` · ${r.requests} requests` : ""} · $${r.cost_usd.toFixed(6)}${r.priced ? "" : " (unpriced)"} · state ${r.state_tokens} tokens${r.state_truncated ? " (trimmed)" : ""}`,
     `escalated ${r.escalated}/${r.decisions.length} · policy hits ${r.policy_hits}`,
   ].join("\n");
 }

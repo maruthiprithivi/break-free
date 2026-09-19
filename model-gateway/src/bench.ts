@@ -81,6 +81,14 @@ export interface BenchMetrics {
   note?: string;
   tasks: number;
   agreement_exact_pct: number;
+  /**
+   * Agreement over the tasks whose expert label is a crew lane (local/fast/strong/thinker).
+   * `codex_handoff`, `lead_keeps` and `unclear` are meta-labels about harness logistics and product
+   * authority — nothing in a task description implies them — so they are reported separately
+   * rather than allowed to bury the lanes a router can actually judge.
+   */
+  agreement_crew_lanes_pct: number;
+  crew_lane_tasks: number;
   agreement_within_one_pct: number;
   /** Over tasks the router was free to choose for (guardrail-forced tasks are excluded). */
   under_routing_pct: number;
@@ -117,6 +125,8 @@ export function laneCostUsd(config: GatewayConfig, lane: string): number {
 /** Percentage of tasks whose routed lane is weaker than the cheapest lane that actually passed. */
 export function scoreArm(config: GatewayConfig, set: LabeledTask[], arm: RouterArm): BenchMetrics {
   let exact = 0;
+  let crewExact = 0;
+  let crewTotal = 0;
   let withinOne = 0;
   let comparable = 0;
   let under = 0;
@@ -131,6 +141,11 @@ export function scoreArm(config: GatewayConfig, set: LabeledTask[], arm: RouterA
     const o = arm.outcomes.get(t.id);
     const lane = o?.lane ?? "unclear";
     if (lane === t.lead_lane) exact++;
+    // Split out the meta-labels: no router can infer "the lead should keep this" from task text.
+    if (tierOf(t.lead_lane) !== null) {
+      crewTotal++;
+      if (lane === t.lead_lane) crewExact++;
+    }
     const a = tierOf(lane);
     const b = tierOf(t.lead_lane);
     if (a !== null && b !== null) {
@@ -159,6 +174,8 @@ export function scoreArm(config: GatewayConfig, set: LabeledTask[], arm: RouterA
     ...(arm.note ? { note: arm.note } : {}),
     tasks: set.length,
     agreement_exact_pct: round((exact / set.length) * 100),
+    agreement_crew_lanes_pct: crewTotal ? round((crewExact / crewTotal) * 100) : 0,
+    crew_lane_tasks: crewTotal,
     agreement_within_one_pct: comparable ? round((withinOne / comparable) * 100) : 0,
     // Denominator is the tasks the router was actually free to choose for.
     under_routing_pct: free ? round((under / free) * 100) : 0,
@@ -209,11 +226,11 @@ export function unmeasuredLlmArm(note: string): RouterArm {
 
 /** One table anyone can read, and the same numbers as JSON for the post. */
 export function renderBenchTable(metrics: BenchMetrics[], meta: { set: string; tasks: number; engine: string; live: boolean; assumed: string }): string {
-  const cols = ["router", "exact %", "±1 tier %", "under %", "forced %", "escal %", "ms/plan", "$/1000", "$ plan", "vs strong"];
+  const cols = ["router", "exact %", "crew %", "±1 tier %", "under %", "forced %", "escal %", "ms/plan", "$/1000", "$ plan", "vs strong"];
   const rows = metrics.map((m) =>
     m.measured
-      ? [m.router, `${m.agreement_exact_pct}`, `${m.agreement_within_one_pct}`, `${m.under_routing_pct}`, `${m.forced_pct}`, `${m.escalation_pct}`, `${m.ms_p50}`, `$${m.cost_per_1000_decisions_usd}`, `$${m.assumed_plan_cost_usd}`, `${m.saved_vs_all_strong_pct}%`]
-      : [m.router, "unmeasured", "-", "-", "-", "-", "-", "-", "-", "-"],
+      ? [m.router, `${m.agreement_exact_pct}`, `${m.agreement_crew_lanes_pct}`, `${m.agreement_within_one_pct}`, `${m.under_routing_pct}`, `${m.forced_pct}`, `${m.escalation_pct}`, `${m.ms_p50}`, `$${m.cost_per_1000_decisions_usd}`, `$${m.assumed_plan_cost_usd}`, `${m.saved_vs_all_strong_pct}%`]
+      : [m.router, "unmeasured", "-", "-", "-", "-", "-", "-", "-", "-", "-"],
   );
   const widths = cols.map((c, i) => Math.max(c.length, ...rows.map((r) => r[i].length)));
   const fmt = (r: string[]) => r.map((c, i) => c.padEnd(widths[i])).join("  ").trimEnd();
@@ -225,6 +242,7 @@ export function renderBenchTable(metrics: BenchMetrics[], meta: { set: string; t
     ...rows.map(fmt),
     "",
     `engine ${meta.engine} · ${meta.assumed}`,
+    "crew % is agreement over the crew lanes only (local/fast/strong/thinker) — codex_handoff, lead_keeps and unclear are meta-labels nothing in a task description implies",
     "under % is over the tasks the router was free to choose for; forced % is the share a guardrail decided (policy safety, criterion 10)",
   ];
   const skipped = metrics.filter((m) => !m.measured);

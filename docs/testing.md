@@ -14,7 +14,8 @@ covers (134 tests): tool listing, provider usability + `${ENV}` keys, alias chai
 | `test/routing-e2e.test.mjs` | the real MCP server over stdio: a plan routed in one call, per-task models, the route table, escalation handing a task back un-run, ledger provenance and journal lines, scorecards, the `route` tool, `cost_report.routing_savings`, `overridden_by`, and `routing.engine: "off"` behaving exactly as before |
 | `test/route-cli.test.mjs` | the `bf` contract: route table, bench guardrails, reproducibility, and the demo's three arms |
 
-The bench and demo replay `bench/jev-recording.json` through the real client, so they need no key. Regenerate it against the live API with `bf bench route --live --record bench/jev-recording.json`.
+The bench and demo replay `bench/jev-recording.json` and `bench/demo-recording.json` through the real TypeSafe client, so they need no key. **Both are live captures from api.typesafe.ai** (recorded 2026-09-19 against `jev-1.13.0`), not synthetic fixtures — only the latency column is re-measured. Regenerate with `bf bench route --live --record bench/jev-recording.json` (needs `TYPESAFE_API_KEY`); `bench/make-recording.mjs` produces a
+stand-in for contributors without a key.
 
 **Provider status** (no calls made):
 ```bash

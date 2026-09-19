@@ -187,6 +187,13 @@ const ConfigSchema = z.object({
       sensitiveThreshold: z.number().min(0).max(1).default(0.5),
       /** Hard cap on the state sent to Jev. Jev degrades with padded input, so this stays small. */
       maxStateTokens: z.number().int().positive().default(2000),
+      /**
+       * Hard cap on state + questions for ONE request. TypeSafe rejects an oversized request with
+       * `400 max_tokens_exceeded` (64k total, 32k for state plus the longest question), so a plan
+       * that does not fit is split into several requests — and each chunk gets its own, smaller
+       * state, which is better for accuracy than one padded one.
+       */
+      maxRequestTokens: z.number().int().positive().default(24_000),
       timeoutMs: z.number().int().positive().default(20_000),
       /** Retries of the same TypeSafe request on 429/529/5xx/network, with backoff honouring `retry-after` */
       retries: z.number().int().min(0).max(5).default(2),

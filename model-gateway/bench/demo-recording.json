@@ -1,20 +1,200 @@
 {
-  "note": "Recorded TypeSafe System One decisions for the demo plan, replayed offline through the real client so `bf demo` runs with no key. Regenerate against the live API with: bf bench route --live --record bench/jev-recording.json (and a live-equivalent demo run once a key is present).",
-  "answered_by": "recorded",
-  "recorded_at": "2026-09-19T00:00:00.000Z",
+  "note": "Recorded TypeSafe System One decisions for the demo plan, captured live from api.typesafe.ai. Replayed offline through the real client so bf demo runs with no key. Regenerate: bf demo --live --json, then map proposed_lane/confidence/difficulty/sensitive_prob/needs_repo_context.",
+  "answered_by": "jev",
+  "recorded_at": "2026-09-19T05:17:37.762Z",
   "tasks": 12,
   "decisions": {
-    "design": { "lane": "thinker", "confidence": 0.78, "difficulty": 4, "sensitive": 0.04, "context": 0.71 },
-    "core-limiter": { "lane": "strong", "confidence": 0.91, "difficulty": 3, "sensitive": 0.12, "context": 0.66 },
-    "middleware": { "lane": "strong", "confidence": 0.86, "difficulty": 3, "sensitive": 0.14, "context": 0.58 },
-    "store": { "lane": "strong", "confidence": 0.83, "difficulty": 3, "sensitive": 0.19, "context": 0.62 },
-    "migration": { "lane": "strong", "confidence": 0.88, "difficulty": 3, "sensitive": 0.93, "context": 0.31 },
-    "config-flag": { "lane": "fast", "confidence": 0.9, "difficulty": 1, "sensitive": 0.06, "context": 0.12 },
-    "unit-tests": { "lane": "fast", "confidence": 0.93, "difficulty": 1, "sensitive": 0.05, "context": 0.21 },
-    "integration-tests": { "lane": "fast", "confidence": 0.81, "difficulty": 2, "sensitive": 0.07, "context": 0.44 },
-    "readme": { "lane": "local", "confidence": 0.95, "difficulty": 0, "sensitive": 0.03, "context": 0.09 },
-    "changelog": { "lane": "local", "confidence": 0.94, "difficulty": 0, "sensitive": 0.03, "context": 0.05 },
-    "cleanup-job": { "lane": "strong", "confidence": 0.62, "difficulty": 2, "sensitive": 0.11, "context": 0.52 },
-    "flaky-test": { "lane": "fast", "confidence": 0.41, "difficulty": 2, "sensitive": 0.08, "context": 0.36, "probs": { "fast": 0.31, "strong": 0.34, "thinker": 0.29, "local": 0.04, "codex_handoff": 0.01, "lead_keeps": 0.005, "unclear": 0.005 } }
+    "design": {
+      "lane": "thinker",
+      "confidence": 0.99,
+      "difficulty": 2,
+      "sensitive": 0.09,
+      "context": 1,
+      "probs": {
+        "codex_handoff": 0,
+        "fast": 0,
+        "lead_keeps": 0,
+        "strong": 0,
+        "unclear": 0,
+        "local": 0.01,
+        "thinker": 0.99
+      }
+    },
+    "core-limiter": {
+      "lane": "strong",
+      "confidence": 0.95,
+      "difficulty": 2,
+      "sensitive": 0.05,
+      "context": 0,
+      "probs": {
+        "codex_handoff": 0,
+        "lead_keeps": 0,
+        "local": 0,
+        "strong": 0.96,
+        "fast": 0.04,
+        "unclear": 0,
+        "thinker": 0
+      }
+    },
+    "middleware": {
+      "lane": "strong",
+      "confidence": 0.55,
+      "difficulty": 2,
+      "sensitive": 0.06,
+      "context": 1,
+      "probs": {
+        "codex_handoff": 0,
+        "fast": 0.38,
+        "lead_keeps": 0,
+        "strong": 0.62,
+        "local": 0,
+        "unclear": 0,
+        "thinker": 0
+      }
+    },
+    "store": {
+      "lane": "strong",
+      "confidence": 0.99,
+      "difficulty": 3,
+      "sensitive": 0.27,
+      "context": 1,
+      "probs": {
+        "codex_handoff": 0,
+        "fast": 0,
+        "lead_keeps": 0,
+        "strong": 1,
+        "local": 0,
+        "unclear": 0,
+        "thinker": 0
+      }
+    },
+    "migration": {
+      "lane": "strong",
+      "confidence": 0.95,
+      "difficulty": 2,
+      "sensitive": 0.99,
+      "context": 1,
+      "probs": {
+        "codex_handoff": 0,
+        "fast": 0.04,
+        "lead_keeps": 0,
+        "strong": 0.96,
+        "local": 0,
+        "unclear": 0,
+        "thinker": 0
+      }
+    },
+    "config-flag": {
+      "lane": "fast",
+      "confidence": 1,
+      "difficulty": 1,
+      "sensitive": 0.06,
+      "context": 0,
+      "probs": {
+        "codex_handoff": 0,
+        "lead_keeps": 0,
+        "local": 0,
+        "strong": 0,
+        "fast": 1,
+        "unclear": 0,
+        "thinker": 0
+      }
+    },
+    "unit-tests": {
+      "lane": "fast",
+      "confidence": 1,
+      "difficulty": 1,
+      "sensitive": 0.05,
+      "context": 0,
+      "probs": {
+        "codex_handoff": 0,
+        "fast": 1,
+        "lead_keeps": 0,
+        "strong": 0,
+        "unclear": 0,
+        "local": 0,
+        "thinker": 0
+      }
+    },
+    "integration-tests": {
+      "lane": "fast",
+      "confidence": 0.81,
+      "difficulty": 2,
+      "sensitive": 0.07,
+      "context": 1,
+      "probs": {
+        "codex_handoff": 0,
+        "fast": 0.85,
+        "local": 0,
+        "strong": 0.15,
+        "lead_keeps": 0,
+        "unclear": 0,
+        "thinker": 0
+      }
+    },
+    "readme": {
+      "lane": "local",
+      "confidence": 1,
+      "difficulty": 1,
+      "sensitive": 0.06,
+      "context": 1,
+      "probs": {
+        "codex_handoff": 0,
+        "fast": 0,
+        "local": 1,
+        "strong": 0,
+        "lead_keeps": 0,
+        "unclear": 0,
+        "thinker": 0
+      }
+    },
+    "changelog": {
+      "lane": "local",
+      "confidence": 1,
+      "difficulty": 0,
+      "sensitive": 0.26,
+      "context": 0,
+      "probs": {
+        "codex_handoff": 0,
+        "lead_keeps": 0,
+        "local": 1,
+        "strong": 0,
+        "fast": 0,
+        "unclear": 0,
+        "thinker": 0
+      }
+    },
+    "cleanup-job": {
+      "lane": "strong",
+      "confidence": 0.97,
+      "difficulty": 3,
+      "sensitive": 0.15,
+      "context": 1,
+      "probs": {
+        "codex_handoff": 0,
+        "fast": 0.02,
+        "local": 0,
+        "strong": 0.98,
+        "lead_keeps": 0,
+        "unclear": 0,
+        "thinker": 0
+      }
+    },
+    "flaky-test": {
+      "lane": "thinker",
+      "confidence": 0.73,
+      "difficulty": 2,
+      "sensitive": 0.06,
+      "context": 1,
+      "probs": {
+        "codex_handoff": 0,
+        "fast": 0.08,
+        "lead_keeps": 0,
+        "strong": 0.15,
+        "local": 0,
+        "unclear": 0,
+        "thinker": 0.77
+      }
+    }
   }
 }

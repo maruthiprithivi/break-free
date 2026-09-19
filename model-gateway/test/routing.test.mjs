@@ -24,6 +24,7 @@ import {
   fileBucket,
   formatProbs,
   parseProbs,
+  planRequests,
   resolveEngine,
   routePlanTasks,
   scorecardLines,
@@ -327,6 +328,41 @@ describe("the TypeSafe client", () => {
     assert.ok(r.usage.input_tokens > 0);
   });
 
+  test("a plan too big for one request is split, and each chunk fits", async () => {
+    // 60 tasks x 4 questions does not fit one context: the lane question alone carries seven
+    // option rubrics. The live API answers 400 max_tokens_exceeded rather than trimming.
+    const many = Array.from({ length: 60 }, (_, i) => task(`t${i}`, { task: `Do the thing for t${i}`, files: ["src/a.ts"] }));
+    const tight = configWith({ engine: "jev", threshold: 0.7, retryDelayMs: 0, retries: 0, maxRequestTokens: 8000 });
+    const requests = planRequests(tight, "goal", many, []);
+    assert.ok(requests.length > 1, `expected several requests, got ${requests.length}`);
+    assert.equal(requests.flat().length, 60, "no task is dropped by chunking");
+    assert.deepEqual(requests.flat().map((t) => t.id), many.map((t) => t.id), "order is preserved");
+    for (const chunk of requests) {
+      const total = estimateTokens(buildState(tight, "goal", chunk, []).state) + estimateTokens(buildQuestions(chunk));
+      assert.ok(total <= 8000, `chunk of ${chunk.length} is ${total} tokens`);
+    }
+    // a plan that fits is still exactly one request
+    const roomy = configWith({ engine: "jev", maxRequestTokens: 100_000 });
+    assert.equal(planRequests(roomy, "goal", many, []).length, 1);
+  });
+
+  test("chunking routes every task and reports how many requests it took", async () => {
+    mock.setDecisions({ a: { lane: "fast", confidence: 0.9 }, b: { lane: "strong", confidence: 0.9 }, c: { lane: "local", confidence: 0.9 } });
+    const tight = configWith({ engine: "jev", threshold: 0.7, retryDelayMs: 0, retries: 0, maxRequestTokens: 900 });
+    const before = mock.requests.length;
+    const r = await routePlanTasks(tight, [task("a"), task("b"), task("c")], { engine: "jev" });
+    assert.ok(r.requests > 1, `expected a split, got ${r.requests}`);
+    assert.equal(mock.requests.length - before, r.requests);
+    assert.deepEqual(
+      r.decisions.map((d) => [d.id, d.lane]),
+      [
+        ["a", "fast"],
+        ["b", "strong"],
+        ["c", "local"],
+      ],
+    );
+  });
+
   test("the state is capped and trimmed in a fixed order, never dropping a task", async () => {
     const long = "x".repeat(6000);
     const tasks = [task("a", { task: long, acceptance: long, verify: "npm test", files: ["a.ts"] }), task("b", { task: long })];
@@ -426,6 +462,19 @@ describe("frontmatter-safe encodings", () => {
 });
 
 describe("questions are the constants a human reviews", () => {
+  test("every question names the subtask it is about, by its path in the state", () => {
+    // TypeSafe does not send the question key to the model, so the instruction IS the only thing
+    // identifying which of the plan's tasks is being judged. Without this, "this subtask" is
+    // ambiguous across a plan and every answer describes the plan as a whole.
+    const qs = buildQuestions([task("core"), task("docs", { title: "Update the README" })]);
+    for (const [key, q] of Object.entries(qs)) {
+      const i = key.split("__")[0] === "core" ? 0 : 1;
+      assert.match(q.instructions, new RegExp(`ONLY the subtask at state\\.tasks\\[${i}\\]`), `${key} must point at its slot`);
+      assert.match(q.instructions, /Ignore every other subtask/);
+    }
+    assert.match(qs.docs__lane.instructions, /id `docs`, titled "Update the README"/);
+  });
+
   test("every question states one thing, literally", () => {
     const qs = buildQuestions([task("a")]);
     assert.match(qs.a__lane.instructions, /cheaper one/);

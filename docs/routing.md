@@ -194,14 +194,70 @@ reported separately as `forced %`. Mixing them would call a deliberately-kept-lo
 Cost figures use a declared 20k-in/4k-out token budget per task at your configured list prices —
 an estimate of the same calls on `strong`, not a re-run.
 
+### Measured, 2026-09-19 (`jev-1.13.0`, live)
+
+```
+router  exact %  crew %  ±1 tier %  under %  forced %  escal %  ms/plan  $/1000   $ plan   vs strong
+lead    100      100     100        0        0         13.33    0        $0       $0.537   54.7%
+rules   53.33    63.27   95.83      31.03    0         1.67     1.2      $0       $0.4258  64.1%
+jev     71.67    83.67   100        6.98     18.33     10       311.4    $0.0544  $0.6003  49.4%
+llm     unmeasured
+```
+
+`crew %` is agreement over the 49 tasks whose expert label is a real crew lane. The other 11 are
+`codex_handoff`, `lead_keeps` and `unclear` — meta-labels about harness logistics and product
+authority that nothing in a task description implies, so no router can be expected to hit them.
+
+Against the brief's targets, with the misses stated:
+
+| # | Criterion | Target | Measured | |
+| --- | --- | --- | --- | --- |
+| 1 | Crew cost vs all-`strong` | ≥ 50% lower | 49.4% | **miss by 0.6pt** — `sensitiveLane: "strong"` deliberately upgrades 11 of 60 |
+| 4 | Under-routing | ≤ 10% | 6.98% | pass |
+| 5 | Agreement, exact lane | ≥ 80% | 71.67% | **miss** — 11 meta-labels + 3 real under-routes |
+| 5 | Agreement, ±1 tier | ≥ 95% | 100% | pass |
+| 5 | (breakdown) crew lanes only | — | 83.67% | clears 80 |
+| 6 | 12-task plan | ≤ 2 s | 1.22 s | pass |
+| 7 | Routing cost | ≤ $0.001/plan | $0.000663 | pass |
+| 9 | Escalation band | 10–25% | 10% | pass, bottom edge |
+| 10 | Policy safety | never cheaper than policy | 18.33% forced, 0 violations | pass |
+| 11 | Beats the LLM router | ≥ 20× faster, ≥ 50× cheaper | — | unmeasured, no frontier key |
+
+Not measured here: criteria 2, 3 and 8 (first-pass and after-retry pass rates, calibration) — they
+need real crew runs with `verify` outcomes, which is what the scorecards collect.
+
+Jev is not "just rules": 71.67% vs 53.33% exact, 83.67% vs 63.27% on crew lanes, and 6.98% vs
+31.03% under-routing. The rules engine also *looks* cheaper (64.1% vs 49.4%) precisely because it
+under-routes three times as often — that is the trade the guardrail exists to catch.
+
 ## Honesty notes
 
-- **Offline `jev` numbers are a replay, not a measurement.** `bench/jev-recording.json` exists so the
-  bench and the demo run with no key; `bench/make-recording.mjs` generates it from the labels with a
-  fixed, legible rule. Any number you publish must come from `--live`.
+- **The recording is real, and offline runs replay it.** `bench/jev-recording.json` and
+  `bench/demo-recording.json` are captures from `api.typesafe.ai`, replayed through the real
+  TypeSafe client so the bench and the demo run with no key. The metrics above reproduce offline;
+  only the **latency** column is measured live. Regenerate with `bf bench route --live --record …`
+  (needs `TYPESAFE_API_KEY`).
 - **`cost_report` savings are a replay estimate** of the same token usage priced on `strong`. Real
   savings differ with cache, context reuse and retries.
 - **Routing spend is tracked separately** from crew spend: routing calls log as `route.decision`
   and appear under `routing_savings.routing`, so they never inflate crew cost.
-- **The vendor's accuracy claims are vendor-only.** The bench is the story. If `rules` matches Jev on
-  your tasks, that is the finding.
+- **The vendor's accuracy claims are vendor-only.** The bench is the story. Here it says Jev is
+  clearly better than static rules and misses the brief's exact-agreement target — both are in the
+  table above rather than the second one being quietly dropped.
+
+### Two bugs the live API found that the mock could never have
+
+Both were caught the first time real decisions were compared with the replay, and both would have
+shipped silently otherwise:
+
+1. **Jev never saw which task each question was about.** The docs say the question key *is not sent
+   to the model*, so `core-limiter__sensitive` told it nothing — and a question asking about "this
+   subtask" while the state held twelve of them was answered about the plan as a whole. Every task
+   in a plan containing a migration came back `sensitive`, `difficulty 4`, confidence ~0.5. Fixed by
+   opening every instruction with the state path it is about (`state.tasks[3]`, id and title). The
+   mock could not catch this: it answers by key, which is precisely what the model does not see.
+2. **A big plan did not fit one request.** 60 tasks × 4 questions is ~30k tokens of questions alone
+   (each lane question carries all seven option rubrics), and TypeSafe answers
+   `400 max_tokens_exceeded`. `routing.maxRequestTokens` (default 24k) now splits a plan into
+   several requests that each fit — which also gives each chunk a smaller, untrimmed state — and
+   `route`/`bf` report the request count.

@@ -1,21 +1,22 @@
 /**
- * Regenerate `bench/jev-recording.json` — the recorded TypeSafe decisions that let
- * `bf bench route` and `bf demo` run offline with no key.
+ * Regenerate a STAND-IN `bench/jev-recording.json`, for when you have no TypeSafe key.
  *
  *   node bench/make-recording.mjs
  *
- * This is a RECORDING STAND-IN, not a measurement. It is derived from the labeled set with a
- * fixed, legible rule so the bench arithmetic is reproducible without a key:
+ * The committed `bench/jev-recording.json` and `bench/demo-recording.json` are NOT made by this
+ * script: they are live captures from api.typesafe.ai, replayed offline through the real client.
+ * This script exists only so someone without a key can still run `bf bench route` and `bf demo`
+ * end to end — and anything it produces is a guess derived from the expert labels, never a
+ * measurement of Jev. Replace it with the real thing:
  *
- *   - Jev agrees with the expert lane label most of the time.
- *   - Where the label is `lead_keeps`/`unclear`, Jev proposes the cheapest passing lane at low
- *     confidence, which is what makes the escalation band real rather than decorative.
- *   - Every 11th task it under-routes by one tier and every 17th it proposes `codex_handoff`,
- *     so the under-routing guardrail and the agreement metric have something to catch.
- *   - Sensitivity and repo-context probabilities follow the labels with noise.
- *
- * Replace it with real numbers by running the API:
  *   TYPESAFE_API_KEY=... bf bench route --live --record bench/jev-recording.json
+ *
+ * The rule it applies (fixed, so the bench arithmetic is reproducible without a key):
+ *   - agree with the expert lane label most of the time;
+ *   - where the label is `lead_keeps`/`unclear`, propose the cheapest passing lane at low
+ *     confidence, so the escalation band is real rather than decorative;
+ *   - under-route by one tier every 11th task and propose `codex_handoff` every 17th, so the
+ *     under-routing guardrail and the agreement metric have something to catch.
  */
 import fs from "node:fs";
 import path from "node:path";
