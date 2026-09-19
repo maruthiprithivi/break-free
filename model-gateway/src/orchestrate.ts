@@ -5,7 +5,7 @@
  *   panel     – N models answer in parallel, optional judge synthesises
  *   supervise – worker <-> supervisor loop until accepted or rounds exhausted
  */
-import { runWorker, resolveCapabilities, type RouteNotice, type RunResult, type TaskShape } from "./agent.js";
+import { runWorker, resolveCapabilities, type HandoverRecord, type RouteNotice, type RunResult, type TaskShape } from "./agent.js";
 import type { ChatMessage } from "./client.js";
 import type { GatewayConfig } from "./config.js";
 import { judgeSystem, reviewerSystem, supervisorSystem, workerSystem } from "./prompts.js";
@@ -14,11 +14,11 @@ import { resolveCandidates, resolveFloor, tierOfSpec } from "./router.js";
 import { Workspace, gitRef, type Capability } from "./workspace.js";
 import { collectHarnessContext } from "./harness.js";
 import type { McpBridge } from "./mcpbridge.js";
-import type { Ledger, Task } from "./ledger.js";
+import { LEDGER_DIR, type Ledger, type Task } from "./ledger.js";
 import type { WorktreeRegistry } from "./worktrees.js";
 import type { HarnessController } from "./harnessctl.js";
 import { changedSince, denyPatterns, diffSince, pickDifferentVendorReviewer, reviewHits, treeSnapshot } from "./policy.js";
-import { BudgetExceeded } from "./agent.js";
+import { BudgetExceeded, StalledError } from "./agent.js";
 import { runCommand, type CommandResult } from "./runcmd.js";
 import type { WorkerTool } from "./workspace.js";
 import { formatProbs, routePlanTasks, type RouteDecision, type RouteResult, type RoutingEngine } from "./routing.js";
@@ -140,6 +140,8 @@ export function summarize(r: RunResult): Record<string, unknown> {
     iterations: r.iterations,
     tool_calls: r.toolCalls.length,
     failed_tool_calls: r.toolCalls.filter((t) => !t.ok).length,
+    files_written: r.filesWritten,
+    last_tool_call_at: r.lastToolCallAt ? new Date(r.lastToolCallAt).toISOString() : null,
     fallback_attempts: r.attempts.filter((a) => !a.ok).map((a) => `${a.spec} [${a.reason}]`),
     usage: r.usage,
     cost_usd: r.costUsd,
@@ -152,6 +154,32 @@ export function summarize(r: RunResult): Record<string, unknown> {
 function describeRoute(n: RouteNotice): string {
   const reason = n.reason ?? "allow_downgrade";
   return `route: ${n.requested} -> ${n.used} (${reason}) [tier ${n.requestedTier ?? "?"} -> ${n.usedTier ?? "?"}]`;
+}
+
+/**
+ * Phase 3: a substitution is a fact about the task, so it goes in the ledger where the task lives —
+ * a transcript-shaped handover is invisible to whoever picks the work up next.
+ */
+function recordHandover(ctx: Ctx, h: HandoverRecord): void {
+  if (!ctx.ledger.exists()) return;
+  ctx.ledger.journal(`handover ${handoverLine(h)}`);
+}
+function handoverLine(h: HandoverRecord): string {
+  return `${h.from} -> ${h.to}${h.reason ? ` (${h.reason})` : ""} · ${h.files_touched.length} file(s) touched · brief ${h.brief_tokens}/${h.context_tokens} tokens${h.truncated ? " (truncated)" : ""}`;
+}
+/** Progress line for a model substitution, so a silent handover cannot happen. */
+function describeHandover(h: HandoverRecord): string {
+  return `handover: ${h.from} -> ${h.to}${h.reason ? ` (${h.reason})` : ""} — brief ${h.brief_tokens}/${h.context_tokens} tokens, ${h.files_touched.length} file(s) touched`;
+}
+
+/**
+ * The files a worker changed, from the same snapshot the policy review uses — minus the gateway's
+ * own ledger bookkeeping, which this very run writes and which is not work the substitute inherits.
+ */
+async function touchedFiles(ws: Workspace, before: Set<string> | undefined): Promise<string[]> {
+  if (!before) return [];
+  const changed = await changedSince(ws, before);
+  return changed.filter((p) => p !== LEDGER_DIR && !p.startsWith(`${LEDGER_DIR}/`));
 }
 
 // ------------------------------------------------------------------ delegate
@@ -182,6 +210,10 @@ export interface DelegateArgs {
   min_tier?: number;
   /** Permit falling back below the floor once every at-or-above candidate has failed (default: config.fallback.allowDowngrade). */
   allow_downgrade?: boolean;
+  /** Abort the worker as `stalled` after this many ms with no tool call (0 disables). Default: config.workers.stallAbortMs. */
+  stall_abort_ms?: number;
+  /** Warn after this many ms with no tool call (0 disables). Default: config.workers.stallWarnMs. */
+  stall_warn_ms?: number;
   /** Session-level routing override for this call: `jev` | `rules` | `off`. Only consulted when `model` is omitted. */
   routing?: RoutingEngine;
   /** Run the Jev tripwire over the diff (default: whenever a `policy.rules` entry with action `check` matches). */
@@ -217,6 +249,7 @@ export async function delegate(ctx: Ctx, a: DelegateArgs, progress?: (s: string)
   const system = workerSystem({ root: ctx.workspace.root, capabilities: caps, protectedBranches: ctx.config.github.protectedBranches, extra: [a.instructions, harness.text, ledgerCtx].filter(Boolean).join("\n\n"), role: a.role });
   const session = a.session_id ? ctx.sessions.get(a.session_id) : undefined;
   const user: ChatMessage = { role: "user", content: [a.context ? `## Context\n${a.context}` : "", `## Task\n${a.task}`].filter(Boolean).join("\n\n") };
+  const handovers: HandoverRecord[] = [];
   const run = await runWorker(ctx.config, {
     model,
     minTier: floor.minTier,
@@ -224,6 +257,14 @@ export async function delegate(ctx: Ctx, a: DelegateArgs, progress?: (s: string)
     requestedModel: requested,
     allowDowngrade: floor.allowDowngrade,
     onRoute: progress ? (n) => { if (n.downgraded) progress(describeRoute(n)); } : undefined,
+    // A substitution hands over the task, not the transcript (phase 3). Nothing has been touched
+    // yet at this point — the snapshot above is taken immediately before the run — so the file
+    // list is empty by construction; `supervise` is where earlier rounds have already written.
+    checkpoint: () => ({ acceptance: a.acceptance }),
+    onHandover: (h) => { handovers.push(h); recordHandover(ctx, h); progress?.(describeHandover(h)); },
+    onStall: progress,
+    stallWarnMs: a.stall_warn_ms,
+    stallAbortMs: a.stall_abort_ms,
     system,
     messages: [...(session?.messages ?? []), user],
     capabilities: caps,
@@ -267,7 +308,7 @@ export async function delegate(ctx: Ctx, a: DelegateArgs, progress?: (s: string)
   const tripMeta = trip
     ? { ran: trip.ran, verdict: trip.verdict, flagged: trip.flagged, blocked: trip.blocked, hunks: trip.hunks.length, ms: trip.ms, cost_usd: trip.cost_usd, clean: trip.clean, skip_plan_review: tripSkipReview, ...(trip.skipped ? { skipped: trip.skipped } : {}), flags: trip.hunks.filter((h) => h.verdict !== "allow").map((h) => ({ file: h.file, verdict: h.verdict, reasons: h.reasons, test_weakened: h.flags.test_weakened, security_touch: h.flags.security_touch, destructive_data: h.flags.destructive_data, scope_creep: h.flags.scope_creep, risk: h.flags.risk })) }
     : undefined;
-  return { text: run.text + scoutNote + verifyText(v) + tripText + polText, meta: { ...summarize(run), requested_model: requested, tier: usedTier ?? null, downgraded, shape: a.shape ?? "ship", session_id: a.session_id ?? null, harness_context: harness.sources, mcp_servers: a.mcp_servers ?? [], verify: verifyMeta(v), ...(route ? { route } : {}), ...(tripMeta ? { tripwire: tripMeta } : {}), policy: pol ? { changed: pol.changed, review_required: pol.hits, verdict: pol.review?.verdict ?? null, reviewer: pol.review?.model ?? null } : null, at: stamp() }, run };
+  return { text: run.text + scoutNote + verifyText(v) + tripText + polText, meta: { ...summarize(run), requested_model: requested, tier: usedTier ?? null, downgraded, shape: a.shape ?? "ship", session_id: a.session_id ?? null, harness_context: harness.sources, mcp_servers: a.mcp_servers ?? [], verify: verifyMeta(v), ...(handovers.length ? { handovers } : {}), ...(route ? { route } : {}), ...(tripMeta ? { tripwire: tripMeta } : {}), policy: pol ? { changed: pol.changed, review_required: pol.hits, verdict: pol.review?.verdict ?? null, reviewer: pol.review?.model ?? null } : null, at: stamp() }, run };
 }
 
 // -------------------------------------------------------------------- review
@@ -417,6 +458,10 @@ export interface SuperviseArgs {
   min_tier?: number;
   /** Permit the worker to fall back below the floor once every at-or-above candidate has failed (default: config.fallback.allowDowngrade). */
   allow_downgrade?: boolean;
+  /** Abort the worker as `stalled` after this many ms with no tool call (0 disables). Default: config.workers.stallAbortMs. */
+  stall_abort_ms?: number;
+  /** Warn after this many ms with no tool call (0 disables). Default: config.workers.stallWarnMs. */
+  stall_warn_ms?: number;
   signal?: AbortSignal;
 }
 
@@ -448,7 +493,12 @@ export async function supervise(ctx: Ctx, a: SuperviseArgs, progress?: (s: strin
   const supSys = supervisorSystem({ root: ctx.workspace.root, capabilities: ["read"], acceptance: a.acceptance_criteria });
   const scoutNote = a.shape === "scout" ? "\n\n## Scout task\nRead-only investigation; nothing was changed." : "";
   const rounds: SupervisionRound[] = [];
-  let nextPrompt = [a.context ? `## Context\n${a.context}` : "", `## Task\n${a.task}`].filter(Boolean).join("\n\n");
+  const basePrompt = [a.context ? `## Context\n${a.context}` : "", `## Task\n${a.task}`].filter(Boolean).join("\n\n");
+  let nextPrompt = basePrompt;
+  const handovers: HandoverRecord[] = [];
+  // The last gateway verification, handed to a substitute so it does not have to rediscover that
+  // the suite was failing (or worse, believe the previous model that it passed).
+  let priorVerify: CommandResult | undefined;
   let final = "";
   let accepted = false;
   const usage = { prompt: 0, completion: 0 };
@@ -456,6 +506,10 @@ export async function supervise(ctx: Ctx, a: SuperviseArgs, progress?: (s: strin
 
   for (let round = 1; round <= maxRounds; round++) {
     if (a.signal?.aborted) throw new Error("cancelled");
+    // Phase 3: a substituted worker gets the task and the supervisor's latest direction, not the
+    // transcript of a round another model produced. The file list is read before the call because
+    // a substitution is decided inside it.
+    const roundFiles = await touchedFiles(ws, before);
     const w = await runWorker(ctx.config, {
       model: a.worker,
       minTier: floor.minTier,
@@ -463,6 +517,16 @@ export async function supervise(ctx: Ctx, a: SuperviseArgs, progress?: (s: strin
       requestedModel: requestedWorker,
       allowDowngrade: floor.allowDowngrade,
       onRoute: progress ? (n) => { if (n.downgraded) progress(describeRoute(n)); } : undefined,
+      checkpoint: () => ({
+        instruction: round === 1 ? basePrompt : `${basePrompt}\n\n## Latest direction (from the supervisor, round ${round - 1})\n${nextPrompt}`,
+        acceptance: a.acceptance_criteria,
+        filesTouched: roundFiles,
+        lastVerify: priorVerify ? { command: priorVerify.command, ok: priorVerify.ok, exit: priorVerify.exitCode, output: priorVerify.output } : undefined,
+      }),
+      onHandover: (h) => { handovers.push(h); recordHandover(ctx, h); progress?.(describeHandover(h)); },
+      onStall: progress,
+      stallWarnMs: a.stall_warn_ms,
+      stallAbortMs: a.stall_abort_ms,
       system: workerSys,
       messages: [...session.messages, { role: "user", content: nextPrompt }],
       capabilities: caps,
@@ -479,6 +543,7 @@ export async function supervise(ctx: Ctx, a: SuperviseArgs, progress?: (s: strin
     usage.completion += w.usage.completion;
     costTotal += w.costUsd;
     const v = await verifyStep(ctx, a.verify, a.signal);
+    priorVerify = v;
     final = w.text + scoutNote + verifyText(v);
 
     const s = await runWorker(ctx.config, {
@@ -519,7 +584,7 @@ export async function supervise(ctx: Ctx, a: SuperviseArgs, progress?: (s: strin
   }
   const usedTier = tierOfSpec(ctx.config, rounds.at(-1)?.workerModel);
   const downgraded = floor.derivedTier !== undefined && usedTier !== undefined && usedTier < floor.derivedTier;
-  return { accepted, rounds, final, meta: { shape: a.shape ?? "ship", requested_model: requestedWorker, tier: usedTier ?? null, downgraded, session_id: sessionId, rounds: rounds.length, usage, cost_usd: Math.round(rounds.length ? costTotal * 1e6 : 0) / 1e6, policy, at: stamp() } };
+  return { accepted, rounds, final, meta: { shape: a.shape ?? "ship", requested_model: requestedWorker, tier: usedTier ?? null, downgraded, session_id: sessionId, rounds: rounds.length, usage, cost_usd: Math.round(rounds.length ? costTotal * 1e6 : 0) / 1e6, policy, ...(handovers.length ? { handovers } : {}), at: stamp() } };
 }
 
 // ------------------------------------------------------------------ run_plan
@@ -554,6 +619,10 @@ export interface PlanTask {
   review?: boolean;
   session_id?: string;
   max_iterations?: number;
+  /** Abort this task as `stalled` after this many ms with no tool call (0 disables). Default: config.workers.stallAbortMs. */
+  stall_abort_ms?: number;
+  /** Warn after this many ms with no tool call (0 disables). Default: config.workers.stallWarnMs. */
+  stall_warn_ms?: number;
   /** Never route below this competence tier; the default floor is the tier of the model you asked for. */
   min_tier?: number;
   /** Permit falling back below the floor once every at-or-above candidate has failed (default: config.fallback.allowDowngrade). */
@@ -584,12 +653,14 @@ export interface RunPlanArgs {
 export interface PlanTaskResult {
   id: string;
   ledger_id?: string;
-  status: "done" | "failed" | "skipped" | "cancelled" | "escalated";
+  status: "done" | "failed" | "skipped" | "cancelled" | "escalated" | "stalled";
   model?: string;
   report?: string;
   verify?: VerifyMeta | null;
   review?: ReviewVerdict;
   error?: string;
+  /** Present only for a stalled task: how long it had been quiet, and what it had produced. */
+  stall?: { ms_since_tool_call: number; tool_calls: number; files_written: number };
   ms: number;
   meta?: Record<string, unknown>;
   /** Why this task ran on that model (or why it came back to the lead instead). */
@@ -756,7 +827,7 @@ export async function runPlan(ctx: Ctx, a: RunPlanArgs): Promise<RunPlanResult> 
       let model = "";
       let meta: Record<string, unknown> = {};
       if (t.supervise) {
-        const r = await supervise(ctx, { task: t.task, worker: t.model, supervisor: a.supervisor, capabilities: t.capabilities, shape: t.shape, acceptance_criteria: t.acceptance, context, session_id: t.session_id, skills: t.skills, mcp_servers: t.mcp_servers, verify: t.verify, signal });
+        const r = await supervise(ctx, { task: t.task, worker: t.model, supervisor: a.supervisor, capabilities: t.capabilities, shape: t.shape, acceptance_criteria: t.acceptance, context, session_id: t.session_id, skills: t.skills, mcp_servers: t.mcp_servers, verify: t.verify, stall_abort_ms: t.stall_abort_ms, stall_warn_ms: t.stall_warn_ms, signal }, progress);
         report = r.final;
         model = r.rounds.at(-1)?.workerModel ?? "";
         verify = r.rounds.at(-1)?.verify ?? null;
@@ -769,7 +840,7 @@ export async function runPlan(ctx: Ctx, a: RunPlanArgs): Promise<RunPlanResult> 
         spend(taskCost);
         if (!r.accepted) throw new Error(`not accepted by supervisor after ${r.rounds.length} round(s): ${r.rounds.at(-1)?.assessment ?? ""}`);
       } else {
-        const r = await delegate(ctx, { task: t.task, model: t.model, capabilities: t.capabilities, shape: t.shape, context, role: t.role, acceptance: t.acceptance, instructions: [ledgerCtx, t.acceptance ? `Acceptance criteria for this task:\n${t.acceptance}` : ""].filter(Boolean).join("\n"), skills: t.skills, mcp_servers: t.mcp_servers, verify: t.verify, session_id: t.session_id, max_iterations: t.max_iterations, signal });
+        const r = await delegate(ctx, { task: t.task, model: t.model, capabilities: t.capabilities, shape: t.shape, context, role: t.role, acceptance: t.acceptance, instructions: [ledgerCtx, t.acceptance ? `Acceptance criteria for this task:\n${t.acceptance}` : ""].filter(Boolean).join("\n"), skills: t.skills, mcp_servers: t.mcp_servers, verify: t.verify, session_id: t.session_id, max_iterations: t.max_iterations, stall_abort_ms: t.stall_abort_ms, stall_warn_ms: t.stall_warn_ms, signal }, progress);
         report = r.text;
         model = r.run.usedModel;
         verify = r.meta.verify as VerifyMeta;
@@ -788,6 +859,9 @@ export async function runPlan(ctx: Ctx, a: RunPlanArgs): Promise<RunPlanResult> 
         tripwireMeta = tw;
         if (tw?.blocked) throw new Error(`tripwire blocked the diff${tw.flags?.length ? `: ${tw.flags.slice(0, 3).map((f) => `${f.file} (${f.reasons.join(", ")})`).join("; ")}` : ""} — the lead needs to see it`);
       }
+      // Phase 3: the substitution is written where a later reader will find it — the task's own
+      // ledger entry — not only in this run's report.
+      for (const h of (meta.handovers as HandoverRecord[] | undefined) ?? []) if (lid) ctx.ledger.updateTask(lid, { log: `handover ${handoverLine(h)}` });
       let rev: ReviewVerdict | undefined;
       // A sensitive task is reviewed even when the plan did not ask for reviews: "raise the lane
       // and add a second pair of eyes" is one guardrail, and half of it is not enough. The tripwire
@@ -813,15 +887,18 @@ export async function runPlan(ctx: Ctx, a: RunPlanArgs): Promise<RunPlanResult> 
       progress(`done ${t.id} (${model})`);
     } catch (e) {
       const cancelled = a.signal?.aborted || (budgetAbort.signal.aborted && !(e instanceof BudgetExceeded));
+      const stalled = e instanceof StalledError;
       const msg = budgetAbort.signal.aborted && !(e instanceof BudgetExceeded) ? String((budgetAbort.signal.reason as Error)?.message ?? "plan budget exceeded") : String((e as Error).message ?? e);
-      results.set(t.id, { id: t.id, ledger_id: lid, status: cancelled ? "cancelled" : "failed", error: msg, ms: Date.now() - t0, route: decision, ...(verify ? { verify } : {}), ...(tripwireMeta ? { tripwire: tripwireMeta } : {}) });
-      if (lid) ctx.ledger.updateTask(lid, { status: "blocked", log: `${cancelled ? "cancelled" : "failed"}: ${msg.slice(0, 300)}` });
-      if (track) ctx.ledger.journal(`${t.id}${lid ? ` (${lid})` : ""} ${cancelled ? "cancelled" : "FAILED"}: ${msg.slice(0, 200)}`);
+      // A stall is neither a failure of the task nor a timeout: it is a task that was aborted for
+      // making no observable progress, and the caller has to be able to see that.
+      results.set(t.id, { id: t.id, ledger_id: lid, status: stalled ? "stalled" : cancelled ? "cancelled" : "failed", error: msg, ms: Date.now() - t0, route: decision, ...(stalled ? { stall: { ms_since_tool_call: e.msSinceToolCall, tool_calls: e.toolCalls, files_written: e.filesWritten } } : {}), ...(verify ? { verify } : {}), ...(tripwireMeta ? { tripwire: tripwireMeta } : {}) });
+      if (lid) ctx.ledger.updateTask(lid, { status: "blocked", log: `${stalled ? "stalled" : cancelled ? "cancelled" : "failed"}: ${msg.slice(0, 300)}` });
+      if (track) ctx.ledger.journal(`${t.id}${lid ? ` (${lid})` : ""} ${stalled ? "STALLED" : cancelled ? "cancelled" : "FAILED"}: ${msg.slice(0, 200)}`);
       // `verify_ok: false` only for a real gateway verification failure. A worker error or a
       // cancellation is recorded as `null` so it is excluded from pass rates rather than
       // counted against the lane that was asked to do it.
       if (track && decision && lid && !cancelled) ctx.ledger.scorecardAppend({ task: lid, plan: a.goal, lane: decision.lane, model: t.model ?? "", tags: t.tags ?? [], verify_ok: verify ? verify.ok : null, attempts, ms: Date.now() - t0, cost_usd: taskCost, at: stamp() });
-      progress(`${cancelled ? "cancelled" : "failed"} ${t.id}: ${msg.slice(0, 120)}`);
+      progress(`${stalled ? "stalled" : cancelled ? "cancelled" : "failed"} ${t.id}: ${msg.slice(0, 120)}`);
     } finally {
       order.push(t.id);
     }
