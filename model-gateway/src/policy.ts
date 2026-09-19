@@ -14,15 +14,54 @@ import type { GatewayConfig } from "./config.js";
 import { resolveCandidates } from "./router.js";
 import type { Workspace } from "./workspace.js";
 
-export interface PolicyRule { match: string[]; action: "deny" | "review"; reason?: string; differentVendor: boolean }
+/**
+ * `deny`   — matching paths are unreadable and unwritable for workers.
+ * `review` — a worker that changes a matching path gets an independent review, whatever else happens.
+ * `check`  — the diff is handed to the Jev tripwire (see tripwire.ts). It can ADD a review or block
+ *            the task; it never removes a `review` hit, so a `check` rule can only tighten.
+ */
+export interface PolicyRule { match: string[]; action: "deny" | "review" | "check"; reason?: string; differentVendor: boolean }
 
 export function policyRules(config: GatewayConfig): PolicyRule[] {
   return config.policy.rules.map((r) => ({ match: Array.isArray(r.match) ? r.match : [r.match], action: r.action, reason: r.reason, differentVendor: r.differentVendor }));
 }
 
+/**
+ * Translate a glob to a RegExp.
+ *
+ * Built in ONE pass on purpose. The previous chained-replace version fed its own output back
+ * through the later replacements, so the directory-group it inserted for a double-star prefix was
+ * itself rewritten, and every such pattern silently failed to match a real path. Deny rules,
+ * review rules and routing sensitivity all read globs through here, so the bug was shared by all
+ * three.
+ *
+ * A double-star-slash prefix matches any leading directories (including none), a bare double star
+ * matches anything, `*` and `?` stay within one path segment, and a pattern without a slash
+ * matches a basename anywhere.
+ */
 export function globToRegex(g: string): RegExp {
-  const re = g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*\//g, "(.*/)?").replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*").replace(/\?/g, ".");
-  return new RegExp(g.includes("/") ? `^${re}$` : `(^|/)${re}$`, "i");
+  let out = "";
+  for (let i = 0; i < g.length; i++) {
+    const c = g[i];
+    if (c === "*") {
+      if (g[i + 1] !== "*") {
+        out += "[^/]*";
+      } else {
+        i++;
+        if (g[i + 1] === "/") {
+          i++;
+          out += "(?:.*/)?";
+        } else {
+          out += ".*";
+        }
+      }
+    } else if (c === "?") {
+      out += "[^/]";
+    } else {
+      out += c.replace(/[.+^${}()|[\]\\]/, "\\$&");
+    }
+  }
+  return new RegExp(g.includes("/") ? `^${out}$` : `(^|/)${out}$`, "i");
 }
 
 export function denyPatterns(config: GatewayConfig): string[] {
@@ -55,6 +94,38 @@ export async function treeSnapshot(ws: Workspace): Promise<Set<string>> {
   } catch {
     return new Set();
   }
+}
+
+/**
+ * The diff a worker produced: everything committed since the snapshot, plus the working tree.
+ *
+ * The tripwire needs the *text* of the change, not the paths — that is the whole point of it. Both
+ * parts matter: a worker that commits its work would otherwise look like it changed nothing.
+ */
+export async function diffSince(ws: Workspace, before: Set<string>): Promise<string> {
+  const headBefore = [...before].find((l) => l.startsWith("HEAD "))?.slice(5);
+  const headAfter = await ws.git(["rev-parse", "HEAD"]).catch(() => "");
+  const parts: string[] = [];
+  if (headBefore && headAfter && headBefore !== headAfter) {
+    parts.push(await ws.git(["diff", `${headBefore}..${headAfter}`]).catch(() => ""));
+  }
+  parts.push(await ws.git(["diff", "HEAD"]).catch(() => ""));
+  // `git diff` says nothing about untracked files, and a worker's most loaded edit is often a
+  // brand-new file — a test it has just neutered, a script it has just added. Synthesize the
+  // addition here rather than `git add -N`, which would change how treeSnapshot reads the tree.
+  const others = await ws.git(["ls-files", "--others", "--exclude-standard"]).catch(() => "");
+  for (const file of others.split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 50)) {
+    try {
+      const abs = path.join(ws.root, file);
+      const st = fs.statSync(abs);
+      if (!st.isFile() || st.size > 200_000) continue;
+      const lines = fs.readFileSync(abs, "utf8").split("\n");
+      parts.push(`diff --git a/${file} b/${file}\nnew file mode 100644\n--- /dev/null\n+++ b/${file}\n@@ -0,0 +1,${lines.length} @@\n${lines.map((l) => `+${l}`).join("\n")}`);
+    } catch {
+      /* unreadable or vanished: leave it out rather than fail the diff */
+    }
+  }
+  return parts.filter(Boolean).join("\n");
 }
 
 /** Paths whose status changed between two snapshots, plus files in commits made in between. */

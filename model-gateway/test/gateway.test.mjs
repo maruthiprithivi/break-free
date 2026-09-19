@@ -63,12 +63,19 @@ before(async () => {
     // validation and merge behaviour, not the default policy, so they ask for it explicitly.
     mergeAutonomy: true,
     logFile: path.join(tmp, "gateway.log"),
-    defaults: { model: "fast", reviewer: "mock/good", supervisor: "mock/good", timeoutMs: 1500, maxSessionMessages: 8 },
+    // 8 s of headroom: a delegate is up to two provider round trips (tool call, then summary) plus
+    // real git subprocesses, so on a loaded machine a tighter budget fails a test on a timeout that
+    // has nothing to do with what it asserts. `mockshort` below is the one place that wants a short
+    // deadline, and provider.timeoutMs outranks this default, so it can set its own.
+    defaults: { model: "fast", reviewer: "mock/good", supervisor: "mock/good", timeoutMs: 8000, maxSessionMessages: 8 },
     fallback: { chain: ["mock/good"], retriesPerCandidate: 0, retryDelayMs: 0 },
     providers: {
       mock: { baseUrl: `http://127.0.0.1:${mock.port}/v1`, apiKey: "test-key" },
       mockbad: { baseUrl: `http://127.0.0.1:${mock.port}/v1`, apiKey: "wrong" },
       mockenv: { baseUrl: `http://127.0.0.1:${mock.port}/v1`, apiKey: "${MOCK_KEY}" },
+      // The same endpoint behind a 1500 ms deadline, for the test that deliberately drives the
+      // timeout path: `mock/slow` answers in 3000 ms, so this must abort first.
+      mockshort: { baseUrl: `http://127.0.0.1:${mock.port}/v1`, apiKey: "test-key", timeoutMs: 1500 },
     },
     aliases: { fast: ["mock/flaky429", "mock/good"], tooly: ["mock/tooly"] },
     pricing: { "mock/good": { input: 100, output: 100 }, "mock/tooly": { input: 100, output: 100 }, "mock/thinker": { input: 100, output: 100 } },
@@ -138,7 +145,9 @@ test("delegate falls back from 429 to next candidate", async () => {
 });
 
 test("delegate falls back on auth, 500, 404 and timeout; then global chain", async () => {
-  const r = await call("delegate", { task: "x", model: "mockbad/good,mock/boom500,mock/nomodel,mock/slow" });
+  // mockshort/slow is mock/slow behind a 1500 ms provider timeout: the timeout path stays exercised
+  // while the fixture default keeps its headroom.
+  const r = await call("delegate", { task: "x", model: "mockbad/good,mock/boom500,mock/nomodel,mockshort/slow" });
   assert.equal(r.isError, false, r.text);
   const meta = JSON.parse(r.text.split("meta: ")[1]);
   assert.equal(meta.model, "mock/good", "global fallback chain should catch it");
@@ -195,11 +204,18 @@ test("sessions persist history across calls", async () => {
 });
 
 test("review returns a parsed JSON verdict with a real git diff attached", async () => {
-  const r = (await call("review", { subject: "added new.js", use_git_diff: "HEAD~1", model: "mock/good" })).json();
+  // Self-sufficient: `git diff HEAD~1` needs a second commit, and the fixture makes only one.
+  // This used to pass only when an earlier test happened to commit for it, so it could not run alone.
+  const g = (args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: ws });
+  fs.writeFileSync(path.join(ws, "src", "reviewed.js"), "export const reviewed = true;\n");
+  g(["add", "--", "src/reviewed.js"]);
+  g(["commit", "-q", "-m", "review subject", "--", "src/reviewed.js"]);
+  const r = (await call("review", { subject: "added src/reviewed.js", use_git_diff: "HEAD~1", model: "mock/good" })).json();
   assert.equal(r.verdict, "revise");
   assert.equal(r.issues[0].severity, "major");
   const last = mock.calls.at(-1);
   assert.match(last.messages.at(-1).content, /diff --git/);
+  assert.match(last.messages.at(-1).content, /src\/reviewed\.js/);
 });
 
 test("panel runs seats in parallel and judges", async () => {

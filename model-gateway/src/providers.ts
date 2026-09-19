@@ -14,6 +14,13 @@ export interface ProviderDefaults {
   keyEnv: string;
   /** Whether a key is needed at all (local Ollama: no) */
   requiresKey: boolean;
+  /**
+   * What this endpoint is for. `chat` providers speak the OpenAI Chat Completions
+   * dialect and may be selected for any delegate/run_plan task. `decision` providers
+   * answer typed questions (TypeSafe System One) and are NEVER reachable from chat
+   * routing — they have their own client (jev.ts) and their own lane in run_plan.
+   */
+  kind?: "chat" | "decision";
   /** Extra headers to send on every request */
   headers?: Record<string, string>;
   /** Default model used when a bare provider name is requested */
@@ -84,6 +91,20 @@ export const PROVIDER_CATALOG: Record<string, ProviderDefaults> = {
     supportsTools: true,
     docs: "https://platform.minimax.io/",
   },
+  gemini: {
+    label: "Google Gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    keyEnv: "GEMINI_API_KEY",
+    requiresKey: true,
+    defaultModel: "gemini-3.1-pro-preview",
+    knownModels: ["gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],
+    supportsTools: true,
+    docs: "https://aistudio.google.com/apikey",
+    notes:
+      "Google's OpenAI-compatibility layer, so the same client works: model ids are the bare names (`gemini-3.1-pro-preview`), not the `models/`-prefixed ids the native API lists. " +
+      "The `gemini-2.5-*` ids are retired for new accounts (404). The pro and `-latest` tiers are reasoning models that spend output tokens thinking BEFORE answering, so a small `max_tokens` returns empty content with `finish_reason: length` — tools still work, the budget just ran out first. " +
+      "`bf bench route` uses this provider for the frontier-LLM-as-router baseline (criterion 11).",
+  },
   zai: {
     label: "Z.AI (GLM)",
     baseUrl: "https://api.z.ai/api/paas/v4",
@@ -127,6 +148,21 @@ export const PROVIDER_CATALOG: Record<string, ProviderDefaults> = {
     supportsTools: true,
     docs: "https://docs.vllm.ai/",
     notes: "Generic slot: point baseUrl at LM Studio, llama.cpp server, LiteLLM, Groq, etc.",
+  },
+  typesafe: {
+    label: "TypeSafe (Jev) — decision routing",
+    baseUrl: "https://api.typesafe.ai/v1",
+    keyEnv: "TYPESAFE_API_KEY",
+    requiresKey: true,
+    kind: "decision",
+    defaultModel: "jev-latest",
+    knownModels: ["jev-latest", "jev-preview", "jev-1.13.0"],
+    supportsTools: false,
+    docs: "https://console.typesafe.ai/settings/keys",
+    notes:
+      "NOT OpenAI-compatible and NEVER used for chat: POST /v1/systemone answers typed questions (Choice/Score/Noul) against a state. " +
+      "`routing.engine: jev` uses it to pick a lane per run_plan task. Input $0.042/Mtok, output free, 429/529 on overload. " +
+      "Pin a version (jev-1.13.0) if you tune `routing.threshold` against a specific release.",
   },
 };
 

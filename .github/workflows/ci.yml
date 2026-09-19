@@ -1,0 +1,90 @@
+# The suite is fully offline: a mock chat provider and an in-process TypeSafe double, no keys.
+# It runs on every push and PR so "185 tests green" is something a reader can verify themselves
+# rather than take on trust.
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: gateway tests (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # engines declares >=20; 22 is what the live routing runs were measured on.
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: model-gateway/package-lock.json
+      - name: Install
+        run: npm ci
+        working-directory: model-gateway
+      - name: Type-check
+        run: npx tsc --noEmit
+        working-directory: model-gateway
+      # `npm test` builds first (dist/ is gitignored and the suites import from it) and then runs
+      # node --test. Running node --test directly here fails with ERR_MODULE_NOT_FOUND.
+      - name: Test
+        run: npm test
+        working-directory: model-gateway
+
+  bench:
+    name: bench and scenario comparison reproduce
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: model-gateway/package-lock.json
+      - run: npm ci
+        working-directory: model-gateway
+      - name: Build
+        run: npm run build
+        working-directory: model-gateway
+      # All three replay a live recording through the real client, so this needs no key. The numbers
+      # are pinned by tests; here we check the commands run end to end and stay reproducible, which
+      # is the property the write-up depends on.
+      - name: bf bench route
+        run: node dist/cli.js bench route
+        working-directory: model-gateway
+      - name: bf bench tripwire
+        run: node dist/cli.js bench tripwire
+        working-directory: model-gateway
+      # `npm run build` above produced dist/, which the CLI needs.
+      - name: bf scenarios (twice, must be identical)
+        run: |
+          set -e
+          node dist/cli.js scenarios --json > /tmp/a.json
+          node dist/cli.js scenarios --json > /tmp/b.json
+          node -e '
+            const a = require("/tmp/a.json"), b = require("/tmp/b.json");
+            const strip = (x) => JSON.stringify({ t: { ...x.totals, jev_ms: 0, rules_ms: 0, jev_ms_per_plan: 0 }, s: x.scores.map((r) => ({ ...r, jev_ms: 0, rules_ms: 0 })) });
+            if (strip(a) !== strip(b)) { console.error("bf scenarios is not reproducible"); process.exit(1); }
+            console.log("reproducible: right lane jev " + a.totals.arms.jev.exact_pct + "%, under-routed " + a.totals.arms.jev.under_pct + "%");
+          '
+        working-directory: model-gateway
+
+  installer:
+    name: installer self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: selftest
+        run: bash setup/selftest.sh
