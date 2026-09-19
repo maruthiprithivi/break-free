@@ -10,6 +10,7 @@ Reference material for [Break Free](../README.md). The README is the landing pag
 | [harness.md](harness.md) | running Claude Code or Codex *on* another model; tmux harness sub-agents |
 | [operations.md](operations.md) | the runtime log and diagnosing problems, operational notes, `break-free-github-flow` |
 | [testing.md](testing.md) | the test suite, the mock provider, end-to-end checks |
+| [tripwire.md](tripwire.md) | the Jev check on a crew diff: what a hunk did, the calibrated thresholds, and the false-flag rate it misses |
 | [roadmap.md](roadmap.md) | what is planned next, and why |
 | [blueprint.html](blueprint.html) | the architecture picture: harnesses to gateway to crew, install matrix, one task end to end |
 

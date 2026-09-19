@@ -1,0 +1,1760 @@
+{
+  "note": "Hypothetical Node/TypeScript API-service workflows used to drive a reproducible Jev-versus-no-Jev routing comparison: every task carries the expert right-lane label, and a router's chosen lane is scored against lane and cheapest_passing_lane. No path named here needs to exist.",
+  "scenarios": [
+    {
+      "id": "sc-01",
+      "title": "Ship team invitations end to end",
+      "story": "We told the design partners that workspace admins could invite teammates by email, and I want that merged this sprint. It has to be secure by default with hashed tokens and a real expiry, and it needs the migration and docs to go with it.",
+      "tasks": [
+        {
+          "id": "sc-01-1",
+          "task": "Decide how invitations behave before any code: whether a token expires and after how long, whether one invite can fill more than one seat, and what happens to pending invites when the inviter loses admin rights. Write the decision in docs/decisions/team-invitations.md with the alternatives you rejected and why.",
+          "acceptance": "docs/decisions/team-invitations.md states the expiry, the single-use rule and the orphaned-invite behaviour, each with the rejected alternative named.",
+          "verify": "npm test",
+          "files": [
+            "docs/decisions/team-invitations.md"
+          ],
+          "tags": [
+            "design",
+            "product",
+            "invitations",
+            "decision"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": true,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-01-2",
+          "task": "Add db/migrations/0042_team_invitations.sql creating the team_invitations table with id, workspace_id, email, token_hash, invited_by, expires_at and accepted_at, a unique constraint on token_hash and a partial index on (workspace_id, email) where accepted_at is null. Include the down migration and regenerate db/schema.sql.",
+          "acceptance": "The migration applies and rolls back cleanly, and the file contains the unique constraint on token_hash and the partial index on unaccepted invites.",
+          "verify": "npm test",
+          "files": [
+            "db/migrations/0042_team_invitations.sql",
+            "db/schema.sql"
+          ],
+          "tags": [
+            "migration",
+            "database",
+            "invitations",
+            "schema"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": true,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-01-3",
+          "task": "Implement src/invitations/service.ts: create an invite for a workspace and email, hash the token with the existing hashToken helper before storing it, and return the raw token exactly once. Accepting must be single-use, must reject an expired token, and must insert the membership row in the same transaction as marking the invite accepted.",
+          "acceptance": "Unit tests cover create, accept, expired accept and double accept; the raw token never appears in a persisted row and a second accept fails.",
+          "verify": "npm test",
+          "files": [
+            "src/invitations/service.ts",
+            "src/invitations/token.ts",
+            "test/invitations.test.ts"
+          ],
+          "tags": [
+            "core",
+            "invitations",
+            "transactions"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-01-4",
+          "task": "Wire the HTTP surface in src/routes/invitations.ts: POST /workspaces/:id/invitations for admins and POST /invitations/:token/accept for the invited user, following the handler shape and error shape already used in src/routes/members.ts. Register both routes in src/app.ts.",
+          "acceptance": "Both routes are registered and return 201 on create, 200 on accept, 404 for an unknown token and 409 for an already accepted invite.",
+          "verify": "npm test",
+          "files": [
+            "src/routes/invitations.ts",
+            "src/app.ts",
+            "test/invitations-routes.test.ts"
+          ],
+          "tags": [
+            "api",
+            "http",
+            "routing"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-01-5",
+          "task": "Add unit tests in test/invitations.test.ts for token hashing and the expiry boundary. Cover a token expiring in one second (accepted), one that expired one second ago (rejected), and hashing the same token twice (stable digest).",
+          "acceptance": "All three boundary cases are asserted and the suite fails if the expiry comparison flips to its opposite.",
+          "verify": "npm test",
+          "files": [
+            "test/invitations.test.ts"
+          ],
+          "tags": [
+            "tests",
+            "invitations",
+            "boundary"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-01-6",
+          "task": "Add an integration test at test/invitations.integration.test.ts that drives an admin create followed by an accept over the request pipeline against the test database. Assert that the membership row exists and that the invite row is marked accepted.",
+          "acceptance": "The integration test passes against a clean database and fails if accept stops writing the membership row.",
+          "verify": "npm test",
+          "files": [
+            "test/invitations.integration.test.ts"
+          ],
+          "tags": [
+            "tests",
+            "integration",
+            "invitations"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-01-7",
+          "task": "Add a Team invitations section to docs/api.md documenting both endpoints, their request bodies, the status codes and the error shape. Match the heading depth of the sections around it.",
+          "acceptance": "docs/api.md documents both endpoints and every status code it lists matches the handler.",
+          "verify": "npm test",
+          "files": [
+            "docs/api.md"
+          ],
+          "tags": [
+            "docs",
+            "api",
+            "reference"
+          ],
+          "lane": "local",
+          "cheapest_passing_lane": "local",
+          "difficulty": 1,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-01-8",
+          "task": "Add a CHANGELOG entry under Unreleased and a short README paragraph describing team invitations and the new migration. Write both in the voice the existing entries use.",
+          "acceptance": "CHANGELOG has an Unreleased entry naming invitations and the migration, and the README paragraph links to docs/api.md.",
+          "verify": "npm test",
+          "files": [
+            "CHANGELOG.md",
+            "README.md"
+          ],
+          "tags": [
+            "docs",
+            "changelog",
+            "readme"
+          ],
+          "lane": "local",
+          "cheapest_passing_lane": "local",
+          "difficulty": 0,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        }
+      ]
+    },
+    {
+      "id": "sc-02",
+      "title": "Fix the intermittently failing checkout test",
+      "story": "Our checkout suite has been red on roughly one CI run in five for a week and the team has started re-running the job without reading it. I want the real cause found and fixed rather than the test quarantined, and the fix has to hold on the two-core CI runners.",
+      "tasks": [
+        {
+          "id": "sc-02-1",
+          "task": "Reproduce the intermittent failure in test/checkout.test.ts locally: run the file under load and with the runner's parallelism (node --test --test-concurrency=2) until it fails. Capture the exact ordering of asynchronous steps that produces the failure in docs/notes/flaky-checkout.md.",
+          "acceptance": "docs/notes/flaky-checkout.md names the specific interleaving that fails and includes the command that reproduced it at least once.",
+          "verify": "npm test",
+          "files": [
+            "docs/notes/flaky-checkout.md",
+            "test/checkout.test.ts"
+          ],
+          "tags": [
+            "diagnosis",
+            "flaky",
+            "tests"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-02-2",
+          "task": "Replace the real timers in test/checkout.test.ts with the injected Clock the rest of the suite uses, so the test advances time explicitly instead of sleeping. Leave the existing assertions unchanged.",
+          "acceptance": "test/checkout.test.ts contains no setTimeout or sleep call and still passes with the injected clock.",
+          "verify": "npm test",
+          "files": [
+            "test/checkout.test.ts",
+            "test/helpers/clock.ts"
+          ],
+          "tags": [
+            "tests",
+            "flaky",
+            "timers"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-02-3",
+          "task": "Fix the shared mutable fixture leak in test/checkout.test.ts: one cart object is built at module scope and mutated by each test, so a completed cart bleeds into the next case. Build fixtures per test and make the leak fail loudly if it returns.",
+          "acceptance": "A mutation in one test no longer affects its neighbours, and running the file five times in a row is green.",
+          "verify": "npm test",
+          "files": [
+            "test/checkout.test.ts"
+          ],
+          "tags": [
+            "tests",
+            "flaky",
+            "isolation"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-02-4",
+          "task": "Remove the fixed 250ms sleep in test/checkout.test.ts that waits for the async capture. Await the promise or event the handler actually emits instead.",
+          "acceptance": "The test awaits the capture promise rather than a timer, and it still passes when the mock provider is made ten times slower.",
+          "verify": "npm test",
+          "files": [
+            "test/checkout.test.ts"
+          ],
+          "tags": [
+            "tests",
+            "flaky",
+            "async"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-02-5",
+          "task": "Add a CI job that runs test/checkout.test.ts twenty times in a row so a reintroduced flake fails the build. Follow the conventions already in .github/workflows/test.yml.",
+          "acceptance": "The workflow runs the repeat loop and fails the job if any iteration fails.",
+          "verify": "npm test",
+          "files": [
+            ".github/workflows/test.yml"
+          ],
+          "tags": [
+            "ci",
+            "tests",
+            "flaky"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-02-6",
+          "task": "Decide whether the release train waits for the root-cause fix or ships with the checkout test quarantined and fixed after. Write the call, its consequences and the re-enable date in docs/notes/flaky-checkout.md.",
+          "acceptance": "The note states the chosen option, what ships in this release, and the date by which a quarantined test must be re-enabled.",
+          "verify": "npm test",
+          "files": [
+            "docs/notes/flaky-checkout.md"
+          ],
+          "tags": [
+            "decision",
+            "release",
+            "flaky"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": true,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-02-7",
+          "task": "Document the flake, its root cause and the fix in docs/testing.md under a Flaky tests heading. Include the command that reproduces it.",
+          "acceptance": "docs/testing.md has the section naming test/checkout.test.ts, the cause and the reproduction command.",
+          "verify": "npm test",
+          "files": [
+            "docs/testing.md"
+          ],
+          "tags": [
+            "docs",
+            "testing",
+            "flaky"
+          ],
+          "lane": "local",
+          "cheapest_passing_lane": "local",
+          "difficulty": 0,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-02-8",
+          "task": "Work out why the failure only appears on the CI runner and not on a developer laptop. Compare the runner's core count and scheduling with the local default and write the answer in docs/notes/flaky-checkout.md.",
+          "acceptance": "The note identifies the runner-specific condition and names the assertion in test/checkout.test.ts that depends on it.",
+          "verify": "npm test",
+          "files": [
+            "docs/notes/flaky-checkout.md",
+            ".github/workflows/test.yml"
+          ],
+          "tags": [
+            "diagnosis",
+            "ci",
+            "concurrency"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        }
+      ]
+    },
+    {
+      "id": "sc-03",
+      "title": "Upgrade the service to Express 5",
+      "story": "Express 4 is end-of-life and our security review wants us off it before the next release. I want the upgrade done in one pass with every call site migrated, not a compatibility shim we forget to remove.",
+      "tasks": [
+        {
+          "id": "sc-03-1",
+          "task": "Read the Express 5 migration guide and inventory every breaking change that affects this service: route pattern syntax, the removed res.send(status) form, req.query handling and the type package. List each change with the files it will touch in docs/notes/express5.md.",
+          "acceptance": "docs/notes/express5.md lists each breaking change that affects a file in src/ with that file named beside it, and names none that do not apply.",
+          "verify": "npm test",
+          "files": [
+            "docs/notes/express5.md",
+            "src/app.ts",
+            "src/routes/orders.ts"
+          ],
+          "tags": [
+            "migration",
+            "research",
+            "api"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-03-2",
+          "task": "Bump express to ^5 and @types/express to the matching major in package.json. Regenerate package-lock.json and confirm the server still builds.",
+          "acceptance": "package.json declares express 5.x, the lockfile resolves a single express version, and npm run build succeeds.",
+          "verify": "npm run build",
+          "files": [
+            "package.json",
+            "package-lock.json"
+          ],
+          "tags": [
+            "migration",
+            "dependencies",
+            "build"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-03-3",
+          "task": "Convert every route registration and middleware call site in src/ to the Express 5 signatures: replace the removed res.send(status) forms, drop the now-invalid wildcard path strings, and keep each handler's status codes identical. Sweep the whole tree, including src/routes/, src/middleware/ and src/admin/.",
+          "acceptance": "npx tsc --noEmit passes, every route still registers, and a repo-wide search finds no remaining Express 4-only call form.",
+          "verify": "npx tsc --noEmit",
+          "files": [
+            "src/app.ts",
+            "src/routes/orders.ts",
+            "src/routes/users.ts",
+            "src/middleware/error.ts",
+            "src/admin/router.ts"
+          ],
+          "tags": [
+            "migration",
+            "codemod",
+            "framework"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": true
+        },
+        {
+          "id": "sc-03-4",
+          "task": "Rewrite the route path patterns Express 5 rejects: the optional parameter syntax in src/routes/orders.ts and the regular-expression segment in src/admin/router.ts. The URLs the public API accepts must not change.",
+          "acceptance": "Every previously matching URL still matches in test/routes.test.ts and the startup rejection warning is gone.",
+          "verify": "npm test",
+          "files": [
+            "src/routes/orders.ts",
+            "src/admin/router.ts",
+            "test/routes.test.ts"
+          ],
+          "tags": [
+            "api",
+            "routing",
+            "migration"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-03-5",
+          "task": "Replace the removed res.send(status) convenience calls across src/ with explicit res.status(n).send(body). Preserve each status code and keep the response bodies byte-identical.",
+          "acceptance": "No res.send(number) call remains and the response-body assertions in test/routes.test.ts still pass.",
+          "verify": "npm test",
+          "files": [
+            "src/routes/orders.ts",
+            "src/routes/reports.ts",
+            "test/routes.test.ts"
+          ],
+          "tags": [
+            "migration",
+            "api",
+            "framework"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-03-6",
+          "task": "Fix the compile errors the new @types/express surfaces in src/middleware/ and src/routes/. Handler signatures now require the fourth error argument and the Request and Response generics changed shape.",
+          "acceptance": "npx tsc --noEmit reports zero errors and no error is silenced with a cast to any.",
+          "verify": "npx tsc --noEmit",
+          "files": [
+            "src/middleware/error.ts",
+            "src/middleware/auth.ts",
+            "src/types/http.ts"
+          ],
+          "tags": [
+            "typescript",
+            "migration",
+            "types"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-03-7",
+          "task": "Add a smoke test at test/boot.test.ts that imports the built app, starts it on an ephemeral port and asserts a known route answers with its expected status. A broken upgrade must not be able to land silently.",
+          "acceptance": "The smoke test starts and stops the server cleanly and fails when the app cannot serve one request.",
+          "verify": "npm test",
+          "files": [
+            "test/boot.test.ts",
+            "src/app.ts"
+          ],
+          "tags": [
+            "tests",
+            "smoke",
+            "framework"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-03-8",
+          "task": "Decide and record the support policy that goes with the upgrade: the minimum Node version we commit to, whether any Express 4 compatibility path ships for downstream users, and when the change is announced. Put it in docs/decisions/express5-support.md.",
+          "acceptance": "The decision names the minimum Node version, states explicitly whether a compatibility path ships, and gives the announcement timing.",
+          "verify": "npm test",
+          "files": [
+            "docs/decisions/express5-support.md",
+            "package.json"
+          ],
+          "tags": [
+            "decision",
+            "policy",
+            "release"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": true,
+          "long_refactor": false
+        }
+      ]
+    },
+    {
+      "id": "sc-04",
+      "title": "Require auth on the public reports endpoint",
+      "story": "A customer found that /reports/export answers with no credentials at all, so anyone who guesses a workspace id can pull a full export. I want real authentication on that route, with the key handled the way our other secrets are handled.",
+      "tasks": [
+        {
+          "id": "sc-04-1",
+          "task": "Choose how the export endpoint authenticates: signed bearer tokens with an audience claim, or the existing session cookie, and decide who is allowed to mint a token. Write the decision and the option you rejected in docs/decisions/report-auth.md.",
+          "acceptance": "The decision names the scheme, the audience value, the token lifetime and who mints tokens, and states why the alternative was rejected.",
+          "verify": "npm test",
+          "files": [
+            "docs/decisions/report-auth.md"
+          ],
+          "tags": [
+            "design",
+            "auth",
+            "security"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 4,
+          "sensitive": false,
+          "needs_lead": true,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-04-2",
+          "task": "Implement src/middleware/require-auth.ts: verify the bearer token signature against the configured keys, require the report:read scope and the expected audience, reject expired tokens, and attach the principal to the request. Fail closed on every verification error.",
+          "acceptance": "A missing, malformed, expired or wrong-audience token yields 401 and never reaches the handler, and a valid token attaches the principal.",
+          "verify": "npm test",
+          "files": [
+            "src/middleware/require-auth.ts",
+            "src/types/http.ts",
+            "test/require-auth.test.ts"
+          ],
+          "tags": [
+            "auth",
+            "security",
+            "middleware"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 4,
+          "sensitive": true,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-04-3",
+          "task": "Load the export signing keys in src/config.ts: read REPORT_AUTH_KEYS as an ordered list of key id and secret pairs and select the key by the token's kid. Never log or serialize the key material.",
+          "acceptance": "A token signed with the second configured key verifies, an unknown kid is rejected, and the serialized config contains no key value.",
+          "verify": "npm test",
+          "files": [
+            "src/config.ts",
+            "test/config.test.ts"
+          ],
+          "tags": [
+            "secrets",
+            "config",
+            "auth"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": true,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-04-4",
+          "task": "Add the new variable names to .env.example with placeholder values and a comment explaining the ordered key list. Include a rotated second key.",
+          "acceptance": ".env.example lists REPORT_AUTH_KEYS with two placeholder entries and contains no value that resembles a real key.",
+          "verify": "npm test",
+          "files": [
+            ".env.example"
+          ],
+          "tags": [
+            "secrets",
+            "config",
+            "docs"
+          ],
+          "lane": "local",
+          "cheapest_passing_lane": "local",
+          "difficulty": 1,
+          "sensitive": true,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-04-5",
+          "task": "Put require-auth in front of the export route in src/routes/reports.ts and return 401 with a WWW-Authenticate: Bearer header and the standard error body on failure. The other report routes must keep their current behaviour.",
+          "acceptance": "The export route answers 401 without a token and 200 with one, and the tests for the unauthenticated report routes are unchanged.",
+          "verify": "npm test",
+          "files": [
+            "src/routes/reports.ts",
+            "src/app.ts",
+            "test/reports.test.ts"
+          ],
+          "tags": [
+            "api",
+            "auth",
+            "security"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-04-6",
+          "task": "Add tests in test/require-auth.test.ts for the three rejection paths (missing header, expired token, token signed by the wrong key) and one acceptance path. Assert the status and that no report body is returned.",
+          "acceptance": "All four cases are asserted and the tests fail if verification is skipped for any token.",
+          "verify": "npm test",
+          "files": [
+            "test/require-auth.test.ts"
+          ],
+          "tags": [
+            "tests",
+            "auth",
+            "security"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-04-7",
+          "task": "Document the report auth contract in docs/auth.md: the header format, the required scope and audience, the rotation procedure for REPORT_AUTH_KEYS and the error responses. Everything must match the implemented middleware.",
+          "acceptance": "docs/auth.md states the header format, the scope and audience values and the rotation steps, all matching the implemented middleware.",
+          "verify": "npm test",
+          "files": [
+            "docs/auth.md"
+          ],
+          "tags": [
+            "docs",
+            "auth",
+            "security"
+          ],
+          "lane": "local",
+          "cheapest_passing_lane": "local",
+          "difficulty": 1,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-04-8",
+          "task": "Confirm the endpoint leaks nothing on its failure paths. Assert that 401 and 403 responses carry no report rows, no workspace metadata and no stack trace, and fix any error handler that passes handler errors straight through.",
+          "acceptance": "The error-path assertions pass for 401 and 403 and the response bodies contain only the standard error shape.",
+          "verify": "npm test",
+          "files": [
+            "src/middleware/error.ts",
+            "test/reports.test.ts"
+          ],
+          "tags": [
+            "security",
+            "errors",
+            "auth"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        }
+      ]
+    },
+    {
+      "id": "sc-05",
+      "title": "Fix the p95 latency regression on order lists",
+      "story": "Since the last release the orders list has gone from about 120ms to over 900ms at p95 and support is hearing about it daily. I want the cause found with numbers, fixed, and guarded so it cannot come back unnoticed.",
+      "tasks": [
+        {
+          "id": "sc-05-1",
+          "task": "Find the cause of the orders-list regression. Reproduce the p95 at the last good commit and at HEAD with the same fixture data, profile the slow request, and name the specific code path responsible in docs/notes/orders-latency.md.",
+          "acceptance": "The note names the responsible code path with before and after timings measured on the same fixture set.",
+          "verify": "npm run bench",
+          "files": [
+            "docs/notes/orders-latency.md",
+            "src/orders/list.ts",
+            "scripts/bench-orders.ts"
+          ],
+          "tags": [
+            "diagnosis",
+            "performance",
+            "profiling"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 4,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-05-2",
+          "task": "Add scripts/bench-orders.ts and an npm script named bench that seeds a fixed 10k-order fixture. It must print p50, p95 and p99 for the orders list over 200 iterations so the numbers are reproducible.",
+          "acceptance": "npm run bench prints three percentiles from a fixed seed and gives the same numbers on repeated runs.",
+          "verify": "npm run bench",
+          "files": [
+            "scripts/bench-orders.ts",
+            "package.json"
+          ],
+          "tags": [
+            "performance",
+            "benchmark",
+            "tooling"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-05-3",
+          "task": "Fix the N+1 query in src/orders/list.ts, which loads each order's line items inside a loop. Load them in one query keyed by order id and keep the returned shape identical.",
+          "acceptance": "The listing issues a constant number of queries regardless of page size and returns the same rows as before.",
+          "verify": "npm test",
+          "files": [
+            "src/orders/list.ts",
+            "src/orders/repository.ts",
+            "test/orders-list.test.ts"
+          ],
+          "tags": [
+            "performance",
+            "query",
+            "core"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-05-4",
+          "task": "Add db/migrations/0043_orders_items_index.sql with an index supporting the batched line-item lookup on (order_id, created_at), plus the down migration. Confirm the query plan uses it.",
+          "acceptance": "The migration applies and rolls back, and EXPLAIN for the batched lookup shows the new index in use.",
+          "verify": "npm test",
+          "files": [
+            "db/migrations/0043_orders_items_index.sql",
+            "db/schema.sql"
+          ],
+          "tags": [
+            "migration",
+            "database",
+            "performance"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": true,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-05-5",
+          "task": "Cache the per-order price summary the listing recomputes on every request. Add a short-lived cache keyed by order id and updated_at, invalidate it on write, and keep responses identical when the cache is cold.",
+          "acceptance": "A repeated listing hits the cache, a write invalidates the entry, and cold and warm results are identical.",
+          "verify": "npm test",
+          "files": [
+            "src/orders/price-summary.ts",
+            "src/orders/list.ts",
+            "test/price-summary.test.ts"
+          ],
+          "tags": [
+            "performance",
+            "caching",
+            "core"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-05-6",
+          "task": "Write up the regression in docs/perf.md: the baseline numbers, the cause, the fix and the new p95. Every number must come from a fresh npm run bench run.",
+          "acceptance": "docs/perf.md carries a before-and-after table whose numbers match a fresh npm run bench run.",
+          "verify": "npm run bench",
+          "files": [
+            "docs/perf.md"
+          ],
+          "tags": [
+            "docs",
+            "performance",
+            "report"
+          ],
+          "lane": "local",
+          "cheapest_passing_lane": "local",
+          "difficulty": 1,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-05-7",
+          "task": "Decide the latency budget we commit to for the orders list and whether breaching it blocks a release. Record the budget, the measurement method and who can grant an exception in docs/decisions/latency-budget.md.",
+          "acceptance": "The decision states a p95 number, the measurement method and the exception owner.",
+          "verify": "npm test",
+          "files": [
+            "docs/decisions/latency-budget.md"
+          ],
+          "tags": [
+            "decision",
+            "performance",
+            "policy"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": true,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-05-8",
+          "task": "Add a regression guard to the bench script that exits non-zero when p95 exceeds twice the recorded baseline. Wire it into the test workflow so it runs on every pull request.",
+          "acceptance": "npm run bench exits non-zero when the baseline is halved in a scratch run, and the test workflow runs the guard.",
+          "verify": "npm run bench",
+          "files": [
+            "scripts/bench-orders.ts",
+            ".github/workflows/test.yml"
+          ],
+          "tags": [
+            "performance",
+            "ci",
+            "guard"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        }
+      ]
+    },
+    {
+      "id": "sc-06",
+      "title": "Add CI and a tag-driven release workflow",
+      "story": "Every release is still me running the build on my laptop and pasting the tarball into a GitHub release, and last month I shipped from a dirty tree. I want pull requests checked automatically and releases produced by CI from a tag, with no long-lived publishing token stored anywhere.",
+      "tasks": [
+        {
+          "id": "sc-06-1",
+          "task": "Decide the release process: tag-driven or manual dispatch, who may publish, where the changelog comes from and how a bad release is rolled back. Write the decision in docs/decisions/release-process.md.",
+          "acceptance": "The decision names the trigger, the publisher identity, the changelog source and the rollback step.",
+          "verify": "npm test",
+          "files": [
+            "docs/decisions/release-process.md"
+          ],
+          "tags": [
+            "decision",
+            "release",
+            "ci"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": true,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-06-2",
+          "task": "Add .github/workflows/test.yml running on pull requests: install with npm ci, then run npm run build, npm run typecheck and npm test. Use the Node versions declared in package.json engines.",
+          "acceptance": "The workflow runs all four steps and fails the job when the test script fails.",
+          "verify": "npm test",
+          "files": [
+            ".github/workflows/test.yml",
+            "package.json"
+          ],
+          "tags": [
+            "ci",
+            "workflow",
+            "testing"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-06-3",
+          "task": "Add .github/workflows/release.yml triggered by a v* tag: build, run the test suite and publish to npm with the repository's publish secret. Assert the tag version matches package.json before publishing.",
+          "acceptance": "A dry-run publish on a test tag succeeds, and the workflow aborts when the tag and package.json versions disagree.",
+          "verify": "npm test",
+          "files": [
+            ".github/workflows/release.yml",
+            "package.json"
+          ],
+          "tags": [
+            "ci",
+            "release",
+            "secrets"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": true,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-06-4",
+          "task": "Move publishing to npm trusted publishing over OIDC: grant the workflow id-token: write and drop the stored publish token from the workflow and the repository secrets. Document that no long-lived token exists.",
+          "acceptance": "The release workflow publishes with no token secret referenced anywhere, and a repository-wide search finds no NPM_TOKEN.",
+          "verify": "npm test",
+          "files": [
+            ".github/workflows/release.yml",
+            "docs/release.md",
+            "SECURITY.md"
+          ],
+          "tags": [
+            "security",
+            "secrets",
+            "ci"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 4,
+          "sensitive": true,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-06-5",
+          "task": "Add dependency and build caching to .github/workflows/test.yml keyed on the package-lock.json hash. An unchanged lockfile should then skip reinstalling.",
+          "acceptance": "A second run on an unchanged lockfile reports a cache hit for node_modules and a changed lockfile misses it.",
+          "verify": "npm test",
+          "files": [
+            ".github/workflows/test.yml"
+          ],
+          "tags": [
+            "ci",
+            "caching",
+            "workflow"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-06-6",
+          "task": "Diagnose why the new workflow passes locally but fails on the GitHub runner. Compare the runner's Node version, working directory and case-sensitive filesystem with the local setup, and write the cause and the fix in docs/notes/ci-divergence.md.",
+          "acceptance": "The note names the divergent runner condition and the line in .github/workflows/test.yml that depends on it.",
+          "verify": "npm test",
+          "files": [
+            "docs/notes/ci-divergence.md",
+            ".github/workflows/test.yml"
+          ],
+          "tags": [
+            "diagnosis",
+            "ci",
+            "environment"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-06-7",
+          "task": "Write docs/release.md covering how to cut a release, what the tag triggers, how to verify the published artifact and how to roll back. A reader must be able to cut a release from the document alone.",
+          "acceptance": "A reader can cut a release from the document alone, and every command in it exists in the workflows.",
+          "verify": "npm test",
+          "files": [
+            "docs/release.md"
+          ],
+          "tags": [
+            "docs",
+            "release",
+            "runbook"
+          ],
+          "lane": "local",
+          "cheapest_passing_lane": "local",
+          "difficulty": 1,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-06-8",
+          "task": "Add .github/dependabot.yml covering the npm ecosystem and GitHub Actions, weekly. Set a limit of five open pull requests and a title prefix matching the existing commit convention.",
+          "acceptance": ".github/dependabot.yml lists both ecosystems with a weekly schedule and the pull-request limit.",
+          "verify": "npm test",
+          "files": [
+            ".github/dependabot.yml"
+          ],
+          "tags": [
+            "ci",
+            "dependencies",
+            "config"
+          ],
+          "lane": "local",
+          "cheapest_passing_lane": "local",
+          "difficulty": 1,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        }
+      ]
+    },
+    {
+      "id": "sc-07",
+      "title": "Split the orders god-module into parts",
+      "story": "src/core/orders.ts is 2,400 lines and every change to pricing, persistence or validation collides with someone else's branch. I want it split along the seams it already has, without changing a single behaviour.",
+      "tasks": [
+        {
+          "id": "sc-07-1",
+          "task": "Map the responsibilities inside src/core/orders.ts and propose the split: what becomes its own module, what stays, and the direction of the dependencies between the parts. Write the plan with the seam list in docs/decisions/orders-split.md.",
+          "acceptance": "The plan names each proposed module, the symbols that move into it and the dependency direction, with no cycles.",
+          "verify": "npm test",
+          "files": [
+            "docs/decisions/orders-split.md",
+            "src/core/orders.ts"
+          ],
+          "tags": [
+            "design",
+            "refactor",
+            "architecture"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 4,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-07-2",
+          "task": "Extract the pure pricing and discount helpers from src/core/orders.ts into src/core/pricing.ts. The new module must import nothing from the rest of core, and callers keep the same signatures.",
+          "acceptance": "src/core/pricing.ts imports nothing from src/core/orders.ts, and the pricing tests are unchanged and green.",
+          "verify": "npm test",
+          "files": [
+            "src/core/pricing.ts",
+            "src/core/orders.ts",
+            "test/pricing.test.ts"
+          ],
+          "tags": [
+            "refactor",
+            "core",
+            "pricing"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-07-3",
+          "task": "Move the database access in src/core/orders.ts behind a repository interface in src/core/orders-repository.ts. The existing SQL moves into src/core/orders-repository.pg.ts so the module depends on the interface only.",
+          "acceptance": "src/core/orders.ts contains no SQL and no database client import, and an in-memory repository double can stand in for the Postgres one in tests.",
+          "verify": "npm test",
+          "files": [
+            "src/core/orders-repository.ts",
+            "src/core/orders-repository.pg.ts",
+            "src/core/orders.ts"
+          ],
+          "tags": [
+            "refactor",
+            "persistence",
+            "architecture"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 4,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-07-4",
+          "task": "Repoint every import of the moved symbols across src/ and test/: the pricing helpers to the new module and the persistence functions through the repository interface. Sweep the whole tree and change no behaviour.",
+          "acceptance": "npx tsc --noEmit passes and a repo-wide search finds no remaining import of a moved symbol from src/core/orders.ts.",
+          "verify": "npx tsc --noEmit",
+          "files": [
+            "src/api/orders.ts",
+            "src/jobs/reconcile.ts",
+            "src/admin/reports.ts",
+            "test/orders.test.ts",
+            "test/reconcile.test.ts"
+          ],
+          "tags": [
+            "refactor",
+            "codemod",
+            "imports"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": true
+        },
+        {
+          "id": "sc-07-5",
+          "task": "Delete the helpers, re-exports and types left dead by the split. That includes every export no file imports and every private helper whose only caller moved away.",
+          "acceptance": "npx eslint . reports no unused-export warning in src/core/ and the module no longer carries the moved code.",
+          "verify": "npx eslint .",
+          "files": [
+            "src/core/orders.ts",
+            "src/core/pricing.ts"
+          ],
+          "tags": [
+            "refactor",
+            "cleanup",
+            "dead-code"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 1,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-07-6",
+          "task": "Add characterisation tests in test/orders-characterisation.test.ts that pin the current public behaviour of src/core/orders.ts. Cover totals, rounding, an empty cart and the error for an unknown discount code.",
+          "acceptance": "The characterisation suite passes against both the pre-split commit and the post-split tree.",
+          "verify": "npm test",
+          "files": [
+            "test/orders-characterisation.test.ts"
+          ],
+          "tags": [
+            "tests",
+            "refactor",
+            "characterisation"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-07-7",
+          "task": "Decide whether downstream consumers keep a deprecated entry point at src/core/orders.ts during the split or are migrated in the same release. Record the decision with its timeline in docs/decisions/orders-split.md.",
+          "acceptance": "The decision states whether a deprecated entry point ships and, if so, the version it is removed in.",
+          "verify": "npm test",
+          "files": [
+            "docs/decisions/orders-split.md",
+            "src/core/orders.ts"
+          ],
+          "tags": [
+            "decision",
+            "refactor",
+            "compatibility"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": true,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-07-8",
+          "task": "Fix the circular import the split introduces between src/core/orders.ts and src/core/pricing.ts: pricing must not import the order type from the module that depends on it. Move the shared type into src/core/types.ts.",
+          "acceptance": "The dependency graph is acyclic, the runtime undefined-at-import error is gone, and npx tsc --noEmit is clean.",
+          "verify": "npx tsc --noEmit",
+          "files": [
+            "src/core/types.ts",
+            "src/core/orders.ts",
+            "src/core/pricing.ts"
+          ],
+          "tags": [
+            "refactor",
+            "types",
+            "bug"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        }
+      ]
+    },
+    {
+      "id": "sc-08",
+      "title": "Add structured logging and request tracing",
+      "story": "During the last incident we were reading unformatted console output across six processes and guessing which line belonged to which request. I want one structured line per request with a request id we can search, and absolutely no customer data in the logs.",
+      "tasks": [
+        {
+          "id": "sc-08-1",
+          "task": "Decide the log schema, the level policy and which fields are safe to log: name the required fields, the field carrying the request id, and the categories of customer data that must never appear. Write it in docs/decisions/logging-schema.md.",
+          "acceptance": "The decision lists the required field names, the level rules and an explicit never-log list, and no field on that list appears in the schema.",
+          "verify": "npm test",
+          "files": [
+            "docs/decisions/logging-schema.md"
+          ],
+          "tags": [
+            "design",
+            "logging",
+            "privacy"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": true,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-08-2",
+          "task": "Implement src/logger.ts against the decided schema: JSON lines carrying the required fields, a level threshold read from config, and one child logger per request carrying the request id. Existing call sites must keep working while the change lands.",
+          "acceptance": "Every emitted line is valid JSON carrying the required fields, and the configured level threshold suppresses lines below it.",
+          "verify": "npm test",
+          "files": [
+            "src/logger.ts",
+            "src/config.ts",
+            "test/logger.test.ts"
+          ],
+          "tags": [
+            "logging",
+            "core",
+            "observability"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-08-3",
+          "task": "Add redaction to src/logger.ts: mask the values of keys matching authorization, cookie, token, password, email and card at any depth, including inside arrays and error causes. A redaction miss must not be silently introducible.",
+          "acceptance": "A nested payload holding an authorization header and a card number serializes with both masked, and the test fails if either key leaves the mask list.",
+          "verify": "npm test",
+          "files": [
+            "src/logger.ts",
+            "test/logger-redaction.test.ts"
+          ],
+          "tags": [
+            "security",
+            "logging",
+            "privacy"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 4,
+          "sensitive": true,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-08-4",
+          "task": "Replace every console.log, console.error and console.warn call site in src/ with the structured logger, keeping the message text and adding the fields already in scope. Sweep the whole tree, including src/jobs/ and src/admin/.",
+          "acceptance": "A repo-wide search finds no console call in src/, and npx eslint . reports no console rule violation.",
+          "verify": "npx eslint .",
+          "files": [
+            "src/app.ts",
+            "src/routes/orders.ts",
+            "src/jobs/cleanup.ts",
+            "src/admin/router.ts",
+            "src/workers/sync.ts"
+          ],
+          "tags": [
+            "logging",
+            "codemod",
+            "cleanup"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": true
+        },
+        {
+          "id": "sc-08-5",
+          "task": "Add request-id middleware in src/middleware/request-id.ts: accept an incoming X-Request-Id when it is well formed, otherwise generate one, attach it to the request context and echo it in the response header. Propagate it into every logger the handler uses.",
+          "acceptance": "Two concurrent requests get distinct ids, an incoming valid id is preserved, and every log line for a request carries its id.",
+          "verify": "npm test",
+          "files": [
+            "src/middleware/request-id.ts",
+            "src/context.ts",
+            "test/request-id.test.ts"
+          ],
+          "tags": [
+            "observability",
+            "middleware",
+            "tracing"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-08-6",
+          "task": "Add counters in src/metrics.ts for requests by route and status and for handler duration, exposed at GET /metrics. Wire the increments into the existing middleware chain.",
+          "acceptance": "GET /metrics reports request and duration counters that increase after traffic, with one series per route.",
+          "verify": "npm test",
+          "files": [
+            "src/metrics.ts",
+            "src/app.ts",
+            "test/metrics.test.ts"
+          ],
+          "tags": [
+            "observability",
+            "metrics",
+            "api"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-08-7",
+          "task": "Document the log schema in docs/observability.md: the required fields, the level policy, the redaction list and how to search by request id. Every name must match the logger exactly.",
+          "acceptance": "The document names every required field and every redacted key exactly as the logger implements them.",
+          "verify": "npm test",
+          "files": [
+            "docs/observability.md"
+          ],
+          "tags": [
+            "docs",
+            "logging",
+            "observability"
+          ],
+          "lane": "local",
+          "cheapest_passing_lane": "local",
+          "difficulty": 1,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-08-8",
+          "task": "Add a test asserting that a request carrying an authorization header and a customer email produces log output containing neither value. Exercise it end to end over the request pipeline.",
+          "acceptance": "The test fails if either value appears anywhere in the captured log output.",
+          "verify": "npm test",
+          "files": [
+            "test/logging.integration.test.ts"
+          ],
+          "tags": [
+            "tests",
+            "logging",
+            "security"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        }
+      ]
+    },
+    {
+      "id": "sc-09",
+      "title": "Harden the payment and checkout path",
+      "story": "Our payment review found that we trust the client for the amount and we apply any webhook we receive. I want the checkout path hardened: amounts derived server-side, webhooks verified, retries idempotent and the provider key out of the repository.",
+      "tasks": [
+        {
+          "id": "sc-09-1",
+          "task": "Threat-model the checkout and payment flow: enumerate the abuse cases (client-supplied amount, replayed webhook, duplicated capture, leaked provider key and a forged callback). Rank them by impact and name the mitigation for each in docs/notes/checkout-threats.md.",
+          "acceptance": "The note lists at least five abuse cases with a rank and a named mitigation, and no mitigation merely restates its threat.",
+          "verify": "npm test",
+          "files": [
+            "docs/notes/checkout-threats.md",
+            "src/payments/checkout.ts"
+          ],
+          "tags": [
+            "security",
+            "payments",
+            "analysis"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 4,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-09-2",
+          "task": "Enforce idempotency on payment creation: require an Idempotency-Key header on POST /checkout/pay, store the key with the resulting payment id in the same transaction (db/migrations/0044_idempotency_keys.sql), and return the original result for a repeat with the same key. A repeat with the same key but a different amount must be rejected.",
+          "acceptance": "Two identical requests capture once and return the same payment id, and a same-key request with a different amount returns 409.",
+          "verify": "npm test",
+          "files": [
+            "src/payments/idempotency.ts",
+            "src/routes/checkout.ts",
+            "db/migrations/0044_idempotency_keys.sql"
+          ],
+          "tags": [
+            "payments",
+            "idempotency",
+            "migration"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 4,
+          "sensitive": true,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-09-3",
+          "task": "Verify payment webhook signatures before applying any state change: compute the HMAC over the raw request body with the configured webhook secret and compare in constant time. Reject on mismatch or timestamp skew and only then apply the event.",
+          "acceptance": "A tampered body, a wrong signature and a stale timestamp are each rejected with no state change, while a valid event applies.",
+          "verify": "npm test",
+          "files": [
+            "src/payments/webhook.ts",
+            "src/routes/webhooks.ts",
+            "test/webhook.test.ts"
+          ],
+          "tags": [
+            "security",
+            "payments",
+            "webhooks"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 4,
+          "sensitive": true,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-09-4",
+          "task": "Move the payment provider secret out of committed config. Read it from PAYMENT_PROVIDER_KEY in src/config.ts, fail startup when it is missing in production, and replace the placeholder in the committed config with an environment reference.",
+          "acceptance": "Startup fails in production without the variable, and a repo-wide search finds no key-shaped value in a committed file.",
+          "verify": "npm test",
+          "files": [
+            "src/config.ts",
+            "config/default.json",
+            ".env.example"
+          ],
+          "tags": [
+            "secrets",
+            "payments",
+            "config"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": true,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-09-5",
+          "task": "Validate the checkout amount server-side. Derive the amount and currency from the server-side cart rather than the client payload, reject a mismatch between the client total and the server total, and refuse a zero or negative total.",
+          "acceptance": "A request whose client total differs from the cart total is rejected, and the cart total is the only amount sent to the provider.",
+          "verify": "npm test",
+          "files": [
+            "src/payments/checkout.ts",
+            "src/routes/checkout.ts",
+            "test/checkout.test.ts"
+          ],
+          "tags": [
+            "payments",
+            "validation",
+            "security"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "strong",
+          "difficulty": 3,
+          "sensitive": true,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-09-6",
+          "task": "Add replay and tamper tests for the webhook handler in test/webhook-replay.test.ts. The same event delivered twice must apply once, an out-of-order event must not regress state, and a signature captured from another event must be refused.",
+          "acceptance": "All three cases are asserted and the suite fails if the handler drops its event-id deduplication.",
+          "verify": "npm test",
+          "files": [
+            "test/webhook-replay.test.ts"
+          ],
+          "tags": [
+            "tests",
+            "payments",
+            "webhooks"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 3,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-09-7",
+          "task": "Update SECURITY.md with the payment invariants: server-derived amounts, verified webhooks, idempotent capture and where the provider key lives. Keep it to prose an auditor can check.",
+          "acceptance": "SECURITY.md states all four invariants and names the module that enforces each one.",
+          "verify": "npm test",
+          "files": [
+            "SECURITY.md"
+          ],
+          "tags": [
+            "docs",
+            "security",
+            "payments"
+          ],
+          "lane": "local",
+          "cheapest_passing_lane": "local",
+          "difficulty": 1,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-09-8",
+          "task": "Decide the refund and dispute policy for the cases the hardening does not cover: a webhook replayed after capture, a captured payment whose fulfilment failed, and a chargeback on a duplicated attempt. Record the policy and who is paged in docs/decisions/refund-policy.md.",
+          "acceptance": "The decision covers all three cases with the action, the owner and the customer-facing outcome.",
+          "verify": "npm test",
+          "files": [
+            "docs/decisions/refund-policy.md"
+          ],
+          "tags": [
+            "decision",
+            "payments",
+            "policy"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 4,
+          "sensitive": false,
+          "needs_lead": true,
+          "long_refactor": false
+        }
+      ]
+    },
+    {
+      "id": "sc-10",
+      "title": "Write the v4 breaking-change migration guide",
+      "story": "v4 removes the legacy callback API and renames a dozen options, and our users will discover that from a stack trace unless we tell them first. I want a migration guide that takes them from v3 to v4 without reading our source, plus release notes I can paste into the announcement.",
+      "tasks": [
+        {
+          "id": "sc-10-1",
+          "task": "Decide the migration story for v4: how long v3 is supported, whether a codemod ships or users edit by hand, and what the guide leads with. Record the decision and the deprecation dates in docs/decisions/v4-migration.md.",
+          "acceptance": "The decision states the support window with dates, whether a codemod ships, and what the first section of the guide covers.",
+          "verify": "npm test",
+          "files": [
+            "docs/decisions/v4-migration.md"
+          ],
+          "tags": [
+            "decision",
+            "release",
+            "migration"
+          ],
+          "lane": "thinker",
+          "cheapest_passing_lane": "thinker",
+          "difficulty": 4,
+          "sensitive": false,
+          "needs_lead": true,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-10-2",
+          "task": "Write docs/migrating-to-v4.md as a step-by-step guide from v3 to v4 covering the callback removal, the renamed options and the new config shape. Every step needs a runnable before-and-after example.",
+          "acceptance": "Every step has a before and after snippet, and the guide names the exact v4 replacement for each removed v3 form.",
+          "verify": "npm test",
+          "files": [
+            "docs/migrating-to-v4.md"
+          ],
+          "tags": [
+            "docs",
+            "migration",
+            "guide"
+          ],
+          "lane": "local",
+          "cheapest_passing_lane": "local",
+          "difficulty": 1,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-10-3",
+          "task": "Write the user-facing release notes for v4 in docs/releases/v4.md: the headline changes, the upgrade command, the breaking changes and the support window. Match the tone of the existing release notes.",
+          "acceptance": "The notes list every breaking change the migration guide lists and no change the release does not contain.",
+          "verify": "npm test",
+          "files": [
+            "docs/releases/v4.md"
+          ],
+          "tags": [
+            "docs",
+            "release",
+            "notes"
+          ],
+          "lane": "local",
+          "cheapest_passing_lane": "local",
+          "difficulty": 1,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-10-4",
+          "task": "Update every code example under docs/ to the v4 API. Replace the removed callback forms and the renamed options, and leave prose-only pages untouched.",
+          "acceptance": "No example under docs/ uses a removed v3 form, and every snippet matches the v4 signatures in the source.",
+          "verify": "npm test",
+          "files": [
+            "docs/usage.md",
+            "docs/api.md",
+            "docs/quickstart.md",
+            "docs/configuration.md"
+          ],
+          "tags": [
+            "docs",
+            "migration",
+            "examples"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-10-5",
+          "task": "Add a removed-and-renamed reference table to docs/migrating-to-v4.md with one row per removed v3 option, its v4 replacement and a note whenever the behaviour also changed. Do not add a row for an option that still works.",
+          "acceptance": "The table covers every option the v4 source no longer accepts, with no row for an option that still works.",
+          "verify": "npm test",
+          "files": [
+            "docs/migrating-to-v4.md",
+            "src/config.ts"
+          ],
+          "tags": [
+            "docs",
+            "migration",
+            "reference"
+          ],
+          "lane": "local",
+          "cheapest_passing_lane": "local",
+          "difficulty": 1,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-10-6",
+          "task": "Write the codemod the migration guide references as a script at scripts/codemod-v4.ts. It must rewrite the renamed options and the callback form across a user's source tree, default to --dry-run and print a summary of changed files.",
+          "acceptance": "Running the codemod on the v3 fixture directory converts every renamed option and the callback form, and --dry-run changes nothing on disk.",
+          "verify": "npm test",
+          "files": [
+            "scripts/codemod-v4.ts",
+            "test/codemod-v4.test.ts"
+          ],
+          "tags": [
+            "codemod",
+            "migration",
+            "tooling"
+          ],
+          "lane": "strong",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-10-7",
+          "task": "Verify every command in the migration guide against the v3 fixture app. Run the upgrade, the codemod and the fixture's smoke test from a clean checkout, then fix any command the guide states incorrectly.",
+          "acceptance": "Every command in the guide runs as written from a clean fixture checkout and the fixture app starts under v4.",
+          "verify": "npm test",
+          "files": [
+            "test/fixtures/v3-app/package.json",
+            "docs/migrating-to-v4.md"
+          ],
+          "tags": [
+            "docs",
+            "verification",
+            "migration"
+          ],
+          "lane": "fast",
+          "cheapest_passing_lane": "fast",
+          "difficulty": 2,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        },
+        {
+          "id": "sc-10-8",
+          "task": "Reorder the migration guide so the breaking changes a user must act on come before the optional improvements. Add a short summary at the top naming the three changes that break a build.",
+          "acceptance": "The guide's first section lists the three build-breaking changes, and no optional improvement precedes them.",
+          "verify": "npm test",
+          "files": [
+            "docs/migrating-to-v4.md"
+          ],
+          "tags": [
+            "docs",
+            "migration",
+            "structure"
+          ],
+          "lane": "local",
+          "cheapest_passing_lane": "local",
+          "difficulty": 1,
+          "sensitive": false,
+          "needs_lead": false,
+          "long_refactor": false
+        }
+      ]
+    }
+  ]
+}
