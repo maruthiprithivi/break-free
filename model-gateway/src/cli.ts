@@ -19,7 +19,7 @@ import { routePlanTasks, type RouteDecision, type RouteResult, type RoutingEngin
 import { ASSUMED_TOKENS_PER_TASK, benchEngineLabel, decisionArm, laneCostUsd, leadArm, llmRouterArm, loadLabeledSet, renderBenchTable, scoreArm, unmeasuredLlmArm, type LabeledTask, type RouterArm } from "./bench.js";
 import { startTypeSafeDouble, type DoubleDecision, type TypeSafeDouble } from "./jev-double.js";
 import { loadScenarios, recordScenarioDecisions, renderScenarioDigest, renderScenarioReport, routedArm, scoreScenario, staticArms, totals, type ScenarioRecording, type ScenarioScore, type ScenarioTask } from "./scenarios.js";
-import { laneFor, renderValidation, summarise, toValidateTasks, type RawValidateTask, type TaskOutcome, type ValidateArm, type ValidateTask } from "./validate.js";
+import { exitCodeFor, laneFor, renderValidation, summarise, toValidateTasks, type RawValidateTask, type TaskOutcome, type ValidateArm, type ValidateTask } from "./validate.js";
 import { renderTripwireMetrics, runTripwire, scoreTripwire, TRIPWIRE_CHECKS, type TripwireOutcome } from "./tripwire.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -447,12 +447,17 @@ async function cmdBenchTripwire(flags: Record<string, string | boolean>): Promis
  * Runs real work to check the labels. The workspace is reset to HEAD between runs so each arm
  * starts from the same tree — which means it must be clean when you start, and it removes
  * untracked files it created (git-clean honours .gitignore, so node_modules stays).
+ *
+ * A run whose verify fails is repeated once (`--attempts`, default 2). Criterion 3 asks what the
+ * pass rate is after one retry, which a single pass/fail cannot answer.
  */
 async function cmdValidate(flags: Record<string, string | boolean>): Promise<number> {
   const setFile = typeof flags.set === "string" ? flags.set : path.join(REPO_BENCH, "route-set.jsonl");
   const ws = path.resolve(typeof flags.workspace === "string" ? flags.workspace : process.cwd());
   const limit = typeof flags.tasks === "string" ? Number(flags.tasks) : 3;
   const withRouting = flags["with-routing"] === true;
+  // Capped at 3: each extra attempt is another full worker run on every arm that failed verify.
+  const maxAttempts = typeof flags.attempts === "string" ? Math.min(3, Math.max(1, Math.floor(Number(flags.attempts)) || 1)) : 2;
   // Either shipped set works: the 60-task JSONL and the scenario file differ only in what they
   // call the lead's lane, which `toValidateTasks` absorbs.
   const raw = setFile.endsWith(".jsonl") ? (loadLabeledSet(setFile) as unknown as RawValidateTask[]) : (loadScenarios(setFile).flatMap((s) => s.tasks) as unknown as RawValidateTask[]);
@@ -480,12 +485,14 @@ async function cmdValidate(flags: Record<string, string | boolean>): Promise<num
   );
 
   const config = configFor({ routing: withRouting ? { engine: "jev" } : {} });
-  const configFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bf-validate-")), "config.json");
-  fs.writeFileSync(configFile, JSON.stringify({}));
 
-  const asText = (r: unknown): string => {
-    const content = (r as { content?: { text?: string }[] }).content ?? [];
-    return content.map((c) => c.text ?? "").join("\n");
+  /**
+   * The text blocks of a tool reply. Read field by field rather than asserted into a shape: this is
+   * another process's answer, and a reply without content must read as empty, not as a lie.
+   */
+  const asText = (reply: unknown): string => {
+    if (!reply || typeof reply !== "object" || !("content" in reply) || !Array.isArray(reply.content)) return "";
+    return reply.content.map((c) => (c && typeof c === "object" && "type" in c && c.type === "text" && "text" in c && typeof c.text === "string" ? c.text : "")).join("\n");
   };
   const entry = new URL("./index.js", import.meta.url).pathname;
   const transport = new StdioClientTransport({ command: process.execPath, args: [entry, "--workspace", ws, "--config", userConfigPath()], env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)) as Record<string, string>, stderr: "pipe" });
@@ -496,25 +503,75 @@ async function cmdValidate(flags: Record<string, string | boolean>): Promise<num
     git(["checkout", "--", "."]);
     git(["clean", "-fdq"]);
   };
+  /** Nothing ran, and the reason is the reason — not "no lane mapped", which is what an engine that
+   *  never answered used to be reported as. */
+  const notRun = (t: ValidateTask, arm: ValidateArm, reason: string): TaskOutcome => ({ task: t.id, arm, lane: "(none)", confidence: null, verify_ok: null, model: "", ms: 0, not_run: reason });
+
   /** One real run of one task on one lane; the verify result is the gateway's own exit code. */
-  const runOn = async (t: ValidateTask, arm: ValidateArm, lane: string | null): Promise<TaskOutcome> => {
+  const runOn = async (t: ValidateTask, arm: ValidateArm, lane: string | null, model: string | null, confidence: number | null, brief?: string): Promise<TaskOutcome> => {
     const started = Date.now();
-    if (lane === null) return { task: t.id, arm, lane: "(none)", verify_ok: null, model: "", ms: 0, error: `${t.id}: no lane mapped for ${arm}` };
+    if (model === null) return notRun(t, arm, `lane ${lane ?? "(none)"} maps to no model, so this arm has nothing to run it on`);
     try {
       const r = await client.callTool({
         name: "run_plan",
         arguments: {
-          goal: `bf validate ${t.id} on ${lane}`,
-          tasks: [{ id: `${t.id}--${arm}`, task: t.task, acceptance: t.acceptance, verify: t.verify, files: t.files, tags: t.tags, model: lane, capabilities: ["read", "write", "run"] }],
+          goal: `bf validate ${t.id} on ${lane ?? model}`,
+          tasks: [{ id: `${t.id}--${arm}${brief ? "-retry" : ""}`, task: brief ? `${brief}\n\n${t.task}` : t.task, acceptance: t.acceptance, verify: t.verify, files: t.files, tags: t.tags, model, capabilities: ["read", "write", "run"] }],
         },
       });
       const text = asText(r);
-      const meta = JSON.parse(text.slice(text.lastIndexOf("\nmeta: ") + 7)) as { results: { model?: string; verify?: { ok?: boolean } | null; error?: string }[] };
+      const meta = JSON.parse(text.slice(text.lastIndexOf("\nmeta: ") + 7)) as { results: { model?: string; verify?: { ok?: boolean; exit?: number | null } | null; error?: string }[] };
       const res = meta.results[0];
-      return { task: t.id, arm, lane, verify_ok: res?.verify ? res.verify.ok === true : null, model: res?.model ?? "", ms: Date.now() - started, ...(res?.error ? { error: res.error } : {}) };
+      const verify = res?.verify ?? null;
+      const ok = verify ? verify.ok === true : null;
+      return { task: t.id, arm, lane: lane ?? model, confidence, first_attempt_ok: ok, verify_ok: ok, attempts: 1, model: res?.model ?? model, ms: Date.now() - started, ...(verify?.exit != null ? { verify_exit: verify.exit } : {}), ...(res?.error ? { error: res.error } : {}) };
     } catch (e) {
-      return { task: t.id, arm, lane, verify_ok: null, model: "", ms: Date.now() - started, error: (e as Error).message };
+      return { task: t.id, arm, lane: lane ?? model, confidence, verify_ok: null, model: "", ms: Date.now() - started, error: (e as Error).message };
     }
+  };
+
+  /**
+   * One arm: the attempt, then — only if its verify failed — one retry on the same lane, with the
+   * failed verify's command and exit code handed to the worker. Both results are kept (`attempts`,
+   * `first_attempt_ok`), because criterion 3 asks for the rate after a retry and criterion 2 asks
+   * for the rate without one. The tree is reset first, so a retry is an independent attempt rather
+   * than an inheritance of the first one's half-finished edits.
+   */
+  const runArm = async (t: ValidateTask, arm: ValidateArm, lane: string | null, model: string | null, confidence: number | null): Promise<TaskOutcome> => {
+    resetTree();
+    const first = await runOn(t, arm, lane, model, confidence);
+    if (first.not_run || maxAttempts < 2 || first.verify_ok !== false) return first;
+    const brief = [
+      "A previous attempt at this task ran and its verify command failed, so the task is not complete.",
+      `  command: ${t.verify}`,
+      `  exit: ${first.verify_exit ?? "non-zero"}`,
+      "The gateway's verify step records no output, so diagnose it yourself: run that command and find the actual failure before changing anything.",
+    ].join("\n");
+    resetTree();
+    const retried = await runOn(t, arm, lane, model, confidence, brief);
+    return { ...retried, attempts: 2, first_attempt_ok: first.verify_ok };
+  };
+
+  /** The routed arm. Whatever the engine answers — a lane, an escalation, or nothing at all — the
+   *  row says which one it was; the reasons are different problems and must not read alike. */
+  const runRouted = async (t: ValidateTask): Promise<TaskOutcome> => {
+    // The engine travels on the call, not in the config: the spawned server reads the user's config,
+    // whose `routing.engine` defaults to `off`, so a config-only override never reaches it.
+    const routed = await client.callTool({ name: "route", arguments: { engine: "jev", goal: `bf validate ${t.id}`, tasks: [{ id: t.id, task: t.task, acceptance: t.acceptance, files: t.files, tags: t.tags }] } });
+    const body = JSON.parse(asText(routed)) as { engine: string; engine_source: string; threshold: number; degraded?: string | null; decisions: { id: string; lane: string; model: string | null; confidence: number | null; reason: string }[] };
+    const decision = body.decisions.find((d) => d.id === t.id);
+    if (!decision) {
+      const degraded = body.degraded ? ` (degraded: ${body.degraded})` : "";
+      return notRun(t, "jev", `the routing engine answered "${body.engine}" (source: ${body.engine_source})${degraded} and returned no decision for this task, so no lane was ever chosen`);
+    }
+    if (decision.model === null) {
+      const why =
+        decision.reason === "confidence"
+          ? `the engine handed this task back to the lead: confidence ${decision.confidence?.toFixed(2) ?? "?"} is below the ${body.threshold} threshold (lane ${decision.lane})`
+          : `the engine handed this task back to the lead: reason "${decision.reason}" on lane ${decision.lane}`;
+      return notRun(t, "jev", `${why} — an escalated task is not run by the crew, so it is not a result for this arm`);
+    }
+    return runArm(t, "jev", decision.lane, decision.model, decision.confidence ?? null);
   };
 
   const outcomes: TaskOutcome[] = [];
@@ -532,17 +589,9 @@ async function cmdValidate(flags: Record<string, string | boolean>): Promise<num
     }
     for (const t of tasks) {
       if (unfalsifiable.includes(t.id)) continue;
-      resetTree();
-      outcomes.push(await runOn(t, "claimed", laneFor(config, t.cheapest_passing_lane)));
-      resetTree();
-      outcomes.push(await runOn(t, "lead", laneFor(config, t.lane)));
-      if (withRouting) {
-        resetTree();
-        const routed = await client.callTool({ name: "route", arguments: { tasks: [{ id: t.id, task: t.task, files: t.files, tags: t.tags }] } });
-        const body = JSON.parse(asText(routed)) as { decisions: { model: string | null; lane: string }[] };
-        const decision = body.decisions[0];
-        outcomes.push(await runOn(t, "jev", decision?.model ?? null));
-      }
+      outcomes.push(await runArm(t, "claimed", t.cheapest_passing_lane, laneFor(config, t.cheapest_passing_lane), null));
+      outcomes.push(await runArm(t, "lead", t.lane, laneFor(config, t.lane), null));
+      if (withRouting) outcomes.push(await runRouted(t));
       console.error(`  ran ${t.id} (${outcomes.filter((o) => o.task === t.id).length} arms)`);
     }
   } finally {
@@ -551,9 +600,11 @@ async function cmdValidate(flags: Record<string, string | boolean>): Promise<num
   }
 
   const report = summarise(outcomes, tasks, config, unfalsifiable);
-  if (flags.json) console.log(JSON.stringify({ meta: { workspace: ws, set: setFile, with_routing: withRouting }, report }, null, 2));
+  if (flags.json) console.log(JSON.stringify({ meta: { workspace: ws, set: setFile, with_routing: withRouting, max_attempts: maxAttempts }, report }, null, 2));
   else console.log(renderValidation(report, { workspace: ws, set: setFile, withRouting }));
-  return report.label_validation.failed > 0 ? 1 : 0;
+  // An arm can be entirely dead — a lane mapped to nothing, a key missing, every worker errored —
+  // while the labels themselves are clean. Reporting success there is the bug this exit code fixes.
+  return exitCodeFor(report);
 }
 
 const HELP = `bf — Break Free command line
@@ -603,11 +654,12 @@ const COMMANDS: Record<string, { flags: string[]; usage: string }> = {
     usage: "bf scenarios [--set bench/scenarios.json] [--live] [--record <file>] [--json]\n    Ten real workflows, routed four ways (jev, rules, off, lead).",
   },
   validate: {
-    flags: ["set", "workspace", "tasks", "with-routing", "json", "force", "include-unfalsifiable"],
+    flags: ["set", "workspace", "tasks", "with-routing", "attempts", "json", "force", "include-unfalsifiable"],
     usage:
-      "bf validate [--set bench/route-set.jsonl] --workspace <git repo> [--tasks 3] [--with-routing] [--json] [--force]\n" +
+      "bf validate [--set bench/route-set.jsonl] --workspace <git repo> [--tasks 3] [--with-routing] [--attempts 2] [--json] [--force]\n" +
       "    Do the labels hold? Runs each task on the lane the label calls cheapest AND on the lane a\n" +
-      "    lead would pick, then reads the gateway's own verify exit code.\n" +
+      "    lead would pick, then reads the gateway's own verify exit code. A run whose verify fails is\n" +
+      "    repeated up to --attempts times (default 2), and both first-pass and after-retry are reported.\n" +
       "    THE WORKSPACE IS RESET TO HEAD BETWEEN RUNS. It must be clean to start (--force overrides),\n" +
       "    it defaults to the current directory, and it will delete files the runs added. Do not edit\n" +
       "    files in it while a validation is running.",
