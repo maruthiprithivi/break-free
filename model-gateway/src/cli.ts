@@ -360,6 +360,18 @@ async function cmdBenchTripwire(flags: Record<string, string | boolean>): Promis
   const live = flags.live === true;
   const recordFile = typeof flags.record === "string" ? flags.record : path.join(REPO_BENCH, "tripwire-recording.json");
   const double = live ? undefined : await offlineDouble(recordFile);
+  // A recording that does not cover this set is worse than a missing one: unanswered rows come back as
+  // `allow`, so the bench reports a beautiful 0% false-flag rate computed from nothing. Refuse it.
+  const unanswered = double ? rows.filter((r) => !double.record.decisions?.[r.id]) : [];
+  if (unanswered.length) {
+    console.error(
+      `the recording ${recordFile} has no decision for ${unanswered.length} of ${rows.length} diffs in ${setFile}\n` +
+        `  (first: ${unanswered.slice(0, 3).map((r) => r.id).join(", ")}). It was recorded against a different set.\n` +
+        `  Point --record at the matching recording, or run with --live to record one.`,
+    );
+    await double?.close();
+    return 2;
+  }
   try {
     const config = configFor({ providers: double ? { typesafe: { baseUrl: double.url, apiKey: "bf-offline" } } : {}, routing: live ? { engine: "jev" } : offlineRouting(double!.source), tripwire: { enabled: true } });
     const outcomes: TripwireOutcome[] = [];

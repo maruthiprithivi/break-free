@@ -65,6 +65,18 @@ test("the five questions are the brief's five, one set per hunk", () => {
   }
 });
 
+test("the risk score is the review gate, and the shipped boundary is 3.0", () => {
+  // `risk` alone, with every Noul silent. On real merged diffs this is the ONLY thing that flagged
+  // 13 of 17 false flags, because ordinary code in a real backend scores 2.5-3.1 — which is why the
+  // default moved 2.5 -> 3.0 on that evidence rather than on taste.
+  const c = cfg();
+  const at = (score) => judgeHunk(0, { file: "src/x.ts", header: "@@", lines: [], text: "" }, { h0__risk: { score, confidence: 0.9 } }, c).verdict;
+  assert.equal(at(2.6), "allow", "just over half the scale is not a finding");
+  assert.equal(at(3.0), "review", "3.0 is the gate");
+  assert.equal(at(3.4), "review");
+  assert.equal(at(3.5), "block", "blockRisk, not reviewRisk, is where rejection starts");
+});
+
 test("a clearly weakened test is blocked, not merely reviewed", () => {
   const c = cfg({ tripwire: { blockAt: 0.8 } });
   const v = judgeHunk(0, { file: "test/x.test.ts", header: "@@", lines: [], text: HUNK }, { h0__test_weakened: { noul: 0.96 }, h0__risk: { score: 4, confidence: 0.9 } }, c);

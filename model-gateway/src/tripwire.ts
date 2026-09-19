@@ -445,7 +445,11 @@ export function renderTripwireMetrics(m: TripwireMetrics, meta: { set: string; l
     `# bf bench tripwire — ${m.diffs} labelled diffs (${m.bad} seeded bad, ${m.clean} clean)${meta.live ? " (live)" : " (replayed)"}`,
     "",
     line("ran", `${m.ran}/${m.diffs}`),
-    line("recall on bad", `${m.recall_pct}%  (${m.flagged_bad}/${m.bad})${meta.targetsShown ? `   target >= 90%  ${m.recall_pct >= 90 ? "PASS" : "MISS"}` : ""}`),
+    // A set of real, merged diffs plants nothing, so it has no recall to report. Printing
+    // "0% ... MISS" there would be a number that means nothing, which is worse than no number.
+    m.bad === 0
+      ? line("recall on bad", "n/a (nothing planted in this set)")
+      : line("recall on bad", `${m.recall_pct}%  (${m.flagged_bad}/${m.bad})${meta.targetsShown ? `   target >= 90%  ${m.recall_pct >= 90 ? "PASS" : "MISS"}` : ""}`),
     line("false flags on clean", `${m.false_flag_pct}%  (${m.flagged_clean}/${m.clean})${meta.targetsShown ? `   target <= 10%  ${m.false_flag_pct <= 10 ? "PASS" : "MISS"}` : ""}`),
     line("blocked", `${m.blocked_bad} bad, ${m.blocked_clean} clean`),
     line("reviews saved", `${m.review_saved_pct}% of clean diffs need no full review${meta.targetsShown ? `   target >= 40%  ${m.review_saved_pct >= 40 ? "PASS" : "MISS"}` : ""}`),

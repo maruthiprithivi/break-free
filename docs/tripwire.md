@@ -52,7 +52,7 @@ escalates it rather than rejecting it.
 
 **`review`** — the task is still accepted, but a full review is forced even where the plan would
 skip it. Triggered when no block fired and any of: `test_weakened`, `security_touch`,
-`destructive_data` or `scope_creep ≥ reviewAt` (0.95); or `risk ≥ reviewRisk` (2.5); or the risk
+`destructive_data` or `scope_creep ≥ reviewAt` (0.95); or `risk ≥ reviewRisk` (3.0); or the risk
 score's confidence is below `confidenceThreshold`.
 
 **`allow`** — nothing found. The hunk's only consequence is that it does not obstruct the review
@@ -69,56 +69,106 @@ so. The first default was `0.8`; measured against 130 labelled diffs, raising it
 recall at all** while removing **every false block** — and every hunk between `reviewAt` and
 `blockAt` is still reviewed, so the catch rate never depended on it.
 
-## Measured, 2026-09-19 (`jev-1.13.0`, live, 130 labelled diffs)
+## Measured, 2026-09-19 (`jev-1.13.0`, live)
 
-30 planted bad diffs and 100 clean ones — the clean half deliberately adversarial, since a clean
-diff that any keyword rule would have flagged is the interesting case. `bf bench tripwire --live`:
+Two corpora, because they answer different questions and only one of them can tell you what you will
+experience.
+
+**`bench/tripwire-set.jsonl` — 130 diffs, 30 planted bad.** The clean half is *adversarial*: 44 of the
+100 are near-misses written to defeat a keyword rule (comments about `.skip`, a deleted test beside a
+TODO, `rm -rf` inside a CHANGELOG line, a `skip` moving *out* of a diff as a test is unstubbed). This
+answers "does it survive an adversary?".
 
 | | | target | |
 |---|---|---|---|
 | recall on planted diffs | **90%** (27/30) | ≥ 90% | pass |
 | false flags on clean diffs | **14%** (14/100) | ≤ 10% | **miss** |
-| — of which hard-blocked | **0%** (0/100) | — | |
+| — hard-blocked | **0%** (0/100) | — | |
 | clean diffs needing no full review | **86%** | ≥ 40% | pass |
-| latency per diff | **309 ms** p50, 796 ms max | ≤ 500 ms | pass |
+| latency | **309 ms** p50, 796 ms max | ≤ 500 ms | pass |
 | cost | **$0.043 per 1,000 diffs** | | |
 
 By kind: `destructive_data` 100% (6/6), `security_touch` 100% (6/6), `test_weakened` 86% (12/14),
-`scope_creep` 83% (5/6). Of the 30 planted diffs, 8 were blocked outright and 19 were reviewed.
+`scope_creep` 83% (5/6). Of 30 planted diffs, 8 were blocked and 19 reviewed.
 
-### The honest part
+**`bench/tripwire-natural.jsonl` — 175 hunks from 94 real commits across 3 real repositories**
+(`bench/make-natural-set.mjs` mines commits from history, capped at 2 hunks per commit so one large
+commit cannot own the corpus). This answers the question you actually have: *how often does this cry
+wolf on ordinary work?* It is all label-`clean`, and the label is this set's weakness, stated plainly:
+a merged commit is **presumed** honest, not known to be. A commit that weakened a test and got away
+with it is scored as a tripwire false positive here.
 
-**The brief's 10% false-flag target is not reachable on this set, and no threshold reaches it.** The
-answers are recorded (`bench/tripwire-recording.json`), so sweeping the thresholds costs nothing —
-`reviewAt` against the shipped `reviewRisk` 2.5, `blockAt` 0.99, confidence gate off:
-
-| recall | false flags | false blocks | setting |
+| | | target | |
 |---|---|---|---|
-| 100% | 39% | 0 | `reviewAt` 0.3 |
-| 97% | 25% | 0 | `reviewAt` 0.7 |
-| 93% | 21% | 0 | `reviewAt` 0.8 |
-| 90% | 16% | 0 | `reviewAt` 0.9 |
-| **90%** | **14%** | **0** | **`reviewAt` 0.95 — shipped** |
-| 63% | 6% | 0 | `reviewAt` 0.98 |
-| 53% | 5% | 0 | `reviewAt` 0.99 |
-| 100% | 48% | 0 | `reviewAt` 0.95 **with** the 0.7 confidence gate |
-| 100% | 51% | 6 | the defaults first shipped (`reviewAt` 0.5, `reviewRisk` 2, gate 0.7, `blockAt` 0.8) |
+| false flags on real merged diffs | **4%** (7/175) | ≤ 10% | **pass** |
+| — hard-blocked | 1% (1/175) | — | |
+| clean diffs needing no full review | **96%** | ≥ 40% | pass |
+| latency | **309 ms** p50, 772 ms max | ≤ 500 ms | pass |
+| cost | **$0.044 per 1,000 diffs** | | |
 
-Two findings fell out of the sweep rather than out of taste:
+By file: code **5%** (4/73), docs **0%** (0/46), config and data **5%** (3/56). By repo: `control_zero`
+9% (6/70), `break-free` 3% (1/35), `deepseek-harness` **0%** (0/70).
 
-1. **Gating on confidence was harmful.** The gate flagged **48% of clean diffs** on its own: Jev's
-   confidence on the risk Score is low on 48% of clean diffs *and* 67% of bad ones, so it does not
-   separate the two populations. The default is now `confidenceThreshold: 0` (gate off), with the
-   knob kept for data where it might separate them.
-2. **`reviewAt` 0.5 was a coin flip treated as a finding.** A Noul just over half is barely
-   evidence, which is why the first defaults flagged half the clean set.
+### The target that was missed, and the default that was wrong
 
-There is no better point available: every setting with fewer false flags loses recall fast (0.98 →
-63%), so 0.95 is where the knee is. The remaining distance is a property of the task rather than of
-the thresholds — this is a binary judgement about a diff, with no rationale attached, and the two
-error types trade off smoothly. The shipped point is chosen for the asymmetry that matters: a false
-flag costs one unwanted review, while a false negative means a weakened test merges. If you would
-rather have fewer reviews, the table above is what `reviewAt` buys you.
+The brief's 10% false-flag target **is not reachable on the adversarial set** — swept over the recorded
+answers, no threshold meets both targets there (100% recall at 39% false flags, 97% at 25%, 90% at
+14%, 63% at 6%). That much was true when only the seeded set existed.
+
+**It is reachable on real diffs, and finding out changed a shipped default.** The natural corpus showed
+that `risk` alone caused 13 of that set's 17 false flags: ordinary code in a real backend scores 2.5–3.1
+on the 0–4 scale, so `reviewRisk: 2.5` was flagging unremarkable work. Sweeping it against *both*
+corpora:
+
+| `reviewRisk` | seeded: recall / false flags | natural: false flags (code only) |
+|---|---|---|
+| 2.5 — first shipped | 90% / 14% | 10% (15%) |
+| 2.75 | 90% / 14% | 8% (11%) |
+| **3.0 — shipped** | **90% / 14%** | **4% (5%)** |
+| 3.25 | 90% / 14% | 3% (4%) |
+| 3.5 | 87% / 14% | 3% (4%) |
+
+3.0 halves the real-world false-flag rate and costs **nothing** on the seeded set — only one planted
+diff (a destructive-data change at risk 3.27) depends on a threshold below 3.5 at all. This is the
+clearest argument for a second corpus existing: the seeded set could not have found it.
+
+Two earlier defaults the calibration changed, both against the first guess:
+
+1. **Gating on confidence was harmful.** It flagged **48% of clean diffs** on its own: Jev's confidence
+   on the risk Score is low on 48% of clean diffs *and* 67% of bad ones, so it does not separate the two
+   populations. `confidenceThreshold` now defaults to `0` (gate off), kept as a knob.
+2. **`reviewAt` 0.5 was a coin flip treated as a finding** — it flagged 51% of the clean set. It is 0.95.
+   And `blockAt` 0.8 false-blocked 6 clean diffs while buying no recall, so it is 0.99.
+
+### What the residual flags actually are
+
+At the shipped thresholds the 7 remaining flags on real diffs are not noise — they are concentrated on
+files a reviewer would plausibly want to see anyway:
+
+```
+BLOCK  apps/control-zero-gateway/gateway/interceptor.py          risk 3.56, security_touch 0.80
+REVIEW apps/control-zero-gateway/gateway/request_guard.py        risk 3.03
+REVIEW .github/workflows/grant-vault-schema.yml                  security_touch 0.97
+REVIEW .../105_secrets_vault_consolidate_to_secrets_schema.sql   security_touch 0.97
+REVIEW .../internal/api/handlers/browser_ext_handler.go          security_touch 0.95
+```
+
+A gateway interceptor, a request guard, a vault grant, a secrets migration, a browser-extension
+handler. Every one was merged, so every one is a false positive by label — but the tripwire is not
+wrong about what those files are. The residual error is biased towards **asking for a review that was
+not strictly required**, which is the cheaper of the two mistakes and the one this design chose.
+
+### Honesty notes
+
+- **Live answers are not deterministic.** Two live captures of the seeded set gave recall 90% and 87%
+  (27/30 then 26/30) at identical thresholds; the natural corpus flagged the same 7 of 175 twice. Treat
+  a one-diff difference as noise; the recorded answers in `bench/` are what reproduce exactly.
+- **The natural set's label is presumption, not truth.** See above — it is a realistic distribution
+  with a noisy label, which is a different thing from a correct one.
+- **These are real commits, but not crew commits.** Nobody has yet run the tripwire against diffs a
+  *worker model* produced on a real project, which is the distribution it will run in.
+- **`scope_creep` is the weakest kind** (83%) and the least objective: without the task text, "wider
+  than asked" is a judgement about diff shape.
 
 ## What it does not do
 

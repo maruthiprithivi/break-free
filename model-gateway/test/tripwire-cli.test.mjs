@@ -129,3 +129,28 @@ test("the report shows the targets and names the one it misses", () => {
   // The offline arm has no network, so latency is not a measurement — it must not read like one.
   assert.doesNotMatch(out, /latency\s+p50 3\d\d ms/);
 });
+
+test("a recording recorded against a different set is refused, not scored as zero", () => {
+  // Unanswered rows come back `allow`, so scoring a mismatched recording reports a flawless 0% false
+  // flag rate computed from nothing — the most misleading output this bench can produce.
+  const out = bf(["bench", "tripwire", "--set", path.join(bench, "tripwire-natural.jsonl")], { expectFail: true });
+  assert.match(out, /has no decision for 175 of 175 diffs/);
+  assert.match(out, /Point --record at the matching recording/);
+});
+
+test("on 175 real merged diffs the false-flag target is met, and the set reports no recall", () => {
+  // Real history, mined by bench/make-natural-set.mjs: 94 commits, 3 repos. It plants nothing, so
+  // recall is n/a — reporting "0% recall, MISS" for a set with no bad rows would be a number that
+  // means nothing.
+  const { metrics, meta } = JSON.parse(
+    bf(["bench", "tripwire", "--set", path.join(bench, "tripwire-natural.jsonl"), "--record", path.join(bench, "tripwire-natural-recording.json"), "--json"]),
+  );
+  assert.equal(metrics.diffs, 175);
+  assert.equal(metrics.bad, 0);
+  assert.equal(meta.live, false);
+  assert.equal(metrics.false_flag_pct, 4, "false flags on real merged diffs");
+
+  const text = bf(["bench", "tripwire", "--set", path.join(bench, "tripwire-natural.jsonl"), "--record", path.join(bench, "tripwire-natural-recording.json")]);
+  assert.match(text, /recall on bad {2,}n\/a \(nothing planted in this set\)/);
+  assert.match(text, /false flags on clean\s+4%/);
+});

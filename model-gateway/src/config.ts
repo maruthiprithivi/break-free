@@ -179,8 +179,17 @@ const ConfigSchema = z.object({
        * is where recall on planted diffs is still 90% while false flags fall to 14%.
        */
       reviewAt: z.number().min(0).max(1).default(0.95),
-      /** Risk score at or above which a hunk is sent for a full review. Above 2.5 it changes nothing. */
-      reviewRisk: z.number().min(0).max(4).default(2.5),
+      /**
+       * Risk score at or above which a hunk is sent for a full review.
+       *
+       * 3.0, not the 2.5 the seeded set alone suggested. On a corpus of 175 REAL merged diffs this is
+       * the single biggest lever there is: `risk` caused 13 of the 17 false flags, because ordinary
+       * code in a real backend lands at 2.5-3.1 on the 0-4 scale. Raising it to 3.0 cuts real-diff
+       * false flags 10% -> 4% (code-only 15% -> 5%) while costing NOTHING on the seeded set, whose
+       * recall stays 90%. Only one planted diff (a destructive-data change at risk 3.27) depends on
+       * a threshold below 3.5 at all. See bench/tripwire-results.md.
+       */
+      reviewRisk: z.number().min(0).max(4).default(3.0),
       /**
        * Below this confidence on the risk score, a hunk is reviewed rather than trusted.
        *

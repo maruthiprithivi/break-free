@@ -85,13 +85,14 @@
     "scorecardLines": 3
   },
 
-  "$comment_tripwire": "A sub-second Jev check on what a crew diff actually DOES, run after verify passes: is a hunk weakening a test, destroying data, touching security, or wider than asked? Additive — it can add a review or a block, never remove one. It only runs for paths an action:\"check\" rule matches, so it costs nothing until you scope it. Thresholds are calibrated against bench/tripwire-set.jsonl (130 labelled diffs): recall 90%, false flags 14%, 0 false blocks, 309ms p50, $0.043 per 1,000 diffs. See docs/tripwire.md.",
+  "$comment_tripwire": "A sub-second Jev check on what a crew diff actually DOES, run after verify passes: is a hunk weakening a test, destroying data, touching security, or wider than asked? Additive — it can add a review or a block, never remove one. It only runs for paths an action:\"check\" rule matches, so it costs nothing until you scope it. Thresholds are calibrated against TWO corpora: bench/tripwire-set.jsonl (130 diffs, 30 planted bad, the clean half adversarial -> recall 90%, false flags 14%) and bench/tripwire-natural.jsonl (175 hunks from 94 real merged commits -> false flags 4%, code-only 5%). 309ms p50, $0.043 per 1,000 diffs. See docs/tripwire.md.",
   "tripwire": {
     "enabled": true,
     "blockAt": 0.99,
     "blockRisk": 3.5,
     "reviewAt": 0.95,
-    "reviewRisk": 2.5,
+    "$comment_reviewRisk": "3.0, not 2.5. On real merged diffs `risk` caused 13 of 17 false flags — ordinary backend code scores 2.5-3.1 on the 0-4 scale — so 3.0 halves the real-world false-flag rate (10% -> 4%) at no cost to recall on the seeded set.",
+    "reviewRisk": 3.0,
     "$comment_confidenceThreshold": "0 disables the gate, which is the calibrated default: Jev's confidence on the risk Score is low on 48% of CLEAN diffs and 67% of bad ones, so gating on it flags half the clean set.",
     "confidenceThreshold": 0,
     "$comment_skipPlanReview": "false (default): a clean tripwire does not replace a blanket plan-level review. true lets all three gates clean (no denied path, required checks passed, nothing flagged) stand in for it, and the report says so.",
