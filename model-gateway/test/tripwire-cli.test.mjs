@@ -19,12 +19,12 @@ const configPath = path.join(tmp, "config.json");
 // No `tripwire` block on purpose: the thresholds under test are the shipped defaults.
 fs.writeFileSync(configPath, JSON.stringify({ defaults: { model: "fast" } }));
 
-function bf(args, { expectFail = false } = {}) {
+function bf(args, { expectFail = false, config = configPath } = {}) {
   try {
     const stdout = execFileSync(process.execPath, [cli, ...args], {
       encoding: "utf8",
       cwd: tmp,
-      env: { ...process.env, MODEL_GATEWAY_CONFIG: configPath, TYPESAFE_API_KEY: "" },
+      env: { ...process.env, MODEL_GATEWAY_CONFIG: config, TYPESAFE_API_KEY: "" },
     });
     if (expectFail) throw new Error(`expected a non-zero exit for: bf ${args.join(" ")}`);
     return stdout;
@@ -153,4 +153,18 @@ test("on 175 real merged diffs the false-flag target is met, and the set reports
   const text = bf(["bench", "tripwire", "--set", path.join(bench, "tripwire-natural.jsonl"), "--record", path.join(bench, "tripwire-natural-recording.json")]);
   assert.match(text, /recall on bad {2,}n\/a \(nothing planted in this set\)/);
   assert.match(text, /false flags on clean\s+4%/);
+});
+
+test("a live run with no engine refuses to overwrite the recording", () => {
+  // This one is not hypothetical: a `--live` run on a machine without TYPESAFE_API_KEY wrote 130
+  // rows of zeros over a good recording. The file stays structurally valid, so on replay it reads as
+  // a flawless 0% false-flag rate — evidence destroyed, and the result looks better than before.
+  const barren = path.join(tmp, "no-providers.json");
+  fs.writeFileSync(barren, JSON.stringify({ defaults: { model: "fast" } }));
+  const target = path.join(tmp, "must-not-be-written.json");
+
+  const out = bf(["bench", "tripwire", "--live", "--record", target], { expectFail: true, config: barren });
+  assert.match(out, /ran on only 0 of 130 diffs/);
+  assert.match(out, /TYPESAFE_API_KEY/);
+  assert.equal(fs.existsSync(target), false, "no recording may be written");
 });

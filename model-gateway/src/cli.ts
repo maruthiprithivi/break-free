@@ -408,6 +408,18 @@ async function cmdBenchTripwire(flags: Record<string, string | boolean>): Promis
         };
       }
     }
+    // A live run that did not actually reach an engine must not overwrite a good recording. Without
+    // a key, `runTripwire` returns `ran: false` and the loop still captures a row of ZEROS for each
+    // diff — a structurally valid file recording nothing, which on replay reads as a flawless 0%
+    // false-flag rate. Refuse to write, and do not score.
+    const ranCount = outcomes.filter((o) => o.ran).length;
+    if (live && ranCount < rows.length) {
+      console.error(
+        `the tripwire ran on only ${ranCount} of ${rows.length} diffs — nothing recorded to ${recordFile}.\n` +
+          `  Check the \`typesafe\` provider: it needs TYPESAFE_API_KEY or providers.typesafe.apiKey.`,
+      );
+      return 2;
+    }
     const metrics = scoreTripwire(rows, outcomes);
     if (live && Object.keys(recorded).length) {
       fs.writeFileSync(recordFile, JSON.stringify({ note: "Recorded TypeSafe decisions for bench/tripwire-set.jsonl, captured live. Replayed offline through the real client so `bf bench tripwire` needs no key. Regenerate: bf bench tripwire --live --record bench/tripwire-recording.json", answered_by: "jev", diffs: rows.length, decisions: recorded }, null, 2) + "\n");
