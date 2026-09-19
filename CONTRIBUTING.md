@@ -17,7 +17,7 @@ Fork the repo, make your change on a branch, then open a PR against `main`. In t
 2. **Impact** — who/what it affects and why it is safe: guardrails preserved, no secrets or keys in the repo, backward-compatible or a clean cutover.
 3. **Purpose** — the problem it solves and the motivation; link the issue if there is one.
 
-Keep it focused: one change per PR, the tests that prove it (`cd model-gateway && npm test`, `bash setup/selftest.sh`), and a `CHANGELOG.md` line. A PR that isn't clear on feature / impact / purpose will be asked for it — that's the bar, not bureaucracy.
+Keep it focused: one change per PR, the tests that prove it (`cd model-gateway && npm test`, `bash setup/selftest.sh`), and a `changelog.d/` entry. A PR that isn't clear on feature / impact / purpose will be asked for it — that's the bar, not bureaucracy.
 
 ## Set up
 
@@ -56,7 +56,7 @@ Both must be green before a PR. Neither needs an API key or touches your real `~
 - **Every model-supplied string that reaches `git`, `gh` or the shell is validated** (see `noFlag`, `gitRef`, `enumArg`, `isAllowedCommand`). Never pass one through unchecked.
 - **Untrusted by default:** worker output, worker-written notes, project config from a cloned repo. Widening what any of them can do needs a clear reason in the PR.
 - **One skill body for every harness.** Edit `agent-config/claude/skills/.../SKILL.md` and mirror to `agent-config/codex/skills/...` (the Codex copy is the generic form the other harnesses receive).
-- Add a line to `CHANGELOG.md` under *Unreleased*.
+- Add `changelog.d/<issue>-<slug>.md` with one bullet. Do not edit `CHANGELOG.md` directly — every branch that does conflicts with every other branch that does. See `changelog.d/README.md`.
 
 ## Adding a provider
 
