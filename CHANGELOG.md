@@ -1,5 +1,9 @@
 # Changelog
 
+<!-- Unreleased entries live as one file per change in changelog.d/, so two
+     branches never edit the same block here. scripts/changelog.sh release <version>
+     folds them in. -->
+
 ## 3.7.0 — 2026-09-19
 
 - **Stall detection: liveness measured in tool calls, not wall-clock (#12 Phase 2).** A worker that spins for half an hour without writing a byte was the failure this issue was opened for, and nothing detected it. `src/agent.ts` now tracks `lastToolCallAt`, the tool calls and the files written per task. `workers.stallWarnMs` (default 3 min) emits a repeating progress line and a runtime log entry; `workers.stallAbortMs` (default 10 min) aborts; `workers.stallWarnIterations` (default 4) warns when a write-capable worker has written nothing. `0` disables each. The watchdog is armed for the time **left since the last activity**, so a long-running command earns no extra window and a worker that keeps calling tools is never stalled for taking a long time overall. An abort raises a distinct `StalledError`, so the task dies as `stalled` and never as `failed`: `run_plan` rows carry `stall: {ms_since_tool_call, tool_calls, files_written}`, the report prints `STALLED`, the journal writes `STALLED:`, `delegate` surfaces `ERROR: stalled: …`, and `delegate`/`supervise`/each `run_plan` task take `stall_abort_ms`/`stall_warn_ms` for the per-task escape hatch. Ledger status stays `blocked` rather than gaining a `stalled` value — `TASK_STATUSES` has no member for it and the ledger line names the stall.

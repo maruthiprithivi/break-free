@@ -37,3 +37,8 @@ Thumbs.db
 .vscode/
 *.swp
 .gstack/
+
+# --- firstmate (vendored agent distro, github.com/kunchenguid/firstmate)
+# Cloned, never committed: it is upstream's repository and break-free pulls
+# updates from it rather than forking it.
+.firstmate/
