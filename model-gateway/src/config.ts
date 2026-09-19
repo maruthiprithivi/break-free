@@ -30,6 +30,8 @@ const ProviderConfigSchema = z.object({
   /** Extra JSON merged into every request body (e.g. {"thinking":{"type":"enabled"}}) */
   extraBody: z.record(z.any()).optional(),
   timeoutMs: z.number().int().positive().optional(),
+  /** Context window in tokens. A handover brief handed to this provider is capped to it. */
+  contextTokens: z.number().int().positive().optional(),
   label: z.string().optional(),
 });
 
@@ -117,6 +119,12 @@ const ConfigSchema = z.object({
       maxCommandOutputBytes: z.number().int().positive().default(60_000),
       /** How many workers run_plan may run at once */
       maxConcurrency: z.number().int().positive().default(4),
+      /** Liveness, in ms: with no tool call for this long a worker is warned (progress line + runtime log). 0 disables. */
+      stallWarnMs: z.number().int().min(0).default(180_000),
+      /** Liveness, in ms: with no tool call for this long a worker is aborted as `stalled`. 0 disables. */
+      stallAbortMs: z.number().int().min(0).default(600_000),
+      /** Iterations a write-capable worker may spend without writing a file before it is warned. 0 disables. */
+      stallWarnIterations: z.number().int().min(0).default(4),
       mcp: z
         .object({
           /** Servers the gateway may bridge to workers, in addition to discovered ones */

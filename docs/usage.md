@@ -182,6 +182,43 @@ Pass allow_downgrade:true to use them anyway, or min_tier to move the floor.
 
 Per call, `delegate`, `supervise` and each `run_plan` task take `min_tier` (move the floor: `1` accepts anything, `3` demands frontier) and `allow_downgrade` (drop the floor once everything above it has failed). Globally, `fallback.minTier` pins one floor for every call and `fallback.allowDowngrade` restores the old permissive behaviour. A downgrade that does happen is reported rather than silent: `meta` carries `requested_model`, `tier` and `downgraded`, and `run_plan` prints `route: strong -> ollama/qwen3-coder:30b (auth) [tier 3 -> 1]`. Falling back within a tier is not a downgrade and stays quiet.
 
+## Handover briefs: a substitute gets the task, not the transcript
+
+A fallback is a _different model_ finishing the work, not the same model on another host. Replaying the conversation into it hands it a transcript written for another context window, in another tool-calling dialect — and the files already written are not in the transcript at all, so the substitute starts by rediscovering what the previous one already did.
+
+So when the router substitutes a model, the substitute is handed a **brief** built from the task instead:
+
+```
+## Handover brief
+
+This task is being handed from `mockbad/tooly` to `mock2/tooly` after `auth` failed. The
+previous transcript is NOT replayed: it was built for another context window and another
+tool-calling dialect. Work from this brief. 4 earlier message(s) were dropped.
+
+### Files already touched
+- src/limiter.js
+
+### Instruction
+Write the limiter.
+…
+```
+
+What goes in it: the instruction, the acceptance criteria, the files touched so far (from the same tree snapshot the policy review uses, minus the gateway's own `.break-free/` bookkeeping), and the last gateway verification result — so a substitute does not have to take the previous model's word that the suite was green.
+
+The brief is capped to the target model's context window: `providers.<name>.contextTokens` when set, 8192 tokens otherwise. The brief may use half of it, because the worker still needs room for its own turns; the header and the files list are always kept, and the instruction, acceptance criteria and verification output are cut from the end to fit. The handover is recorded where a later reader will find it — `meta.handovers` on the call, a `handover <from> -> <to> … · brief <n>/<window> tokens` line in the ledger journal, and the same line in the `run_plan` task's ledger entry — and `run_plan` prints a progress line as it happens.
+
+A brief is prepared before the first request, not after the substitution is discovered: the router picks the candidate inside the call, so a brief built later would only reach a substitute that came back for a second turn — and the case this exists for is the substitute that answers once and stops.
+
+## Liveness: a worker that stops calling tools
+
+A worker that reads for thirty minutes and writes nothing looks exactly like one making progress, because nothing was measuring observable work. A tool call is the only evidence there is, so the gateway now tracks, per task, `lastToolCallAt`, the tool calls made and the files written:
+
+- `workers.stallWarnMs` (default 180000) — no tool call for this long emits a progress line, and keeps emitting one for as long as the silence lasts.
+- `workers.stallAbortMs` (default 600000) — no tool call for this long **aborts** the task. The result status is `stalled`, not `failed`: a stalled task is neither a slow model nor a failed verification, and `run_plan` reports it as `STALLED`, records `stall: { ms_since_tool_call, tool_calls, files_written }` on the result row, and writes `stalled: no tool call for …` to the task's ledger log.
+- `workers.stallWarnIterations` (default 4) — a `write`-capable worker that has written no file after this many iterations is warned, once.
+
+`0` disables any of the three. `delegate`, `supervise` and each `run_plan` task also take `stall_abort_ms` / `stall_warn_ms` per call, which is how you give one deliberately long task a wider window without loosening the default for everything else. The clock measures the silence _between tool calls_, not the run: a worker that keeps calling tools is never stalled, however long it takes. Every trip is in the runtime log as `worker.stall` (`reason: idle | no-writes | abort`).
+
 ## Project modes
 
 One named mode derives the git and GitHub policy, instead of setting three flags and hoping they agree:

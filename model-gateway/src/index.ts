@@ -204,6 +204,13 @@ const AllowDowngradeSchema = z.boolean().optional().describe(
   "Permit falling below the floor once every candidate at or above it has failed. Default: config.fallback.allowDowngrade.",
 );
 
+const StallAbortMsSchema = z.number().int().min(0).optional().describe(
+  "Abort this worker as `stalled` after this many ms with no tool call (a worker that reads for ten minutes and writes nothing is not working). 0 disables. Default: config.workers.stallAbortMs (600000).",
+);
+const StallWarnMsSchema = z.number().int().min(0).optional().describe(
+  "Emit a progress line after this many ms with no tool call, before the abort. 0 disables. Default: config.workers.stallWarnMs (180000).",
+);
+
 const ShapeSchema = z.enum(["ship", "scout"]).optional().describe(
   "Task shape: 'ship' uses the requested capabilities (default); 'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
 );
@@ -529,6 +536,8 @@ server.registerTool("delegate", {
     shape: ShapeSchema,
     min_tier: MinTierSchema,
     allow_downgrade: AllowDowngradeSchema,
+    stall_abort_ms: StallAbortMsSchema,
+    stall_warn_ms: StallWarnMsSchema,
     context: z.string().optional().describe("Background the worker needs (design notes, relevant snippets, prior decisions)"),
     role: z.string().optional().describe("Persona, e.g. 'security engineer', 'technical writer'"),
     instructions: z.string().optional().describe("Extra standing rules appended to the system prompt"),
@@ -610,6 +619,8 @@ server.registerTool("supervise", {
     shape: ShapeSchema,
     min_tier: MinTierSchema,
     allow_downgrade: AllowDowngradeSchema,
+    stall_abort_ms: StallAbortMsSchema,
+    stall_warn_ms: StallWarnMsSchema,
     acceptance_criteria: z.string().optional(),
     context: z.string().optional(),
     session_id: z.string().optional(),
@@ -706,6 +717,8 @@ const PlanTaskSchema = z.object({
   review: z.boolean().optional().describe("Independent review of this task's result (overrides plan-level review)"),
   session_id: z.string().optional(),
   max_iterations: z.number().int().positive().optional(),
+  stall_abort_ms: StallAbortMsSchema,
+  stall_warn_ms: StallWarnMsSchema,
 });
 
 server.registerTool("run_plan", {
