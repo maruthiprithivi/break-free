@@ -91,6 +91,20 @@ export const PROVIDER_CATALOG: Record<string, ProviderDefaults> = {
     supportsTools: true,
     docs: "https://platform.minimax.io/",
   },
+  gemini: {
+    label: "Google Gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    keyEnv: "GEMINI_API_KEY",
+    requiresKey: true,
+    defaultModel: "gemini-3.1-pro-preview",
+    knownModels: ["gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],
+    supportsTools: true,
+    docs: "https://aistudio.google.com/apikey",
+    notes:
+      "Google's OpenAI-compatibility layer, so the same client works: model ids are the bare names (`gemini-3.1-pro-preview`), not the `models/`-prefixed ids the native API lists. " +
+      "The `gemini-2.5-*` ids are retired for new accounts (404). The pro and `-latest` tiers are reasoning models that spend output tokens thinking BEFORE answering, so a small `max_tokens` returns empty content with `finish_reason: length` — tools still work, the budget just ran out first. " +
+      "`bf bench route` uses this provider for the frontier-LLM-as-router baseline (criterion 11).",
+  },
   zai: {
     label: "Z.AI (GLM)",
     baseUrl: "https://api.z.ai/api/paas/v4",
