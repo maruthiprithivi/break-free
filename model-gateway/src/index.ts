@@ -22,7 +22,7 @@ import fs from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import { loadConfig, listProviderNames, priceFor, redactKey, resolveProvider, saveConfigPatch, FALLBACK_REASONS, type GatewayConfig, type LoadedConfig } from "./config.js";
+import { loadConfig, listProviderNames, priceFor, costUsd, redactKey, resolveProvider, saveConfigPatch, FALLBACK_REASONS, type GatewayConfig, type LoadedConfig } from "./config.js";
 import { chatCompletion, listRemoteModels } from "./client.js";
 import { parseSpec, resolveCandidates } from "./router.js";
 import { Workspace, CAPABILITIES } from "./workspace.js";
@@ -234,6 +234,7 @@ function providerReport(name: string) {
     reason: p.unusableReason ?? null,
     base_url: p.baseUrl,
     api_key: p.requiresKey ? redactKey(p.apiKey) : p.apiKey ? redactKey(p.apiKey) : "(not required)",
+    requires_key: p.requiresKey,
     key_env: p.keyEnv,
     default_model: p.defaultModel,
     kind: p.kind,
@@ -375,6 +376,12 @@ server.registerTool("test_provider", {
       // and, when it runs out anyway, say THAT rather than blaming the tools.
       const r = await chatCompletion(c.provider, { model: c.model, messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 512, temperature: 0 }, { timeoutMs: 60_000 });
       const reply = (r.message.content ?? "").trim();
+      // A probe is a real, billable request, so it is priced like any other call. Logging it without a
+      // cost is the same silent $0 as an unpriced model (#26): the report counted the call and charged
+      // nothing for it, and a probe on an unpriced model was not flagged either.
+      const replyCost = costUsd(ctx.config, c.provider.name, c.model, r.usage);
+      let probeUsd = replyCost.usd;
+      let probePriced = replyCost.priced;
       const row: Record<string, unknown> = {
         spec: c.spec,
         ok: true,
@@ -392,6 +399,9 @@ server.registerTool("test_provider", {
             max_tokens: 2048,
             temperature: 0,
           }, { timeoutMs: 60_000 });
+          const toolCost = costUsd(ctx.config, c.provider.name, c.model, t.usage);
+          probeUsd += toolCost.usd;
+          probePriced = probePriced && toolCost.priced;
           row.tool_calling = t.message.tool_calls?.length
             ? "ok"
             : t.finishReason === "length"
@@ -401,8 +411,10 @@ server.registerTool("test_provider", {
           row.tool_calling = `error: ${(e as Error).message.slice(0, 200)}`;
         }
       }
+      row.cost_usd = Math.round(probeUsd * 1e6) / 1e6;
+      row.priced = probePriced;
       results.push(row);
-      rlog("route.attempt", { spec: c.spec, ok: true, ms: row.ms, probe: true, tool_calling: row.tool_calling });
+      rlog("route.attempt", { spec: c.spec, ok: true, ms: row.ms, probe: true, cost_usd: row.cost_usd, priced: row.priced, tool_calling: row.tool_calling });
     } catch (e) {
       const err = e as { reason?: string; status?: number; message: string };
       results.push({ spec: c.spec, ok: false, ms: Date.now() - started, error: err.message.slice(0, 500) });
@@ -896,11 +908,18 @@ server.registerTool("note_review", {
  * What routing saved in the window: the same token usage replayed at the `strong` alias's list
  * price, minus what the routing calls themselves cost. This is an estimate of what these exact
  * calls would have cost on strong — it is not a re-run, and it ignores cache and context reuse.
+ *
+ * A call whose model has no entry in the price table logs `cost_usd: 0`, so an `actual` built from
+ * those calls is understated and the saving computed against it is inflated — a wrong number
+ * pointing the direction this project wants it to point (#26). Unpriced calls are therefore named,
+ * and the estimate is refused rather than reported with a number nobody can trust. A declared zero
+ * is not a gap: price a local endpoint `{input:0,output:0}` and it counts as priced.
  */
 function routingSavings(config: GatewayConfig, crewEvents: LogEvent[], since: string) {
   const strongCand = resolveCandidates(config, "strong", { useGlobalChain: false })[0];
   const routePlans = logger?.tail(50_000, (e) => e.kind === "route.plan" && String(e.ts) >= since) ?? [];
-  const routingUsd = (logger?.tail(50_000, (e) => e.kind === "route.decision" && String(e.ts) >= since) ?? []).reduce((a, e) => a + Number(e.cost_usd ?? 0), 0);
+  const decisionEvents = logger?.tail(50_000, (e) => e.kind === "route.decision" && String(e.ts) >= since) ?? [];
+  const routingUsd = decisionEvents.reduce((a, e) => a + Number(e.cost_usd ?? 0), 0);
   const latencies = routePlans.map((e) => Number(e.ms ?? 0)).filter((n) => n > 0).sort((a, b) => a - b);
   const tasks = routePlans.reduce((a, e) => a + Number(e.tasks ?? 0), 0);
   const escalations = routePlans.reduce((a, e) => a + Number(e.escalations ?? 0), 0);
@@ -913,10 +932,26 @@ function routingSavings(config: GatewayConfig, crewEvents: LogEvent[], since: st
     ms_max: latencies.length ? latencies[latencies.length - 1] : null,
     usd: Math.round(routingUsd * 1e6) / 1e6,
   };
+  // Both halves of the saving depend on prices: `actual` on the crew calls, `net_saved_usd` on the
+  // routing calls. Either side unpriced makes the number unusable, so both are checked.
+  const unpricedEvents = [...crewEvents, ...decisionEvents].filter((e) => e.priced === false);
+  const unpricedSpecs = [...new Set(unpricedEvents.map((e) => String(e.spec ?? "?")))].sort();
+  const unpriced = { unpriced_calls: unpricedEvents.length, unpriced_specs: unpricedSpecs };
   if (!strongCand) {
-    return { measured: false, reason: "the `strong` alias resolves to no usable candidate — add one to aliases.strong to enable the replay estimate", routing };
+    return { measured: false, ...unpriced, reason: "the `strong` alias resolves to no usable candidate — add one to aliases.strong to enable the replay estimate", routing };
   }
   const price = priceFor(config, strongCand.provider.name, strongCand.model);
+  if (!price.priced) {
+    return { measured: false, ...unpriced, reason: `the \`strong\` alias resolves to ${strongCand.spec}, which has no entry in the price table, so there is no list price to replay at — add one with configure_budget {pricing:{"${strongCand.spec}":{input,output}}}`, routing };
+  }
+  if (unpriced.unpriced_calls) {
+    return {
+      measured: false,
+      ...unpriced,
+      reason: `${unpriced.unpriced_calls} call(s) in this window have no entry in the price table (${unpricedSpecs.join(", ")}), so they contribute $0 by table gap rather than by real saving; replaying that understated actual at strong's price would report an inflated saving. Add the rates with configure_budget {pricing:{"<provider>/<model>":{input,output}}} — {input:0,output:0} for a local endpoint that really is free — or stop routing to those models.`,
+      routing,
+    };
+  }
   let actual = 0;
   let replay = 0;
   let tokensIn = 0;
@@ -934,6 +969,8 @@ function routingSavings(config: GatewayConfig, crewEvents: LogEvent[], since: st
   const saved = replay - actual;
   return {
     measured: true,
+    unpriced_calls: 0,
+    unpriced_specs: [],
     actual_crew_usd: r6(actual),
     all_strong_replay_usd: r6(replay),
     saved_usd: r6(saved),
@@ -956,20 +993,51 @@ server.registerTool("cost_report", {
   if (!logger) return json({ enabled: false });
   const since = new Date(Date.now() - (days ?? 7) * 86_400_000).toISOString();
   const events = logger.tail(50_000, (e) => e.kind === "route.attempt" && !!e.ok && String(e.ts) >= since);
-  const byDay: Record<string, number> = {}, byProvider: Record<string, { usd: number; calls: number; tokens_in: number; tokens_out: number }> = {}, byModel: Record<string, number> = {};
-  let unpriced = 0;
+  const byDay: Record<string, number> = {}, byProvider: Record<string, { usd: number; calls: number; tokens_in: number; tokens_out: number; unpriced_calls: number; usd_is_lower_bound?: true; note?: string }> = {}, byModel: Record<string, number> = {};
+  const unpricedBySpec: Record<string, number> = {};
   for (const e of events) {
     const c = Number(e.cost_usd ?? 0); const day = String(e.ts).slice(0, 10); const spec = String(e.spec ?? "?"); const prov = spec.split("/")[0];
     byDay[day] = (byDay[day] ?? 0) + c; byModel[spec] = (byModel[spec] ?? 0) + c;
-    const p = (byProvider[prov] ??= { usd: 0, calls: 0, tokens_in: 0, tokens_out: 0 });
+    const p = (byProvider[prov] ??= { usd: 0, calls: 0, tokens_in: 0, tokens_out: 0, unpriced_calls: 0 });
     const u = e.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
     p.usd += c; p.calls++; p.tokens_in += u?.prompt_tokens ?? 0; p.tokens_out += u?.completion_tokens ?? 0;
-    if (e.priced === false) unpriced++;
+    // An unpriced call logs cost_usd 0, which is not the same claim as "free": the zero is a table
+    // gap. Name the spec so the gap is attributable instead of quietly flattering the total (#26).
+    if (e.priced === false) { p.unpriced_calls++; unpricedBySpec[spec] = (unpricedBySpec[spec] ?? 0) + 1; }
   }
+  const unpriced = Object.values(unpricedBySpec).reduce((a, b) => a + b, 0);
   const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
   const today = ctx.spentTodayUsd();
   const cap = ctx.config.budget.perDayUsd;
-  return json({ window_days: days ?? 7, total_usd: r6(Object.values(byDay).reduce((a, b) => a + b, 0)), by_day: Object.fromEntries(Object.entries(byDay).sort().map(([k, v]) => [k, r6(v)])), by_provider: Object.fromEntries(Object.entries(byProvider).map(([k, v]) => [k, { ...v, usd: r6(v.usd) }])), by_model: Object.fromEntries(Object.entries(byModel).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, r6(v)])), today_usd: today, budget: ctx.config.budget, today_vs_day_cap: cap ? `${Math.round((today / cap) * 100)}%${today / cap >= ctx.config.budget.warnAt ? " — WARNING" : ""}` : "no daily cap", unpriced_calls: unpriced, routing_savings: routingSavings(ctx.config, events, since), pricing_note: "list prices from DEFAULT_PRICING merged with config.pricing; set pricing[\"provider/model\"] = {input, output} USD per 1M tokens to correct them. Unknown models are reported as unpriced." });
+  // `spentTodayUsd` sums the same cost_usd fields, so today's figure shares the gap — and it is what
+  // the day cap is compared against. Say so where the cap is reported, or the cap looks like it is
+  // holding while an unpriced arm spends without moving it.
+  const todayUnpriced = logger.tail(20_000, (e) => e.kind === "route.attempt" && !!e.ok && String(e.ts).startsWith(new Date().toISOString().slice(0, 10)) && e.priced === false).length;
+  const providers = Object.fromEntries(Object.entries(byProvider).map(([k, v]) => [
+    k,
+    { ...v, usd: r6(v.usd), ...(v.unpriced_calls ? { usd_is_lower_bound: true as const, note: `UNPRICED — ${v.unpriced_calls} of ${v.calls} call(s) have no entry in the price table, so this usd is a lower bound` } : {}) },
+  ]));
+  return json({
+    window_days: days ?? 7,
+    total_usd: r6(Object.values(byDay).reduce((a, b) => a + b, 0)),
+    total_usd_is_lower_bound: unpriced > 0,
+    by_day: Object.fromEntries(Object.entries(byDay).sort().map(([k, v]) => [k, r6(v)])),
+    by_provider: providers,
+    by_model: Object.fromEntries(Object.entries(byModel).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, r6(v)])),
+    today_usd: today,
+    budget: ctx.config.budget,
+    today_vs_day_cap: cap
+      ? `${Math.round((today / cap) * 100)}%${today / cap >= ctx.config.budget.warnAt ? " — WARNING" : ""}${todayUnpriced ? ` — lower bound: ${todayUnpriced} unpriced call(s) today are not counted in it` : ""}`
+      : "no daily cap",
+    unpriced_calls: unpriced,
+    unpriced: {
+      calls: unpriced,
+      by_spec: unpricedBySpec,
+      note: unpriced ? `UNPRICED — no entry in the price table for ${Object.keys(unpricedBySpec).sort().join(", ")}, so their spend is $0 by table gap, not by measurement; every total above that includes them is a lower bound` : null,
+    },
+    routing_savings: routingSavings(ctx.config, events, since),
+    pricing_note: "list prices from DEFAULT_PRICING merged with config.pricing; set pricing[\"provider/model\"] = {input, output} USD per 1M tokens to correct them. A model with no entry contributes $0 and is listed under `unpriced` — that is a gap in the table, not a saving.",
+  });
 });
 server.registerTool("configure_budget", {
   title: "Set spend caps and prices",
@@ -986,7 +1054,18 @@ server.registerTool("configure_budget", {
     const target = targetFor(a.scope);
     saveConfigPatch(target, { ...(Object.keys(b).length ? { budget: b } : {}), ...(a.pricing ? { pricing: a.pricing } : {}) });
     ctx = reload();
-    return json({ saved_to: target, budget: ctx.config.budget, pricing_overrides: ctx.config.pricing, defaults_known: Object.keys(DEFAULT_PRICING).length });
+    // Prices are set here, so this is where a gap should surface: name the alias candidates that
+    // have no entry, since those are the calls that would report $0 and make a cost report a lower
+    // bound (#26) rather than a measurement.
+    const unpricedCandidates = [...new Set(Object.values(ctx.config.aliases).flatMap((v) => (Array.isArray(v) ? v : v.candidates)))]
+      // A crew alias names another alias ("ensign" -> "fast"); the chain it points at is checked
+      // through that alias's own entry, so reporting the name again would just be noise.
+      .filter((spec) => !ctx.config.aliases[spec])
+      .filter((spec) => {
+        const c = resolveCandidates(ctx.config, spec, { useGlobalChain: false })[0];
+        return !!c && !priceFor(ctx.config, c.provider.name, c.model).priced;
+      });
+    return json({ saved_to: target, budget: ctx.config.budget, pricing_overrides: ctx.config.pricing, defaults_known: Object.keys(DEFAULT_PRICING).length, unpriced_candidates: unpricedCandidates });
   } catch (e) { return fail(e); }
 });
 

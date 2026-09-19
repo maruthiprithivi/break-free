@@ -42,6 +42,11 @@ async function startGateway(over = {}) {
       fallback: { chain: ["mock/good"], retriesPerCandidate: 0, retryDelayMs: 0 },
       providers: { mock: { baseUrl: `http://127.0.0.1:${mock.port}/v1`, apiKey: "test-key" }, typesafe: { baseUrl: double.url, apiKey: "test-key" } },
       aliases: { fast: ["mock/good"], strong: ["mock/strong"], local: ["mock/local"], thinker: ["mock/thinker"], reviewer: ["mock/good"] },
+      // The mock arms must be PRICED here: an unpriced arm logs cost_usd 0, and `routing_savings`
+      // now refuses to report a saving computed across one (#26) instead of printing an inflated
+      // percentage — so without these entries this file's replay test would be testing that refusal
+      // rather than the replay it is about.
+      pricing: { mock: { input: 100, output: 100 } },
       routing: { engine: "jev", threshold: 0.7, retries: 1, retryDelayMs: 0, laneMap: LANE_MODEL },
       workers: { allowedCommands: ["node"], maxConcurrency: 2, projectInstructions: false },
       ...over,
