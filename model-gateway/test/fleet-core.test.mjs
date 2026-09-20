@@ -138,3 +138,59 @@ test("drainTo never rewinds the cursor", () => {
   drainTo(sessionDir, 1);
   assert.deepEqual(pendingEvents(sessionDir), []);
 });
+
+// --- one queue, many workspaces -------------------------------------------------
+// A run_plan that finished in one repository once blocked a turn in an unrelated one,
+// because the queue and its single integer cursor are shared by every workspace on the
+// machine. These pin the fix, including the upgrade from that single integer.
+
+const ev = (id, kind = "job.done") => ({ ts: t(1), kind, id, reason: "done" });
+
+test("an event from another workspace does not block this one", () => {
+  appendEvents(sessionDir, [ev("job-a")], "/repo/a");
+  appendEvents(sessionDir, [ev("job-b")], "/repo/b");
+
+  assert.deepEqual(pendingEvents(sessionDir, "/repo/a").map((e) => e.id), ["job-a"]);
+  assert.deepEqual(pendingEvents(sessionDir, "/repo/b").map((e) => e.id), ["job-b"]);
+  // Asking without a workspace still sees everything, for a machine-wide look.
+  assert.deepEqual(pendingEvents(sessionDir).map((e) => e.id), ["job-a", "job-b"]);
+});
+
+test("draining one workspace leaves another's events pending", () => {
+  const [a] = appendEvents(sessionDir, [ev("job-a")], "/repo/a");
+  appendEvents(sessionDir, [ev("job-b")], "/repo/b");
+
+  drainTo(sessionDir, a.seq, "/repo/a");
+  assert.deepEqual(pendingEvents(sessionDir, "/repo/a"), [], "the workspace that drained sees nothing");
+  assert.deepEqual(pendingEvents(sessionDir, "/repo/b").map((e) => e.id), ["job-b"], "and the other one has not lost its event");
+
+  // Draining past another workspace's event must not drain it: b's cursor is its own.
+  drainTo(sessionDir, 99, "/repo/a");
+  assert.deepEqual(pendingEvents(sessionDir, "/repo/b").map((e) => e.id), ["job-b"]);
+});
+
+test("an event with no workspace belongs to nobody, so anyone can see and drain it", () => {
+  // Rows written before the queue knew about workspaces. They must not become permanently
+  // blocking events that no session will admit to owning.
+  const [legacy] = appendEvents(sessionDir, [ev("legacy")]);
+  assert.deepEqual(pendingEvents(sessionDir, "/repo/a").map((e) => e.id), ["legacy"]);
+  assert.deepEqual(pendingEvents(sessionDir, "/repo/b").map((e) => e.id), ["legacy"]);
+  drainTo(sessionDir, legacy.seq, "/repo/a");
+  assert.deepEqual(pendingEvents(sessionDir, "/repo/a"), []);
+});
+
+test("a cursor file still holding a bare integer is a baseline for every workspace", () => {
+  appendEvents(sessionDir, [ev("old-1")], "/repo/a");
+  appendEvents(sessionDir, [ev("old-2")], "/repo/b");
+  const [fresh] = appendEvents(sessionDir, [ev("new")], "/repo/a");
+
+  // Simulate the pre-upgrade file: one integer, everything up to it already drained.
+  fs.writeFileSync(path.join(fleetDir(sessionDir), "cursor"), "2");
+
+  assert.deepEqual(pendingEvents(sessionDir, "/repo/a").map((e) => e.id), ["new"], "upgrading must not re-emit what was already drained");
+  assert.deepEqual(pendingEvents(sessionDir, "/repo/b"), [], "the baseline applies to every workspace, not just the first to ask");
+
+  // And the baseline is never rewound by a later per-workspace drain.
+  drainTo(sessionDir, fresh.seq, "/repo/a");
+  assert.deepEqual(pendingEvents(sessionDir, "/repo/b"), []);
+});

@@ -144,7 +144,7 @@ async function ghJson(args: string[]): Promise<unknown | undefined> {
  * an unverifiable run must not be able to wedge a session.
  */
 async function reconcileCi(sessionDir: string): Promise<void> {
-  const shas = [...new Set(pendingEvents(sessionDir).filter((e) => e.kind === "ci.pending").map((e) => e.ci?.sha).filter((x): x is string => !!x))];
+  const shas = [...new Set(pendingEvents(sessionDir, ctx.workspace.root).filter((e) => e.kind === "ci.pending").map((e) => e.ci?.sha).filter((x): x is string => !!x))];
   if (!shas.length) return;
 
   expireCi(sessionDir, Date.now(), ctx.config.fleet.ciTimeoutMs);
@@ -183,10 +183,10 @@ async function fleetCheck(): Promise<{ running: { jobs: number; harness: number 
   const sessionDir = ctx.config.sessionDir!;
   const prev = readSnapshot(sessionDir);
   const next = await buildFleetSnapshot(prev);
-  appendEvents(sessionDir, classify(prev, next, ctx.config.fleet.idleMs));
+  appendEvents(sessionDir, classify(prev, next, ctx.config.fleet.idleMs), ctx.workspace.root);
   writeSnapshot(sessionDir, next);
   await reconcileCi(sessionDir);
-  const pending = pendingEvents(sessionDir);
+  const pending = pendingEvents(sessionDir, ctx.workspace.root);
   const running = {
     jobs: Object.values(next.jobs).filter((s) => s === "running").length,
     harness: Object.values(next.harness).filter((h) => h.state === "running").length,
@@ -822,7 +822,7 @@ server.registerTool("fleet_status", {
   const res = await fleetCheck();
   if (drain && res.pending.length > 0) {
     const highest = res.pending.reduce((max, e) => Math.max(max, e.seq), 0);
-    drainTo(ctx.config.sessionDir!, highest);
+    drainTo(ctx.config.sessionDir!, highest, ctx.workspace.root);
   }
   return json(res);
 });
@@ -1470,8 +1470,10 @@ async function main() {
           for (const f of ciFailed) parts.push(`CI FAILED on ${(f.ci?.sha ?? f.id).slice(0, 7)}${f.ci?.job ? ` (${f.ci.job})` : ""}${f.ci?.url ? ` - ${f.ci.url}` : ""}`);
           for (const p of ciPending) parts.push(`CI pending on ${(p.ci?.sha ?? p.id).slice(0, 7)}`);
           if (res.running.jobs > 0) parts.push(`${res.running.jobs} job(s) running`);
-          const other = res.pending.length - ciFailed.length - ciPending.length;
-          if (other > 0) parts.push(`${other} event(s) pending`);
+          // "1 event(s) pending" leaves the reader to grep a log to find out whether they
+          // should care. Name what it is, so the answer is in the message.
+          const rest = res.pending.filter((e) => e.kind !== "ci.failed" && e.kind !== "ci.pending");
+          if (rest.length > 0) parts.push(rest.slice(0, 3).map((e) => `${e.kind} ${e.id}`).join(", ") + (rest.length > 3 ? ` and ${rest.length - 3} more` : ""));
           const reason = `${parts.join(", ")} - ${ciFailed.length ? "fix it before ending the turn" : "call fleet_status to collect them"}`;
           console.log(JSON.stringify({ decision: "block", reason }));
         }
