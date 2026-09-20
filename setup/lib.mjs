@@ -165,7 +165,16 @@ export const home = () => process.env.MODEL_GATEWAY_HOME_OVERRIDE ?? os.homedir(
 export const expandHome = (p) => (p.startsWith("~") ? path.join(home(), p.slice(1)) : p);
 
 export function readJsonSafe(file) {
-  try { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : undefined; } catch (e) { return { __error: e.message }; }
+  try {
+    if (!fs.existsSync(file)) return undefined;
+    const raw = fs.readFileSync(file, "utf8");
+    // An empty file holds no configuration, so it is not corruption. Callers refuse to
+    // overwrite a file they cannot parse — right for one with real content in it, since
+    // clobbering someone's registrations is far worse than a failed step. For zero bytes
+    // that caution protects nothing and fails the install instead.
+    if (!raw.trim()) return {};
+    return JSON.parse(raw);
+  } catch (e) { return { __error: e.message }; }
 }
 export function writeSecret(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });

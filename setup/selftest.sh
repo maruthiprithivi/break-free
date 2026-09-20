@@ -51,6 +51,10 @@ cat > "$T/answers.json" <<EOF
   "ollama_enabled": false, "vllm_enabled": false, "fallback_chain": "deepseek/good", "skip_tests": false, "github_flow": "full", "harness_profiles": true, "harness_shell_rc": true }
 EOF
 
+# An agent config that exists but is EMPTY. Zero bytes is not corruption: there is no
+# configuration there to lose, so the install must seed it rather than refuse and go RED.
+mkdir -p "$T/home/.gemini/config" && : > "$T/home/.gemini/config/mcp_config.json"
+
 REAL_GIT="$(command -v git)"
 export MODEL_GATEWAY_HOME_OVERRIDE="$T/home" PATH="$T/bin:$PATH" NO_COLOR=1
 fail() { echo "SELFTEST FAIL: $1" >&2; exit 1; }
@@ -76,6 +80,8 @@ node "$ROOT/setup.mjs" --answers "$T/answers.json" > "$T/install.out" 2>&1 || fa
 grep -q "MCP handshake ok" "$T/install.out" || fail "no MCP handshake"
 grep -q "through MCP: deepseek/good" "$T/install.out" || fail "provider call through MCP failed"
 grep -q "GREEN" "$T/install.out" || fail "not GREEN"
+grep -q "is not valid JSON" "$T/install.out" && fail "an empty (0-byte) agent config was treated as corrupt"
+node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if(!j.mcpServers["break-free-gateway"])process.exit(1)' "$T/home/.gemini/config/mcp_config.json" || fail "empty agy mcp_config.json was not seeded with the server"
 grep -q "PASS  self-tests" "$T/install.out" || fail "self-tests step did not pass (see $T/install.out)"
 [ -f "$T/home/.claude/skills/break-free-model-gateway/SKILL.md" ] || fail "claude user skill missing"
 [ ! -d "$T/home/.claude/skills/model-gateway" ] || fail "legacy claude skill not removed"
