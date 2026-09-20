@@ -108,6 +108,8 @@ const ConfigSchema = z.object({
       root: z.string().optional(),
       /** The commit this machine is pinned to. Absent means unpinned, which is not a default. */
       pin: z.string().optional(),
+      /** Harness for `bf firstmate`. Default: the one running this session, then what the install wired. */
+      harness: z.string().optional(),
     })
     .default({}),
   /** What break-free may charge a session before any work happens. */

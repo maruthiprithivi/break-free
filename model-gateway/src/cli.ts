@@ -907,7 +907,19 @@ async function cmdFirstmate(flags: Record<string, string | boolean>): Promise<nu
     }
     return false;
   };
+  // Which harnesses the install actually wired, so a machine with three installed still gets
+  // the one the user chose to use with break-free.
+  const wired: string[] = [];
+  try {
+    const st = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".config", "model-gateway", "last-install.json"), "utf8"));
+    if (st.claude_scope && st.claude_scope !== "none") wired.push("claude");
+    if (st.codex_scope && st.codex_scope !== "none") wired.push("codex");
+    for (const e of st.extra_agents ?? []) if (e === "opencode" || e === "pi" || e === "omp" || e === "cursor") wired.push(e === "cursor" ? "cursor-agent" : e);
+  } catch { /* no install state: fall through to what is on PATH */ }
+
   const plan = planLaunch(cfg.firstmate, {
+    configured: cfg.firstmate.harness,
+    wired,
     harness: typeof flags.harness === "string" ? flags.harness : undefined,
     task: typeof flags.task === "string" ? flags.task : undefined,
     fmHome: typeof flags["fm-home"] === "string" ? (flags["fm-home"] as string) : undefined,
