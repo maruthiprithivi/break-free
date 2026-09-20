@@ -133,3 +133,20 @@ Update to the latest Break Free at any time by running `node <source_dir>/setup.
 ## Arguments
 
 `$break-free-model-gateway <mode> <task>`: `$0` is the mode (`delegate`, `plan`, `review`, `panel`, `supervise`, `resume`; default `plan` for multi-part work, `delegate` otherwise), the rest is the task.
+
+## Finding a tool that is not listed
+
+break-free advertises execution and its lifecycle permanently — `delegate`, `run_plan`,
+`supervise`, `review`, the `job_*` tools, `ledger_resume`, `list_models`. Everything else named
+in this skill — worktrees, tasks, notes, provider and alias configuration, sessions, harnesses,
+cost, the steward, firstmate — is registered but not advertised, because a tool's schema is sent
+to you in every session and re-sent every turn whether or not you call it.
+
+If a tool this skill mentions is not in your tool list, it is not missing:
+
+    bf_discover {}                          the operations available
+    bf_discover {operation: "note_write"}   that one's full schema
+    bf_invoke {operation: "note_write", arguments: {...}}
+
+Arguments are validated exactly as they would be if the tool were advertised. Set
+`context.toolProfile` to `"full"` to advertise everything instead.

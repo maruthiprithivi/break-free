@@ -47,6 +47,7 @@ before(async () => {
 
   const configPath = path.join(tmp, "config.json");
   fs.writeFileSync(configPath, JSON.stringify({
+    context: { toolProfile: "full" },
     logFile: false,
     sessionDir: path.join(tmp, "sessions"),
     defaults: { model: "mock/good", reviewer: "mock/good", supervisor: "mock/good", timeoutMs: 8000 },

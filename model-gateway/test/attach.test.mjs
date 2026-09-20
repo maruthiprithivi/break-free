@@ -52,6 +52,7 @@ before(async () => {
 
   configPath = path.join(tmp, "config.json");
   fs.writeFileSync(configPath, JSON.stringify({
+    context: { toolProfile: "full" },
     sessionDir: path.join(tmp, "sessions"),
     harness: { tmux: tmuxBin },
     logFile: path.join(tmp, "gateway.log"),

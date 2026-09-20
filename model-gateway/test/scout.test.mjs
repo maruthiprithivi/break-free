@@ -37,6 +37,7 @@ before(async () => {
 
   configPath = path.join(tmp, "config.json");
   fs.writeFileSync(configPath, JSON.stringify({
+    context: { toolProfile: "full" },
     sessionDir,
     logFile: path.join(tmp, "gateway.log"),
     defaults: { model: "tooly", reviewer: "mock/good", supervisor: "mock/good", timeoutMs: 1500, maxSessionMessages: 8 },

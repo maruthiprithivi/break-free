@@ -33,6 +33,7 @@ async function startGateway(configOver = {}, wsOver = {}) {
   fs.writeFileSync(
     configPath,
     JSON.stringify({
+      context: { toolProfile: "full" },
       sessionDir: path.join(tmp, "sessions"),
       logFile: path.join(tmp, "gateway.log"),
       defaults: { model: "fast", reviewer: "mock/good", timeoutMs: 8000, maxToolIterations: 2 },
