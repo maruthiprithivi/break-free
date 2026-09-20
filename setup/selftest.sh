@@ -48,7 +48,7 @@ cat > "$T/answers.json" <<EOF
 { "fix_stale_wire_api": true, "extra_agents": "detected", "extra_scope": "both", "claude_scope": "both", "codex_scope": "both", "project_dir": "$T/proj", "key_storage": "config",
   "deepseek_key_source": "paste", "deepseek_api_key": "test-key",
   "kimi_key_source": "skip", "zai_key_source": "skip", "minimax_key_source": "skip", "openrouter_key_source": "skip", "opencode_key_source": "skip", "ollama-cloud_key_source": "skip",
-  "firstmate": false, "ollama_enabled": false, "vllm_enabled": false, "fallback_chain": "deepseek/good", "skip_tests": false, "github_flow": "full", "harness_profiles": true, "harness_shell_rc": true }
+  "firstmate": true, "ollama_enabled": false, "vllm_enabled": false, "fallback_chain": "deepseek/good", "skip_tests": false, "github_flow": "full", "harness_profiles": true, "harness_shell_rc": true }
 EOF
 
 # An agent config that exists but is EMPTY. Zero bytes is not corruption: there is no
@@ -57,6 +57,18 @@ mkdir -p "$T/home/.gemini/config" && : > "$T/home/.gemini/config/mcp_config.json
 
 REAL_GIT="$(command -v git)"
 export MODEL_GATEWAY_HOME_OVERRIDE="$T/home" PATH="$T/bin:$PATH" NO_COLOR=1
+
+# A local stand-in for the firstmate upstream, so provisioning is exercised without network.
+FMUP="$T/firstmate-upstream"
+mkdir -p "$FMUP/bin"
+printf '# firstmate\n\nhard rule 1\n' > "$FMUP/AGENTS.md"
+printf '#!/usr/bin/env bash\necho "reread-firstmate: no"\necho "restart-secondmates: none"\necho "nudge-secondmates: none"\n' > "$FMUP/bin/fm-update.sh"
+chmod +x "$FMUP/bin/fm-update.sh"
+"$REAL_GIT" -C "$FMUP" init -q -b main
+"$REAL_GIT" -C "$FMUP" -c user.name=t -c user.email=t@t add -A
+"$REAL_GIT" -C "$FMUP" -c user.name=t -c user.email=t@t commit -q -m "firstmate"
+export BREAK_FREE_FIRSTMATE_ORIGIN="$FMUP"
+
 fail() { echo "SELFTEST FAIL: $1" >&2; exit 1; }
 
 mkdir -p "$T/home/.claude/skills/model-gateway" "$T/home/.claude/commands" "$T/home/.agents/skills/github-flow"
@@ -109,6 +121,13 @@ grep -q "break-free ledger guard" "$T/proj/.git/hooks/pre-commit" || fail "ledge
 [ "$(stat -c %a "$T/home/.config/model-gateway/config.json" 2>/dev/null || stat -f %Lp "$T/home/.config/model-gateway/config.json")" = "600" ] || fail "config not 0600"
 grep -q -- '--fleet-check --hook' "$T/home/.claude/settings.json" || fail "Stop hook missing after install"
 echo "ok"
+
+echo "### firstmate provisioning"
+[ -f "$T/home/.break-free/firstmate/AGENTS.md" ] || fail "firstmate was not cloned"
+grep -q '"pin"' "$T/home/.config/model-gateway/config.json" || fail "firstmate was cloned but not pinned"
+grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.claude/CLAUDE.md" || fail "the firstmate standing rule is missing; a clone nothing points at is a clone nothing uses"
+grep -q "firstmate" "$T/install.out" || fail "the install said nothing about firstmate"
+echo ok
 
 echo "### install idempotence (Stop hook)"
 node "$ROOT/setup.mjs" --answers "$T/answers.json" > "$T/install2.out" 2>&1 || fail "second install exited non-zero (see $T/install2.out)"
