@@ -4,6 +4,10 @@
      branches never edit the same block here. scripts/changelog.sh release <version>
      folds them in. -->
 
+## 4.2.1 — 2026-09-21
+
+- **A nested session no longer picks a harness by coin flip (#68).** An outer harness's environment is inherited by everything it spawns, so a Codex session started from inside Claude Code carries both marker sets — and `bf firstmate` resolved that tie by the order names happened to appear in a list. Two claimants is now treated as no answer: the choice falls through to `firstmate.harness` or what your install wired, which you actually chose, and the command says so rather than deciding quietly. A single claimant is still trusted.
+
 ## 4.2.0 — 2026-09-21
 
 - **The firstmate provisioning path is now tested, and a failed clone no longer reddens the install (#65).** Cloning, pinning and writing the standing rule had no coverage at all: the installer self-test pinned firstmate off because a CI container cannot reach GitHub, so that code had run exactly once, by hand. `BREAK_FREE_FIRSTMATE_ORIGIN` lets the origin be a local repository, and the self-test now provisions from one and asserts all three outcomes — the clone, the pin in the config, and the rule in `~/.claude/CLAUDE.md`. A clone that fails is a WARN rather than a FAIL: break-free works without firstmate, and turning a break-free install red because GitHub was unreachable blames the wrong thing. The standing rule also follows a project-scope install, since a clone nothing points at is a clone nothing uses.
