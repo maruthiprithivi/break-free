@@ -33,6 +33,7 @@ import { buildCodeMap, writeCodeMap } from "./codemap.js";
 import { startServe } from "./serve.js";
 import { WorktreeRegistry, WORKTREE_STATUSES, isLinkedWorktree, shadowLedgerDir, installGuardHook, guardHookStatus, removeGuardHook, LEDGER_GUARD_WORKFLOW } from "./worktrees.js";
 import { LEDGER_DIR } from "./ledger.js";
+import { resolveVault, linkLedger } from "./knowledge.js";
 import { runSteward, hygiene } from "./steward.js";
 import { DEFAULT_PRICING } from "./config.js";
 import { ghAvailable } from "./github.js";
@@ -1219,6 +1220,32 @@ server.registerTool("note_search", {
   if (!query) return json(ctx.ledger.listNotes().map((n) => ({ slug: n.slug, title: n.title, tags: n.tags, updated: n.updated, ...(full ? { body: n.body } : { preview: n.body.slice(0, 200) }) })));
   return json(ctx.ledger.searchNotes(query).map(({ note, hits }) => ({ slug: note.slug, title: note.title, tags: note.tags, hits, ...(full ? { body: note.body } : {}) })));
 });
+server.registerTool("obsidian_link", {
+  title: "Surface this project's ledger in an Obsidian vault",
+  description: "Link (or index) the project ledger into the Obsidian vault, so notes, tasks and the journal open in the vault with their wikilinks intact. The repository stays the source of truth: `link` symlinks the ledger rather than copying it. Does nothing when no vault is detected. Anything already at the target that is not our own link is left untouched.",
+  inputSchema: {
+    vault: z.string().optional().describe("Vault path. Default: config.knowledge.obsidian.vault, then $OBSIDIAN_VAULT, then Obsidian's own registry."),
+    mode: z.enum(["link", "index", "off"]).optional().describe("link = symlink the ledger in (default); index = write one note pointing at it; off = do nothing."),
+    project: z.string().optional().describe("Name to use inside the vault. Default: the workspace directory name."),
+  },
+}, async (a) => {
+  try {
+    const cfg = {
+      obsidian: {
+        vault: a.vault ?? ctx.config.knowledge.obsidian.vault,
+        mode: a.mode ?? ctx.config.knowledge.obsidian.mode,
+        folder: ctx.config.knowledge.obsidian.folder,
+      },
+    };
+    const vault = resolveVault(cfg);
+    if (!vault) return json({ action: "skipped", reason: "no Obsidian vault detected — set knowledge.obsidian.vault or $OBSIDIAN_VAULT" });
+    const project = a.project ?? path.basename(ctx.workspace.root);
+    return json(linkLedger(vault.path, project, path.join(ctx.workspace.root, LEDGER_DIR), cfg));
+  } catch (e) {
+    return fail(e);
+  }
+});
+
 server.registerTool("code_map", {
   title: "Build a code map (import graph + symbols)",
   description: "Scan the workspace (TS/JS, Python, Go, Rust) and write .break-free/CODE-MAP.md: directories, most-depended-on modules, a Mermaid import graph and exported symbols per module. Cheap orientation for you, for new sessions and for workers (give them the file path). Returns a summary.",
@@ -1409,7 +1436,16 @@ async function main() {
     // An open circuit looks exactly like a healthy provider in the rows above — key
     // present, model configured — so --doctor has to say it out loud.
     const openCircuits = getBreaker(ctx.config).list();
-    console.log(JSON.stringify({ config_files: loaded.sources, workspace: ctx.workspace.root, usable_providers: usable, open_circuits: openCircuits, github_cli: await ghAvailable(), providers: rows }, null, 2));
+    // "Which knowledge layer am I actually using" is otherwise unanswerable. An absent vault
+    // is reported as absent, not as a problem: Obsidian is optional and most machines lack it.
+    const vault = resolveVault(ctx.config.knowledge);
+    const knowledge = {
+      graph: ctx.config.knowledge.graph.provider,
+      obsidian: vault
+        ? { vault: vault.path, source: vault.source, mode: ctx.config.knowledge.obsidian.mode }
+        : { vault: null, detected: false },
+    };
+    console.log(JSON.stringify({ config_files: loaded.sources, workspace: ctx.workspace.root, usable_providers: usable, open_circuits: openCircuits, knowledge, github_cli: await ghAvailable(), providers: rows }, null, 2));
     process.exit(usable.length ? 0 : 2);
   }
   if (argv.includes("--logs")) {
