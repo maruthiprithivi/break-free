@@ -280,3 +280,60 @@ test("an upstream update is reported, never taken on its own", async () => {
   assert.deepEqual(found.instructionChanges, ["AGENTS.md"], "and it changes what the agent obeys");
   assert.equal(git(clone, ["rev-parse", "HEAD"]), before, "checking must never move the checkout");
 });
+
+// --- which harness --------------------------------------------------------------
+// Typing `bf firstmate` inside Codex and being handed Claude is the wrong answer even when
+// Claude is also installed. These pin the order the signals deserve.
+
+import { preferredHarness, runningHarness } from "../dist/firstmate.js";
+
+const all = () => true;
+
+test("the harness running this session is detected from its own markers", () => {
+  assert.equal(runningHarness({ CLAUDECODE: "1" }), "claude");
+  assert.equal(runningHarness({ CLAUDE_CODE_SESSION_ID: "abc" }), "claude");
+  assert.equal(runningHarness({ CODEX_SESSION_ID: "abc" }), "codex");
+  assert.equal(runningHarness({ CODEX_VERSION: "0.155.0" }), "codex");
+  assert.equal(runningHarness({ CURSOR_AGENT: "1" }), "cursor-agent");
+  assert.equal(runningHarness({ GROK_AGENT: "1" }), "grok");
+  assert.equal(runningHarness({ PI_CODING_AGENT: "1" }), "pi");
+  assert.equal(runningHarness({ OMP_EXT: "1" }), "omp");
+  assert.equal(runningHarness({ PATH: "/usr/bin" }), undefined, "an ordinary shell is not a harness");
+});
+
+test("the session you are in beats everything an installer recorded", () => {
+  // The bug this fixes: claude is first in the shipped list, so it won that race from inside
+  // a Codex session on a machine with both installed.
+  assert.equal(
+    preferredHarness({ env: { CODEX_SESSION_ID: "x" }, wired: ["claude"], available: all }),
+    "codex",
+  );
+  assert.equal(preferredHarness({ env: { CLAUDECODE: "1" }, wired: ["codex"], available: all }), "claude");
+});
+
+test("an explicit choice wins, even when it is not installed", () => {
+  // So the refusal can say "not on PATH" rather than quietly handing over something else.
+  assert.equal(preferredHarness({ explicit: "codex", env: { CLAUDECODE: "1" }, available: () => false }), "codex");
+  assert.equal(preferredHarness({ explicit: "my-own-agent", available: all }), "my-own-agent");
+});
+
+test("configuration, then what the install wired, then the shipped order", () => {
+  assert.equal(preferredHarness({ configured: "codex", wired: ["claude"], available: all }), "codex");
+  assert.equal(preferredHarness({ wired: ["omp", "claude"], available: all }), "omp", "what the user wired beats list order");
+  assert.equal(preferredHarness({ available: all }), "claude", "the shipped order is the last resort");
+
+  // A signal pointing at something not installed must not win, or the fallback never runs.
+  assert.equal(preferredHarness({ env: { CODEX_SESSION_ID: "x" }, available: (b) => b === "claude" }), "claude");
+  assert.equal(preferredHarness({ configured: "grok", available: (b) => b === "pi" }), "pi");
+  // An unverified name in config or install state is ignored rather than launched.
+  assert.equal(preferredHarness({ configured: "not-a-harness", wired: ["codex"], available: all }), "codex");
+  assert.equal(preferredHarness({ available: () => false }), undefined, "nothing installed is an honest nothing");
+});
+
+test("a launch plan follows the running session", () => {
+  const root = fakeDistro();
+  const head = git(root, ["rev-parse", "HEAD"]);
+  const plan = planLaunch({ enabled: true, root, pin: head }, { env: { CODEX_SESSION_ID: "x" }, available: all });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.command, "codex", "started from Codex, it hands back Codex");
+});

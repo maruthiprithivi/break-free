@@ -209,6 +209,57 @@ export function sessionLabel(task?: string): string {
 export const FIRSTMATE_HARNESSES = ["claude", "grok", "pi", "omp", "codex", "opencode", "cursor-agent"] as const;
 export type FirstmateHarness = (typeof FIRSTMATE_HARNESSES)[number];
 
+
+/**
+ * Markers a harness sets in its own sessions.
+ *
+ * Verified rather than guessed: CLAUDE_CODE_* and CLAUDECODE from a Claude Code session,
+ * CODEX_* by asking Codex to print its own environment, and the Cursor, Grok, Pi and omp
+ * markers from the set firstmate itself detects on (`.firstmate/bin`), which is the closest
+ * thing to an authority on which of these are load-bearing.
+ */
+const HARNESS_MARKERS: ReadonlyArray<readonly [FirstmateHarness, readonly string[]]> = [
+  ["claude", ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID"]],
+  ["codex", ["CODEX_SESSION_ID", "CODEX_THREAD_ID", "CODEX_VERSION", "CODEX_SANDBOX"]],
+  ["cursor-agent", ["CURSOR_AGENT", "CURSOR_MODE", "CURSOR_INVOKED_AS"]],
+  ["grok", ["GROK_AGENT", "GROK_HOOKS_DIR", "GROK_HOME"]],
+  ["omp", ["OMP_EXT", "OMP_BIN", "OMP_WORKER_CFG"]],
+  ["pi", ["PI_CODING_AGENT"]],
+];
+
+/** Which harness is running this process, when it can be told. */
+export function runningHarness(env: NodeJS.ProcessEnv = process.env): FirstmateHarness | undefined {
+  for (const [harness, markers] of HARNESS_MARKERS) if (markers.some((m) => env[m])) return harness;
+  return undefined;
+}
+
+/**
+ * Which harness a firstmate session should use, in the order the signals deserve.
+ *
+ * The session you are IN wins over everything an installer recorded: typing `bf firstmate`
+ * inside Codex and being handed Claude is the wrong answer even if Claude is also installed.
+ * Configuration comes next because it was stated deliberately, then the harnesses the install
+ * actually wired, and only then the shipped order — which is a fallback, not a preference.
+ */
+export function preferredHarness(
+  opts: { explicit?: string; configured?: string; wired?: readonly string[]; env?: NodeJS.ProcessEnv; available?: (b: string) => boolean } = {},
+): FirstmateHarness | undefined {
+  const has = opts.available ?? (() => true);
+  const verified = (h: string | undefined): h is FirstmateHarness =>
+    !!h && (FIRSTMATE_HARNESSES as readonly string[]).includes(h);
+
+  // An explicit --harness is honoured even when it is not installed, so the refusal can say
+  // "not on PATH" rather than silently handing over something else.
+  if (opts.explicit) return opts.explicit as FirstmateHarness;
+
+  const running = runningHarness(opts.env);
+  for (const candidate of [verified(running) ? running : undefined, verified(opts.configured) ? opts.configured : undefined]) {
+    if (candidate && has(candidate)) return candidate;
+  }
+  for (const w of opts.wired ?? []) if (verified(w) && has(w)) return w;
+  return FIRSTMATE_HARNESSES.find((h) => has(h));
+}
+
 export interface LaunchPlan {
   ok: boolean;
   /** The command a user could run themselves; break-free runs the same one. */
@@ -234,7 +285,7 @@ export interface LaunchPlan {
  */
 export function planLaunch(
   cfg: FirstmateConfig,
-  opts: { harness?: string; fmHome?: string; task?: string; available?: (bin: string) => boolean } = {},
+  opts: { harness?: string; fmHome?: string; task?: string; configured?: string; wired?: readonly string[]; env?: NodeJS.ProcessEnv; available?: (bin: string) => boolean } = {},
   home = os.homedir(),
 ): LaunchPlan {
   const label = sessionLabel(opts.task);
@@ -248,7 +299,7 @@ export function planLaunch(
   }
 
   const has = opts.available ?? (() => true);
-  const harness = opts.harness ?? FIRSTMATE_HARNESSES.find((h) => has(h));
+  const harness = preferredHarness({ explicit: opts.harness, configured: opts.configured, wired: opts.wired, env: opts.env, available: has });
   if (!harness) return { ok: false, args: [], env: {}, label, reason: `no verified harness found on PATH (tried ${FIRSTMATE_HARNESSES.join(", ")})` };
   if (!(FIRSTMATE_HARNESSES as readonly string[]).includes(harness)) {
     return { ok: false, args: [], env: {}, label, reason: `${harness} is not verified as a firstmate primary; its turn-end guard and watcher re-arm would be absent while appearing to work` };
