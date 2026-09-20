@@ -71,6 +71,26 @@ function tryGit(cwd: string, args: string[]): string | undefined {
   try { return git(cwd, args); } catch { return undefined; }
 }
 
+/**
+ * True when merging this branch into `base` would change nothing, because the merged tree IS
+ * base's tree.
+ *
+ * Ancestry alone cannot answer this. A squash merge replays the branch as one new commit on
+ * base, so the branch's own commits are never in base and `base..HEAD` stays above zero
+ * forever — the worktree would sit at "active" long after it shipped, claiming paths in every
+ * overlap forecast. A rebase merge has the same shape. This costs one in-memory three-way
+ * merge: no checkout, no working tree, no index.
+ *
+ * Returns false when git cannot answer — a conflict (so definitely not landed), or a git older
+ * than 2.38 without `merge-tree --write-tree`, where the ancestry check remains the fallback.
+ */
+function mergeAddsNothing(cwd: string, base: string): boolean {
+  const merged = tryGit(cwd, ["merge-tree", "--write-tree", base, "HEAD"]);
+  if (!merged) return false;
+  const baseTree = tryGit(cwd, ["rev-parse", `${base}^{tree}`]);
+  return !!baseTree && merged.split("\n")[0].trim() === baseTree.trim();
+}
+
 export interface GitWorktree { path: string; head: string; branch?: string; bare?: boolean; detached?: boolean; prunable?: string }
 
 export function listGitWorktrees(cwd: string): GitWorktree[] {
@@ -177,12 +197,19 @@ export class WorktreeRegistry {
       if (lastCommit) w.lastCommitAt = lastCommit;
       if (w.status === "deleted") { w.status = "active"; w.reason = undefined; w.log.push(`${now()} worktree is back`); }
       if (!w.isMain && ["active", "inactive"].includes(w.status)) {
-        // merged := the branch made commits since it was registered and none of them are missing from base
+        // merged := the branch made commits since it was registered and none of its CONTENT is
+        // missing from base. Ancestry is the cheap case; tree-equality catches the squash and
+        // rebase merges that ancestry never sees. The reason records which one decided it,
+        // because they fail differently and a wrong "merged" is worse than a stale "active".
         const ahead = Number(tryGit(w.path, ["rev-list", "--count", `${w.base}..HEAD`]) ?? "1");
         const hasOwnCommits = !!w.startHead && w.head !== w.startHead;
-        if (hasOwnCommits && ahead === 0) {
+        const byAncestry = ahead === 0;
+        const landed = byAncestry || mergeAddsNothing(w.path, w.base);
+        if (hasOwnCommits && landed) {
           w.status = "merged";
-          w.reason ??= `branch ${w.branch} is contained in ${w.base}`;
+          w.reason ??= byAncestry
+            ? `branch ${w.branch} is contained in ${w.base}`
+            : `branch ${w.branch} adds nothing to ${w.base} (squashed or rebased in)`;
           w.log.push(`${now()} detected merged into ${w.base}`);
         } else {
           const seen = Math.max(Date.parse(w.lastSeenAt || "") || 0, Date.parse(w.lastCommitAt ?? "") || 0);

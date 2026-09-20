@@ -729,6 +729,22 @@ test("worktrees: shared registry across checkouts — create, register, status r
   g(["merge", "-q", "--no-ff", "-m", "merge api", "feat/api"]);
   const merged = (await call("worktree_list")).json().worktrees.find((w) => w.name === "feat/api");
   assert.equal(merged.status, "merged", JSON.stringify(merged));
+  // A SQUASH merge is the case ancestry cannot see: the branch's own commits are never in
+  // main, so base..HEAD stays non-zero and the worktree would claim paths forever.
+  const sq = (await call("worktree_create", { branch: "feat/squashed", purpose: "squash case" })).json();
+  fs.writeFileSync(path.join(sq.path, "squashed.js"), "export const squashed = 1;\n");
+  g(["add", "-A"], sq.path); g(["commit", "-q", "-m", "first"], sq.path);
+  fs.writeFileSync(path.join(sq.path, "squashed.js"), "export const squashed = 2;\n");
+  g(["add", "-A"], sq.path); g(["commit", "-q", "-m", "second"], sq.path);
+  g(["merge", "-q", "--squash", "feat/squashed"]);
+  g(["commit", "-q", "-m", "squashed in"]);
+  assert.notEqual(g(["rev-list", "--count", "main..feat/squashed"]), "0", "a squash merge must leave the branch non-ancestral, or this test proves nothing");
+  const squashed = (await call("worktree_list")).json().worktrees.find((w) => w.name === "feat/squashed");
+  assert.equal(squashed.status, "merged", JSON.stringify(squashed));
+  assert.match(squashed.reason, /adds nothing to/, "the reason has to say how it was decided");
+  // and it stops claiming paths in the overlap forecast
+  assert.equal((await call("worktree_list")).json().overlaps?.some((o) => o.a === "feat/squashed" || o.b === "feat/squashed") ?? false, false);
+
   // sync writes WORKTREES.md into main's ledger
   r = await call("worktree_sync");
   assert.match(r.text, /\| \*\*main\*\* \(main\) \| active/);
