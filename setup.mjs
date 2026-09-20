@@ -683,7 +683,11 @@ async function installFirstmate(answers) {
       fs.mkdirSync(path.dirname(root), { recursive: true });
       // Full history on purpose: pinning and reviewing an update both need to diff two
       // revisions, and a shallow clone cannot do that offline.
-      const cloned = await run("git", ["clone", "https://github.com/kunchenguid/firstmate", root], { timeoutMs: 600_000 });
+      // The origin is overridable so the provisioning path can be tested against a local
+      // repository. Without that seam this code could only ever run against the network,
+      // which is why it went untested.
+      const origin = process.env.BREAK_FREE_FIRSTMATE_ORIGIN || "https://github.com/kunchenguid/firstmate";
+      const cloned = await run("git", ["clone", origin, root], { timeoutMs: 600_000 });
       if (!cloned.ok) throw new Error(cloned.stderr.slice(0, 200));
       report.pass("firstmate cloned", root);
     }
@@ -701,17 +705,22 @@ async function installFirstmate(answers) {
     // AGENTS.md from where it starts, so a session started in a project would never see the
     // distro — but it always reads these, which is how the delegation rule already works.
     const rule = (f) => fs.readFileSync(path.join(AGENT_CFG, f), "utf8").replaceAll("__FM_ROOT__", root);
-    if (scope.claude !== "none") {
+    // Written for every agent the install touched. A clone nothing points at is a clone
+    // nothing uses: the rule IS the integration for an ordinary session.
+    if (scope.claude !== "none" || scope.project) {
       appendOnce(path.join(home(), ".claude", "CLAUDE.md"), FM_MARKER, rule(path.join("claude", "CLAUDE.firstmate.snippet")))
         ? report.pass("firstmate rule added to ~/.claude/CLAUDE.md") : report.pass("~/.claude/CLAUDE.md already has the firstmate rule");
     }
-    if (scope.codex !== "none") {
+    if (scope.codex !== "none" || scope.project) {
       appendOnce(path.join(home(), ".codex", "AGENTS.md"), FM_MARKER, rule(path.join("codex", "AGENTS.firstmate.snippet")))
         ? report.pass("firstmate rule added to ~/.codex/AGENTS.md") : report.pass("~/.codex/AGENTS.md already has the firstmate rule");
     }
     report.info("any session now knows firstmate is there; `bf firstmate` starts a dedicated firstmate-led one");
   } catch (e) {
-    report.fail("firstmate not provisioned", String(e.message).slice(0, 200));
+    // A WARN, not a FAIL. break-free works without firstmate, and turning a break-free
+    // install red because GitHub was unreachable blames the wrong thing — the user sees a
+    // failed product when what failed was a download they can retry.
+    report.warn("firstmate not provisioned", `${String(e.message).slice(0, 160)} — break-free is installed and working; re-run to retry`);
   }
 }
 
