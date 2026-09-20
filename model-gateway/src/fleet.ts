@@ -30,6 +30,12 @@ export interface FleetEvent {
   id: string;
   reason: string;
   ci?: FleetCi;
+  /**
+   * Workspace root that produced the event. Absent on rows written before the queue learned
+   * about workspaces; those belong to nobody and are visible to everyone, so an upgrade never
+   * strands an event that no session will admit to owning.
+   */
+  workspace?: string;
 }
 
 export interface FleetSnapshot {
@@ -183,10 +189,13 @@ function markResolved(dir: string, seq: number): void {
   writeResolvedSeqs(dir, seqs);
 }
 
-function pendingEventsInDir(dir: string): FleetEvent[] {
-  const cursor = readCursor(dir);
+function pendingEventsInDir(dir: string, workspace?: string): FleetEvent[] {
+  const cursor = readCursor(dir, workspace);
   const resolved = new Set(readResolvedSeqs(dir));
-  return readEventsFile(path.join(dir, QUEUE_FILE)).filter((e) => e.seq > cursor && !resolved.has(e.seq));
+  // An event belonging to another workspace is not this session's business: blocking a turn on
+  // it is a false positive, and the only way to clear it is to discard a result nobody read.
+  const mine = (e: FleetEvent) => !workspace || !e.workspace || e.workspace === workspace;
+  return readEventsFile(path.join(dir, QUEUE_FILE)).filter((e) => e.seq > cursor && !resolved.has(e.seq) && mine(e));
 }
 
 /**
@@ -195,7 +204,7 @@ function pendingEventsInDir(dir: string): FleetEvent[] {
  * Read-then-append, so it assumes a single writer. That is the design: one
  * watcher owns the queue. Two concurrent writers could hand out the same seq.
  */
-export function appendEvents(sessionDir: string, events: Omit<FleetEvent, "seq">[]): FleetEvent[] {
+export function appendEvents(sessionDir: string, events: Omit<FleetEvent, "seq">[], workspace?: string): FleetEvent[] {
   const dir = fleetDir(sessionDir);
   const file = path.join(dir, QUEUE_FILE);
 
@@ -207,7 +216,8 @@ export function appendEvents(sessionDir: string, events: Omit<FleetEvent, "seq">
   const lines: string[] = [];
   for (const event of events) {
     seq += 1;
-    const full: FleetEvent = { ...event, seq };
+    // Stamp the producer, unless the caller already set one (a CI event knows its own repo).
+    const full: FleetEvent = { ...(workspace ? { workspace } : {}), ...event, seq };
     out.push(full);
     lines.push(JSON.stringify(full));
   }
@@ -225,19 +235,41 @@ export function readEvents(sessionDir: string): FleetEvent[] {
   return readEventsFile(path.join(fleetDir(sessionDir), QUEUE_FILE));
 }
 
-function readCursor(dir: string): number {
+/** The whole cursor file: a baseline every workspace inherits, plus each workspace's own mark. */
+interface Cursors {
+  /** What the file held before it learned about workspaces: already-drained for everybody. */
+  baseline: number;
+  byWorkspace: Record<string, number>;
+}
+
+/**
+ * One shared integer cannot say "project A has seen up to 99, project B up to 42", which is how
+ * a finished job in one repository came to block a turn in another. The file is a map now; a
+ * file still holding a bare integer is read as a baseline that applies to every workspace, so
+ * upgrading does not re-emit everything already drained.
+ */
+function readCursors(dir: string): Cursors {
   try {
     const raw = fs.readFileSync(path.join(dir, CURSOR_FILE), "utf8").trim();
-    const n = Number.parseInt(raw, 10);
-    return Number.isFinite(n) ? n : 0;
+    if (!raw) return { baseline: 0, byWorkspace: {} };
+    if (/^\d+$/.test(raw)) return { baseline: Number.parseInt(raw, 10), byWorkspace: {} };
+    const j = JSON.parse(raw) as Partial<Cursors>;
+    return { baseline: Number(j.baseline) || 0, byWorkspace: j.byWorkspace ?? {} };
   } catch {
-    return 0;
+    return { baseline: 0, byWorkspace: {} };
   }
 }
 
-export function pendingEvents(sessionDir: string): FleetEvent[] {
+function readCursor(dir: string, workspace?: string): number {
+  const c = readCursors(dir);
+  // "" is a real key, not the absence of one: a caller that drains without naming a workspace
+  // must see its own drain on the next read, exactly as a named one does.
+  return Math.max(c.baseline, c.byWorkspace[workspace ?? ""] ?? 0);
+}
+
+export function pendingEvents(sessionDir: string, workspace?: string): FleetEvent[] {
   const dir = fleetDir(sessionDir);
-  return pendingEventsInDir(dir);
+  return pendingEventsInDir(dir, workspace);
 }
 
 function findNonDrainedCiPending(dir: string, sha: string): FleetEvent | undefined {
@@ -334,9 +366,12 @@ export function expireCi(sessionDir: string, now: number, timeoutMs: number): nu
  * that were already handled, which is exactly the duplicate-wake the queue
  * exists to prevent.
  */
-export function drainTo(sessionDir: string, seq: number): void {
+export function drainTo(sessionDir: string, seq: number, workspace?: string): void {
   const dir = fleetDir(sessionDir);
-  const current = readCursor(dir);
+  const cursors = readCursors(dir);
+  const key = workspace ?? "";
+  const current = Math.max(cursors.baseline, cursors.byWorkspace[key] ?? 0);
   if (seq <= current) return;
-  fs.writeFileSync(path.join(dir, CURSOR_FILE), String(seq), { mode: 0o600 });
+  cursors.byWorkspace[key] = seq;
+  fs.writeFileSync(path.join(dir, CURSOR_FILE), JSON.stringify(cursors), { mode: 0o600 });
 }
