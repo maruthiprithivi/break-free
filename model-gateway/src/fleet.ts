@@ -41,7 +41,12 @@ export interface FleetEvent {
 export interface FleetSnapshot {
   ts: string;
   jobs: Record<string, string>;
-  harness: Record<string, { state: string; digest: string; since: string }>;
+  /**
+   * `cwd` is the session's OWN directory, which is what owns its events. Without it a harness
+   * event is attributed to whichever gateway happened to observe it, so a crew session running
+   * in one project blocks the turn-end guard of every other project on the machine.
+   */
+  harness: Record<string, { state: string; digest: string; since: string; cwd?: string }>;
 }
 
 const QUEUE_FILE = "wake-queue.jsonl";
@@ -104,7 +109,7 @@ export function classify(prev: FleetSnapshot | undefined, next: FleetSnapshot, i
 
       if (h.state === "exited") {
         if (prevH && prevH.state !== "exited") {
-          events.push({ ts: next.ts, kind: "harness.exited", id, reason: "exited" });
+          events.push({ ts: next.ts, kind: "harness.exited", id, reason: "exited", ...(prevH?.cwd ? { workspace: prevH.cwd } : {}) });
         }
         continue;
       }
@@ -117,7 +122,7 @@ export function classify(prev: FleetSnapshot | undefined, next: FleetSnapshot, i
       const digestUnchanged = prevH !== undefined && prevH.state === "running" && prevH.digest === h.digest;
 
       if (digestChanged) {
-        events.push({ ts: next.ts, kind: "harness.output", id, reason: `digest ${prevH!.digest} -> ${h.digest}` });
+        events.push({ ts: next.ts, kind: "harness.output", id, reason: `digest ${prevH!.digest} -> ${h.digest}`, ...(h.cwd ? { workspace: h.cwd } : {}) });
         continue; // the digest just changed: since resets to next.ts, so it cannot be idle yet
       }
 
@@ -125,7 +130,7 @@ export function classify(prev: FleetSnapshot | undefined, next: FleetSnapshot, i
         const since = prevH!.since;
         const idle = elapsedMs(next.ts, since);
         if (idle !== undefined && idle > idleMs) {
-          events.push({ ts: next.ts, kind: "harness.idle", id, reason: `idle for ${idle}ms` });
+          events.push({ ts: next.ts, kind: "harness.idle", id, reason: `idle for ${idle}ms`, ...(h.cwd ? { workspace: h.cwd } : {}) });
         }
       }
     }
