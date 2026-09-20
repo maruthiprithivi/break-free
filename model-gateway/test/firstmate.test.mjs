@@ -337,3 +337,21 @@ test("a launch plan follows the running session", () => {
   assert.equal(plan.ok, true);
   assert.equal(plan.command, "codex", "started from Codex, it hands back Codex");
 });
+
+test("a nested session is ambiguous, and ambiguity is not resolved by list order", async () => {
+  const { runningHarnesses } = await import("../dist/firstmate.js");
+  // Found by running `bf firstmate` inside a Codex session that had itself been started from
+  // Claude Code: the child carried BOTH marker sets, because an outer harness's variables are
+  // inherited by everything it spawns. Picking by list order made that a silent coin flip.
+  const nested = { CLAUDECODE: "1", CODEX_SESSION_ID: "x" };
+  assert.deepEqual(runningHarnesses(nested).sort(), ["claude", "codex"]);
+  assert.equal(runningHarness(nested), undefined, "two claimants is not an answer");
+
+  // So it falls through to what the user actually chose.
+  assert.equal(preferredHarness({ env: nested, configured: "codex", available: all }), "codex");
+  assert.equal(preferredHarness({ env: nested, wired: ["codex"], available: all }), "codex");
+
+  // A single claimant is still trusted.
+  assert.equal(runningHarness({ CODEX_SESSION_ID: "x" }), "codex");
+  assert.deepEqual(runningHarnesses({ PATH: "/usr/bin" }), []);
+});

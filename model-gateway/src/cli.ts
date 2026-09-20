@@ -936,6 +936,11 @@ async function cmdFirstmate(flags: Record<string, string | boolean>): Promise<nu
   }
 
   const shown = [plan.command, ...plan.args].join(" ");
+  const { runningHarnesses } = await import("./firstmate.js");
+  const nested = runningHarnesses();
+  if (nested.length > 1) {
+    console.error(`note: this session looks like ${nested.join(" inside ")}, so the harness could not be told from the environment. Using ${plan.command}; pass --harness or set firstmate.harness to be sure.`);
+  }
   if (flags["dry-run"]) {
     console.log(`${plan.label}\n  cd ${plan.cwd}\n  ${Object.entries(plan.env).map(([k, v]) => `${k}=${v}`).join(" ")} ${shown}`);
     return 0;
