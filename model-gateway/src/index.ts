@@ -277,7 +277,16 @@ function providerReport(name: string) {
 }
 
 // ------------------------------------------------------------ server
-const VERSION = "3.4.0";
+// Read from package.json rather than kept by hand: this said 3.4.0 while the package said
+// 3.7.0, so the server reported a version three releases stale to every client that asked.
+const VERSION: string = (() => {
+  try {
+    const here = path.dirname(new URL(import.meta.url).pathname);
+    return JSON.parse(fs.readFileSync(path.join(here, "..", "package.json"), "utf8")).version as string;
+  } catch {
+    return "0.0.0-unknown";
+  }
+})();
 const server = new McpServer({ name: "break-free-gateway", version: VERSION }, {
   instructions: [
     "break-free-gateway lets you (the orchestrating frontier agent) keep the high-order work — deciding, designing, reviewing, owning outcomes — and hand execution to other LLMs: DeepSeek, Ollama (local/cloud), Kimi, MiniMax, Z.AI/GLM, OpenRouter, OpenCode Zen, vLLM.",
