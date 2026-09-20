@@ -212,14 +212,14 @@ async function fleetCheck(): Promise<{ running: { jobs: number; harness: number 
 }
 
 const CapabilitySchema = z.array(z.enum(CAPABILITIES as [string, ...string[]])).describe(
-  "What the delegated model may do. read = files/grep/diff (jailed to workspace). write = create/edit files (+ ledger_note/ledger_task_log when a ledger exists). git = branch/commit/push (never protected branches, never force). github = issues/PRs/Actions via gh (implies git). run = run_command for allow-listed test/build/lint commands (workers.allowedCommands). mcp = tools of the MCP servers named in mcp_servers. Default: [\"read\"].",
+  "What the worker may do; grant deliberately. read = files/grep/diff, jailed to the workspace. write = create/edit files. git = branch/commit/push, never protected branches, never force. github = issues/PRs/Actions via gh, implies git. run = allow-listed commands only. mcp = tools of the servers in mcp_servers. Default: [\"read\"].",
 ) as unknown as z.ZodType<import("./workspace.js").Capability[]>;
 
 const MinTierSchema = z.number().int().min(1).max(3).optional().describe(
-  "Never route below this competence tier. Default: the tier of the model you asked for, so a request for a capable model is never silently answered by a weak one.",
+  "Never route below this tier. Default: the tier of the model you asked for, so a capable request is never silently answered by a weak model.",
 );
 const AllowDowngradeSchema = z.boolean().optional().describe(
-  "Permit falling below the floor once every candidate at or above it has failed. Default: config.fallback.allowDowngrade.",
+  "Allow falling below the floor once everything at or above it has failed.",
 );
 
 const StallAbortMsSchema = z.number().int().min(0).optional().describe(
@@ -295,15 +295,11 @@ const VERSION: string = (() => {
  */
 /** Sent to the lead at every session start, so it is a standing cost and named as one. */
 const SERVER_INSTRUCTIONS = [
-    "break-free-gateway lets you (the orchestrating frontier agent) keep the high-order work — deciding, designing, reviewing, owning outcomes — and hand execution to other LLMs: DeepSeek, Ollama (local/cloud), Kimi, MiniMax, Z.AI/GLM, OpenRouter, OpenCode Zen, vLLM.",
-    "Model specs: an alias (fast, strong, reviewer, local, cloud, …), 'provider/model' (e.g. deepseek/deepseek-v4-pro), a bare provider name, or a comma-separated fallback list. Every call falls back automatically according to config.fallback.",
-    "Modes: delegate (one worker, tools, optional session memory), run_plan (many workers in parallel as a dependency graph, with verification and review gates), supervise (worker/supervisor loop), review (independent JSON verdict), panel (N models + judge). Add async:true to delegate/run_plan for long work and poll job_status / job_result.",
-    "Verification is yours to specify, not to perform: give every task acceptance criteria and a `verify` command (npm test, pytest …) that the gateway runs itself after the worker finishes; give workers the 'run' capability so they test before reporting; gate risky tasks with review:true or supervise:true.",
-    "Parallel agents: worktree_list / worktree_register / worktree_update / worktree_handoff keep a registry shared by every git worktree (.git/break-free/) so main knows what each worktree does (agent, tasks, issues, PRs, tools) and whether it is active, inactive, merged, abandoned or deleted and why; worktree_create spins up a checkout for another agent.",
-    "Long-horizon work: call ledger_resume at the start of a session; task_create/task_update keep the board in .break-free/ (plain Markdown, Obsidian-compatible, committed with the repo); note_write records decisions and gotchas that every worker automatically receives; code_map builds an import graph for orientation.",
-    "Guardrails you configure once and the gateway enforces: configure_policy (deny paths to workers; force a different-vendor review when sensitive paths change), configure_budget (per task/plan/day USD caps; cost_report shows spend), note_review (worker-written notes stay quarantined until you promote them). steward / ledger_doctor keep main absorbed, reconciled and tidy.",
-    "Workers get least privilege: pass capabilities explicitly. 'github' lets them branch/commit/push/PR/merge/monitor Actions via gh, never delete or force-push. mcp_servers:[...] lends them your other MCP servers' tools (list_mcp_servers), minus destructive tools.",
-    "Workers automatically receive the workspace's CLAUDE.md / AGENTS.md / .claude/rules and the ledger's decisions/gotchas as standing context; pass skills:[...] to attach specific SKILL.md files.",
+  "break-free-gateway lets you keep the high-order work — deciding, designing, reviewing, owning outcomes — and hand execution to other models.",
+  "Name a model as an alias (fast, strong, reviewer, local, cloud), 'provider/model', a bare provider, or a comma-separated fallback list. Every call falls back according to config.fallback, and never below the tier you asked for unless you allow it.",
+  "Verification is yours to SPECIFY, not to perform: give every task acceptance criteria and a `verify` command the gateway runs itself after the worker finishes. Worker prose is a claim; the exit code is the truth. Gate risky work with review or supervise.",
+  "Give workers least privilege: capabilities are explicit, and 'github' and 'run' are not defaults.",
+  "Long-horizon work: call ledger_resume first. The board and the notes live in .break-free/ and are committed with the repo, so decisions and gotchas reach every worker and survive this session.",
 ];
 
 const toolSchemaCost: { name: string; tokens: number }[] = [];
@@ -503,7 +499,7 @@ server.registerTool("test_provider", {
 
 server.registerTool("configure_provider", {
   title: "Configure a provider",
-  description: "Set or update a provider's API key, base URL, default model, enabled flag, requires_key (auth), headers or extra body. Persists to the user config (mode 0600) or, with scope:'project', to <workspace>/.model-gateway.json (default_model/enabled/extra_body/timeout only). Adding a local OpenAI-compatible endpoint needs no key: configure_provider {provider:'optimus', base_url:'http://127.0.0.1:11435/v1'} makes it usable, because a loopback/private base URL defaults requires_key to false. To switch the model a provider uses: configure_provider {provider:'deepseek', default_model:'deepseek-v4-pro'} — check list_models {provider} first for live names. Keys may be literal or \"${ENV_VAR}\" references.",
+  description: "Set or update a provider's key, base URL, default model, enabled flag, headers or extra body. Persists to the user config, or to the project file with scope:'project'. A loopback or private base URL needs no key.",
   inputSchema: {
     provider: z.string(),
     api_key: z.string().optional().describe("Literal key or \"${ENV_VAR}\""),
@@ -618,30 +614,30 @@ server.registerTool("configure_fallback", {
 // ---- orchestration
 server.registerTool("delegate", {
   title: "Delegate a task to a model",
-  description: "Hand a self-contained task to another model. Returns its report (Result / Changes / Verification / Open questions) plus metadata (model actually used, fallbacks, tool calls). Use session_id to continue a conversation with the same worker later. Give capabilities deliberately: [\"read\"] for analysis, [\"read\",\"write\"] to let it edit files in place, [\"github\"] for branch→commit→push→PR flows. shape:'ship' uses the requested capabilities (default); shape:'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
+  description: "Hand a self-contained task to another model and get its report plus the metadata of what actually ran. Give capabilities deliberately — a worker only needs what the task needs.",
   inputSchema: {
     task: z.string().describe("What to do. Be explicit about scope, constraints, and the expected output."),
-    model: z.string().optional().describe("Alias, provider, provider/model, or comma-separated fallback list. Default: config.defaults.model"),
-    session_id: z.string().optional().describe("Persist/continue conversation history under this id"),
+    model: z.string().optional().describe("Alias, provider, provider/model, or comma-separated fallback list."),
+    session_id: z.string().optional().describe("Continue the same worker's history under this id."),
     capabilities: CapabilitySchema.optional(),
     shape: ShapeSchema,
     min_tier: MinTierSchema,
     allow_downgrade: AllowDowngradeSchema,
     stall_abort_ms: StallAbortMsSchema,
     stall_warn_ms: StallWarnMsSchema,
-    context: z.string().optional().describe("Background the worker needs (design notes, relevant snippets, prior decisions)"),
-    role: z.string().optional().describe("Persona, e.g. 'security engineer', 'technical writer'"),
-    instructions: z.string().optional().describe("Extra standing rules appended to the system prompt"),
+    context: z.string().optional().describe("Background the worker needs: design notes, snippets, prior decisions."),
+    role: z.string().optional().describe("Persona, e.g. 'security engineer'."),
+    instructions: z.string().optional().describe("Extra standing rules for the worker."),
     temperature: z.number().optional(),
     max_tokens: z.number().int().positive().optional(),
-    max_iterations: z.number().int().positive().optional().describe("Tool-call rounds allowed (default config.defaults.maxToolIterations)"),
-    include_project_instructions: z.boolean().optional().describe("Attach the workspace's CLAUDE.md / AGENTS.md / .claude/rules to the worker (default true)"),
-    skills: z.array(z.string()).optional().describe("Skill names whose SKILL.md the worker should follow (looked up in project and user skill folders), e.g. [\"break-free-github-flow\"]"),
-    mcp_servers: z.array(z.string()).optional().describe("Names of YOUR other MCP servers whose tools the worker may call (see list_mcp_servers). Implies capability 'mcp'. Destructive tools are filtered out."),
-    verify: z.string().optional().describe("Allow-listed command the gateway runs after the worker finishes, e.g. 'npm test' or 'pytest -q'. Its real exit code and output are appended to the report — the worker cannot fake it."),
-    budget_usd: z.number().min(0).optional().describe("USD cap for this worker (default budget.perTaskUsd; 0 = unlimited). The worker is stopped when exceeded."),
-    routing: z.enum(["jev", "rules", "off"]).optional().describe("Session-level routing for this call, used only when `model` is omitted: 'jev' (TypeSafe Jev), 'rules' (deterministic, no key), 'off' (use config.defaults.model). Overrides the BREAK_FREE_ROUTING env var and routing.engine in config."),
-    async: z.boolean().optional().describe("Return immediately with a job id; poll job_status / job_result. Use for long tasks."),
+    max_iterations: z.number().int().positive().optional().describe("Tool-call rounds allowed."),
+    include_project_instructions: z.boolean().optional().describe("Attach the workspace's CLAUDE.md / AGENTS.md to the worker. Default true."),
+    skills: z.array(z.string()).optional().describe("Skill names whose SKILL.md the worker should follow."),
+    mcp_servers: z.array(z.string()).optional().describe("Your other MCP servers whose tools the worker may call. Destructive tools are filtered out."),
+    verify: z.string().optional().describe("Command the gateway runs itself after the worker finishes, e.g. 'npm test'. Its real exit code is appended to the report — the worker cannot fake it."),
+    budget_usd: z.number().min(0).optional().describe("USD cap for this worker; the worker is stopped when exceeded."),
+    routing: z.enum(["jev", "rules", "off"]).optional().describe("Routing for this call, used only when `model` is omitted."),
+    async: z.boolean().optional().describe("Return a job id immediately; poll job_status."),
   },
 }, async (a) => {
   try {
@@ -700,7 +696,7 @@ server.registerTool("panel", {
 
 server.registerTool("supervise", {
   title: "Supervised delegation (worker + supervisor loop)",
-  description: "A worker model does the task; a supervisor model (ideally a different vendor) checks the result against acceptance criteria and either accepts or sends numbered feedback back, up to max_rounds. Returns the final report, every round's decision, and whether it was accepted. Best for larger implementation tasks you don't want to babysit. shape:'ship' uses the requested capabilities (default); shape:'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
+  description: "A worker does the task; a supervisor — ideally a different vendor — checks it against the acceptance criteria and either accepts or sends numbered feedback back, up to max_rounds. For work you do not want to babysit.",
   inputSchema: {
     task: z.string(),
     worker: z.string().optional().describe("Default: config.defaults.model"),
@@ -814,7 +810,7 @@ const PlanTaskSchema = z.object({
 
 server.registerTool("run_plan", {
   title: "Run a plan: many workers in parallel with dependencies",
-  description: "Execute a set of delegated tasks as a dependency graph with bounded concurrency — the way to get more done at once: split the work, give each task its own model, capabilities, acceptance criteria and verify command, and let the gateway run, verify, review and record them while you wait for the consolidated report. Independent tasks run in parallel (default workers.maxConcurrency); a task whose prerequisite failed is skipped; prerequisite reports are handed to dependants. When a .break-free ledger exists every task is tracked there so the work survives this session. Set async:true for long plans and poll job_status. Per task, shape:'ship' uses the requested capabilities (default); shape:'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
+  description: "Run delegated tasks as a dependency graph: independent ones in parallel, each with its own model, capabilities, acceptance criteria and verify command. A task whose prerequisite failed is skipped, and a dependant is given its prerequisites' reports. Use async for long plans. Per task, shape:'ship' uses the requested capabilities (default); shape:'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
   inputSchema: {
     goal: z.string().optional().describe("One line describing what the whole plan achieves (recorded in the ledger)"),
     tasks: z.array(PlanTaskSchema).min(1).max(40),
@@ -1501,7 +1497,6 @@ server.registerTool("harness_list", {
   description: "Every harness sub-agent with its tmux name, harness, cwd, state, timestamps and `attach` command — use to resume work a previous session started.",
   inputSchema: {},
 }, async () => json({ sessions: (await ctx.harnessctl.list()).map((s) => ({ ...s, attach: ctx.harnessctl.attach(s) })) }));
-
 // ------------------------------------------------------------ main
 async function main() {
   if (argv.includes("--selftest")) {
