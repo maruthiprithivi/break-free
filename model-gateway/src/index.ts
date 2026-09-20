@@ -17,6 +17,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { execFile } from "node:child_process";
@@ -313,9 +314,14 @@ const toolSchemaCost: { name: string; tokens: number }[] = [];
 /** Schema text as the client receives it: the field names plus whatever .describe() carries. */
 function schemaText(shape: Record<string, unknown> | undefined): string {
   if (!shape) return "";
-  return Object.entries(shape)
-    .map(([k, v]) => `${k}${(v as { _def?: { description?: string } })?._def?.description ?? ""}`)
-    .join(" ");
+  // Serialize exactly as the SDK does when it answers tools/list, so the number is what the
+  // client actually receives. Counting field names and descriptions alone — which this did —
+  // omits types, enums, nested objects and required lists, and under-reports every tool.
+  try {
+    return JSON.stringify(zodToJsonSchema(z.object(shape as z.ZodRawShape)));
+  } catch {
+    return Object.keys(shape).join(" ");
+  }
 }
 
 const server = new McpServer({ name: "break-free-gateway", version: VERSION }, {
