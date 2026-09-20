@@ -196,3 +196,74 @@ export function parseUpdateSummary(out: string): { rereadInstructions: boolean; 
 export function sessionLabel(task?: string): string {
   return task ? `${FIRSTMATE_LABEL}: ${task.replace(/\s+/g, " ").slice(0, 60)}` : FIRSTMATE_LABEL;
 }
+
+// ---------------------------------------------------------------- launching
+
+/**
+ * Harnesses firstmate verifies as a primary session, in its own recommended order.
+ *
+ * Launching an unverified harness inside the distro is worse than refusing: firstmate's
+ * turn-end guard and watcher re-arm are per-harness, so an unsupported one looks like it is
+ * working while the supervision it depends on is silently absent.
+ */
+export const FIRSTMATE_HARNESSES = ["claude", "grok", "pi", "omp", "codex", "opencode", "cursor-agent"] as const;
+export type FirstmateHarness = (typeof FIRSTMATE_HARNESSES)[number];
+
+export interface LaunchPlan {
+  ok: boolean;
+  /** The command a user could run themselves; break-free runs the same one. */
+  command?: string;
+  args: string[];
+  cwd?: string;
+  env: Record<string, string>;
+  /** What the session is called, so the screen says which system is leading. */
+  label: string;
+  reason?: string;
+}
+
+/**
+ * How to start a firstmate-led session.
+ *
+ * This is the honest shape of "break-free uses firstmate". An MCP server cannot make a client
+ * that is already running adopt firstmate's identity — the distro is instructions a harness
+ * reads at startup, and startup has already happened. So break-free launches a NEW session
+ * inside the distro instead, and that session's lead is firstmate.
+ *
+ * `cwd` is the distro, because that is how AGENTS.md is picked up. FM_HOME is kept separate
+ * from the code root so a rollback of the code never hides the crew registry or the backlog.
+ */
+export function planLaunch(
+  cfg: FirstmateConfig,
+  opts: { harness?: string; fmHome?: string; task?: string; available?: (bin: string) => boolean } = {},
+  home = os.homedir(),
+): LaunchPlan {
+  const label = sessionLabel(opts.task);
+  const st = status(cfg, home);
+  if (!cfg.enabled) return { ok: false, args: [], env: {}, label, reason: "firstmate is off; set firstmate.enabled to launch a firstmate-led session" };
+  if (!st.installed) return { ok: false, args: [], env: {}, label, reason: st.reason ?? "not installed" };
+  // A pin nobody approved is exactly what the audit exists to catch; launching past it would
+  // make the audit decorative.
+  if (st.pinState === "drifted" || st.pinState === "dirty") {
+    return { ok: false, args: [], env: {}, label, reason: `the distro is ${st.pinState}: it would run instructions that do not match the pin. Review with firstmate_update_plan, then re-pin.` };
+  }
+
+  const has = opts.available ?? (() => true);
+  const harness = opts.harness ?? FIRSTMATE_HARNESSES.find((h) => has(h));
+  if (!harness) return { ok: false, args: [], env: {}, label, reason: `no verified harness found on PATH (tried ${FIRSTMATE_HARNESSES.join(", ")})` };
+  if (!(FIRSTMATE_HARNESSES as readonly string[]).includes(harness)) {
+    return { ok: false, args: [], env: {}, label, reason: `${harness} is not verified as a firstmate primary; its turn-end guard and watcher re-arm would be absent while appearing to work` };
+  }
+  if (!has(harness)) return { ok: false, args: [], env: {}, label, reason: `${harness} is not on PATH` };
+
+  return {
+    ok: true,
+    command: harness,
+    args: harness === "grok" ? ["--trust"] : [],
+    cwd: st.root,
+    env: {
+      FM_HOME: opts.fmHome ?? path.join(path.dirname(st.root), "firstmate-home"),
+      BREAK_FREE_FIRSTMATE: "1",
+    },
+    label,
+  };
+}
