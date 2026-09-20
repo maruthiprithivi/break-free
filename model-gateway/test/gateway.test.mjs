@@ -169,6 +169,22 @@ test("worker can read files via tools, but not secrets or outside the jail", asy
   assert.match(r.text, /denied by policy/);
   r = await call("delegate", { task: 'CALL read_file {"path":"../config.json"}', model: "tooly", capabilities: ["read"] });
   assert.match(r.text, /escapes workspace/);
+  // A trailing newline terminates the last line; it does not start an empty one. Counting the
+  // raw split overstates every well-formed file by one and emits a phantom numbered blank
+  // line, which a worker then cites back as fact.
+  fs.writeFileSync(path.join(ws, "src", "three.txt"), "one\ntwo\nthree\n");
+  r = await call("delegate", { task: 'CALL read_file {"path":"src/three.txt"}', model: "tooly", capabilities: ["read"] });
+  assert.match(r.text, /lines 1-3 of 3/, r.text);
+  assert.doesNotMatch(r.text, /^\s*4\|/m, "a trailing newline must not produce a fourth, empty line");
+  // A file that genuinely ends in a blank line still has that line.
+  fs.writeFileSync(path.join(ws, "src", "blankend.txt"), "one\n\n");
+  r = await call("delegate", { task: 'CALL read_file {"path":"src/blankend.txt"}', model: "tooly", capabilities: ["read"] });
+  assert.match(r.text, /lines 1-2 of 2/, r.text);
+  // And a file with no trailing newline at all is unchanged.
+  fs.writeFileSync(path.join(ws, "src", "noeol.txt"), "only");
+  r = await call("delegate", { task: 'CALL read_file {"path":"src/noeol.txt"}', model: "tooly", capabilities: ["read"] });
+  assert.match(r.text, /lines 1-1 of 1/, r.text);
+
   r = await call("delegate", { task: 'CALL search {"pattern":"answer"}', model: "tooly", capabilities: ["read"] });
   assert.match(r.text, /src\/app\.js:1/);
 });
