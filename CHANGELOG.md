@@ -4,6 +4,10 @@
      branches never edit the same block here. scripts/changelog.sh release <version>
      folds them in. -->
 
+## 4.0.1 — 2026-09-20
+
+- **`bf firstmate` looks up a harness on PATH without a shell.** It ran `command -v <bin>` through `/bin/sh`, which concatenates rather than escapes its arguments — node deprecates that for the reason that applies here: the binary name comes from `--harness`, so it is caller input. It now walks `PATH` and checks for an executable directly, and refuses a name containing a path separator outright.
+
 ## 4.0.0 — 2026-09-20
 
 - **`bf firstmate` starts a firstmate-led session, and the installer can provision the distro (#31).** This is the honest shape of "break-free uses firstmate": an MCP server cannot make an already-running client adopt firstmate's identity, because the distro is instructions a harness reads at startup and startup is over — so break-free launches a new session inside the distro instead, and firstmate leads it. The session announces itself as `break-free -firstmate` before it takes the terminal. It refuses to launch when the distro is drifted or dirty, which would run instructions nobody approved, and refuses a harness firstmate has not verified as a primary, because its turn-end guard and watcher re-arm are per-harness and an unsupported one would look like it works while the supervision it depends on is silently absent. `FM_HOME` is kept outside the code root so rolling the code back never hides the crew registry or the backlog. The installer asks once, defaults to no, clones with full history (pinning and reviewing an update both need to diff revisions) and pins to the commit it landed on.
