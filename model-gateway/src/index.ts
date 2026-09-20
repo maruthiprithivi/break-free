@@ -33,7 +33,7 @@ import { buildCodeMap, writeCodeMap } from "./codemap.js";
 import { startServe } from "./serve.js";
 import { WorktreeRegistry, WORKTREE_STATUSES, isLinkedWorktree, shadowLedgerDir, installGuardHook, guardHookStatus, removeGuardHook, LEDGER_GUARD_WORKFLOW } from "./worktrees.js";
 import { LEDGER_DIR } from "./ledger.js";
-import { resolveVault, linkLedger } from "./knowledge.js";
+import { resolveVault, linkLedger, resolveGraph, type GraphProbe } from "./knowledge.js";
 import { runSteward, hygiene } from "./steward.js";
 import { DEFAULT_PRICING } from "./config.js";
 import { ghAvailable } from "./github.js";
@@ -177,6 +177,22 @@ async function reconcileCi(sessionDir: string): Promise<void> {
     }
     resolveCi(sessionDir, sha, { state: "success", runId: run.databaseId, url: run.url });
   }
+}
+
+/** The MCP bridge, seen through the narrow interface graph resolution needs. */
+const graphProbe: GraphProbe = {
+  servers: () => Object.keys(ctx.mcp.servers()),
+  toolNames: async (name) => (await ctx.mcp.describe(name)).tools.map((t) => t.name),
+};
+
+/** Resolved once per process: probing every server on every call would cost a connection each time. */
+let graphCache: Promise<{ provider: string; reason: string; external: boolean }> | undefined;
+function graphResolution() {
+  return (graphCache ??= resolveGraph(ctx.config.knowledge.graph.provider, graphProbe).catch((e) => ({
+    provider: "builtin",
+    reason: `unresolved: ${(e as Error).message}`,
+    external: false,
+  })));
 }
 
 async function fleetCheck(): Promise<{ running: { jobs: number; harness: number }; pending: FleetEvent[]; blocking: boolean }> {
@@ -1440,7 +1456,7 @@ async function main() {
     // is reported as absent, not as a problem: Obsidian is optional and most machines lack it.
     const vault = resolveVault(ctx.config.knowledge);
     const knowledge = {
-      graph: ctx.config.knowledge.graph.provider,
+      graph: { configured: ctx.config.knowledge.graph.provider, ...(await graphResolution()) },
       obsidian: vault
         ? { vault: vault.path, source: vault.source, mode: ctx.config.knowledge.obsidian.mode }
         : { vault: null, detected: false },

@@ -219,6 +219,24 @@ A worker that reads for thirty minutes and writes nothing looks exactly like one
 
 `0` disables any of the three. `delegate`, `supervise` and each `run_plan` task also take `stall_abort_ms` / `stall_warn_ms` per call, which is how you give one deliberately long task a wider window without loosening the default for everything else. The clock measures the silence _between tool calls_, not the run: a worker that keeps calling tools is never stalled, however long it takes. Every trip is in the runtime log as `worker.stall` (`reason: idle | no-writes | abort`).
 
+## The code graph
+
+`code_map` builds a regex import map — internal import edges and exported symbols, rendered to `.break-free/CODE-MAP.md`. It is cheap, dependency-free and enough to orient a worker, and it cannot answer who calls a function or what a change breaks.
+
+If you already run a code-graph MCP server, `knowledge.graph.provider` decides which one answers:
+
+| value | behaviour |
+|---|---|
+| `auto` (default) | prefer a detected graph service, fall back to the builtin map |
+| `builtin` | always the regex import map, whatever else is installed |
+| `<server name>` | that server, and **an error if it is not available** |
+
+Detection is by the **shape of a server's tools**, never by its name — a name is not a contract, and the same capability ships under several. Two matches from `search_graph`, `trace_path`, `query_graph`, `get_architecture`, `get_code_snippet`, `index_repository` are required; one lone search tool cannot answer a structural question.
+
+A named provider that is missing is an error rather than a quiet fall back, for the same reason the tier floor refuses: answering structural questions from regex import edges without saying so is a silent downgrade, and here nothing in the answer would reveal it. `builtin` is the floor, so `code_map` always answers on a machine with nothing installed.
+
+`--doctor` reports the configured value, what it resolved to, and why.
+
 ## Obsidian: the ledger in your vault
 
 `.break-free/` is already Markdown with frontmatter and `[[wikilinks]]`, so it opens as a vault. That left the wiring to you; `obsidian_link` does it.
