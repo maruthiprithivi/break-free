@@ -118,7 +118,7 @@ async function buildFleetSnapshot(prev: FleetSnapshot | undefined): Promise<Flee
       }
       const prevH = prev?.harness?.[s.id];
       const unchanged = s.state === "running" && prevH?.state === "running" && prevH.digest === digest;
-      harness[s.id] = { state: s.state, digest, since: unchanged ? prevH!.since : ts };
+      harness[s.id] = { state: s.state, digest, since: unchanged ? prevH!.since : ts, cwd: s.cwd };
     }
   } catch {
     // tmux missing or the session directory is unreadable: no harness sessions.
@@ -200,13 +200,19 @@ async function fleetCheck(): Promise<{ running: { jobs: number; harness: number 
   const sessionDir = ctx.config.sessionDir!;
   const prev = readSnapshot(sessionDir);
   const next = await buildFleetSnapshot(prev);
-  appendEvents(sessionDir, classify(prev, next, ctx.config.fleet.idleMs), ctx.workspace.root);
+  // The gateway owns the jobs it started, so those carry its workspace. A harness session owns
+  // itself and carries its own cwd from classify(); defaulting it here would re-create the bug
+  // this scoping exists to fix, by making the observer the owner.
+  const events = classify(prev, next, ctx.config.fleet.idleMs).map((e) =>
+    e.kind.startsWith("job.") ? { ...e, workspace: ctx.workspace.root } : e,
+  );
+  appendEvents(sessionDir, events);
   writeSnapshot(sessionDir, next);
   await reconcileCi(sessionDir);
   const pending = pendingEvents(sessionDir, ctx.workspace.root);
   const running = {
     jobs: Object.values(next.jobs).filter((s) => s === "running").length,
-    harness: Object.values(next.harness).filter((h) => h.state === "running").length,
+    harness: Object.values(next.harness).filter((h) => h.state === "running" && (!h.cwd || h.cwd.startsWith(ctx.workspace.root))).length,
   };
   return { running, pending, blocking: running.jobs > 0 || pending.length > 0 };
 }

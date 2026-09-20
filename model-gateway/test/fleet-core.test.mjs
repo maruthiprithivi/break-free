@@ -194,3 +194,34 @@ test("a cursor file still holding a bare integer is a baseline for every workspa
   drainTo(sessionDir, fresh.seq, "/repo/a");
   assert.deepEqual(pendingEvents(sessionDir, "/repo/b"), []);
 });
+
+test("a harness event belongs to the session's own directory, not to whoever noticed it", () => {
+  // A crew session running in one project must not block the turn-end guard of another. The
+  // gateway that polls is not the owner; the session's cwd is.
+  const prev = { ts: t(0), jobs: {}, harness: { s1: { state: "running", digest: "aaa", since: t(0), cwd: "/repo/other" } } };
+  const next = { ts: t(1000), jobs: {}, harness: { s1: { state: "running", digest: "bbb", since: t(1000), cwd: "/repo/other" } } };
+
+  const events = classify(prev, next, 60_000);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].kind, "harness.output");
+  assert.equal(events[0].workspace, "/repo/other", "the session's own directory owns the event");
+
+  // The observing gateway's workspace must not overwrite it.
+  appendEvents(sessionDir, events, "/repo/observer");
+  assert.deepEqual(pendingEvents(sessionDir, "/repo/observer"), [], "the observer is not the owner");
+  assert.equal(pendingEvents(sessionDir, "/repo/other").length, 1, "the owner still sees it");
+});
+
+test("a harness session with no recorded directory still reaches someone", () => {
+  // Sessions from before cwd was carried have no owner. They must stay visible rather than
+  // becoming events that block nobody and are never cleared.
+  const prev = { ts: t(0), jobs: {}, harness: { s1: { state: "running", digest: "aaa", since: t(0) } } };
+  const next = { ts: t(1000), jobs: {}, harness: { s1: { state: "exited", digest: "", since: t(1000) } } };
+  const events = classify(prev, next, 60_000);
+  assert.equal(events[0].kind, "harness.exited");
+  assert.equal(events[0].workspace, undefined);
+  // fleetCheck appends harness events WITHOUT a default owner, precisely so the observer does
+  // not become the owner. An unowned event then stays visible to everyone.
+  appendEvents(sessionDir, events);
+  assert.equal(pendingEvents(sessionDir, "/repo/anyone").length, 1);
+});
