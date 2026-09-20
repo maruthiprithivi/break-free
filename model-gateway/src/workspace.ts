@@ -67,6 +67,18 @@ export function strArray(v: unknown, name: string): string[] {
   return v as string[];
 }
 
+/**
+ * Split text into lines the way a person counts them: a trailing newline TERMINATES the last
+ * line, it does not begin an empty one. `"a\nb\n".split("\n")` is `["a","b",""]`, so counting
+ * the raw split overstates every well-formed file by one and prints a phantom numbered blank
+ * line at the end — which workers then reason about and cite back.
+ */
+function toLines(text: string): string[] {
+  const lines = text.split("\n");
+  if (lines.length > 1 && lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
 export class Workspace {
   readonly root: string;
   private deny: RegExp[];
@@ -154,7 +166,7 @@ export class Workspace {
       const st = fs.statSync(abs);
       if (st.isDirectory()) throw new Error(`${a.path} is a directory; use list_files`);
       if (st.size > cfg.maxFileBytes * 4) throw new Error(`File too large (${st.size} bytes); read a line range`);
-      const lines = fs.readFileSync(abs, "utf8").split("\n");
+      const lines = toLines(fs.readFileSync(abs, "utf8"));
       const s = Math.max(1, Number(a.start_line ?? 1));
       const e = Math.min(lines.length, Number(a.end_line ?? lines.length));
       let out = lines.slice(s - 1, e).map((l, i) => `${String(s + i).padStart(5)}| ${l}`).join("\n");
@@ -216,7 +228,7 @@ export class Workspace {
         if (!st.isFile() || st.size > 2_000_000) continue; // lstat: symlinks are skipped
         const buf = fs.readFileSync(abs);
         if (buf.subarray(0, 512).includes(0)) continue; // binary
-        const lines = buf.toString("utf8").split("\n");
+        const lines = toLines(buf.toString("utf8"));
         for (let i = 0; i < lines.length; i++) {
           if (re.test(lines[i])) {
             hits.push(`${f}:${i + 1}: ${lines[i].slice(0, 300)}`);
