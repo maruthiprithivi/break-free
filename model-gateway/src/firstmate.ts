@@ -1,0 +1,198 @@
+/**
+ * firstmate, provisioned and driven by break-free.
+ *
+ * firstmate (github.com/kunchenguid/firstmate) is an agent distro: a cloned repository of
+ * AGENTS.md, skills and several hundred deterministic shell scripts that a harness follows. It
+ * owns what break-free does not — a clean git worktree per task, a visible crew, fleet sync and
+ * merge authority. break-free keeps routing, tiers, verification, review and CI watching.
+ *
+ * Three rules shape everything here.
+ *
+ * It is NEVER forked. break-free clones it, pins a revision, and moves that pin deliberately.
+ * The upstream default branch is someone else's moving target, and its contents become the
+ * instructions the user's agent obeys — so an unreviewed fast-forward is a supply-chain event,
+ * not a convenience.
+ *
+ * break-free decides WHICH commit; upstream's own bin/fm-update.sh moves the tree. Their script
+ * is fast-forward only, never forces, never stashes, and never touches the gitignored
+ * operational directories. Reimplementing that in TypeScript would be a second, worse copy of
+ * mechanics they maintain.
+ *
+ * The distro lives in ONE place per machine, not per repository. Its operational state (FM_HOME)
+ * holds the crew registry and the task backlog, which are machine-level facts; N clones would
+ * mean N fleets that cannot see each other.
+ */
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+export const FIRSTMATE_REPO = "https://github.com/kunchenguid/firstmate";
+
+/** What the user sees whenever break-free hands work to the distro. */
+export const FIRSTMATE_LABEL = "break-free -firstmate";
+
+export interface FirstmateConfig {
+  /** Where the distro lives. Default: <breakFreeHome>/firstmate. */
+  root?: string;
+  /** Commit this machine is pinned to. Absent means "whatever was cloned", which is not a pin. */
+  pin?: string;
+  enabled: boolean;
+}
+
+export interface FirstmateStatus {
+  installed: boolean;
+  root: string;
+  /** HEAD of the checkout, which is what the user's agent is actually obeying. */
+  head?: string;
+  pin?: string;
+  /** True when HEAD has drifted from the pin — someone moved it, or a pin was never applied. */
+  drifted: boolean;
+  /** Uncommitted edits in the checkout. A matching HEAD with a dirty tree is NOT a clean pin. */
+  dirty: boolean;
+  /** HEAD is the revision on disk. It is not proof of what a RUNNING agent already loaded. */
+  pinState: "clean" | "drifted" | "dirty" | "unpinned" | "unknown";
+  /** Commits the pinned revision is behind origin, when that can be determined offline. */
+  behind?: number;
+  reason?: string;
+}
+
+function git(cwd: string, args: string[]): string | undefined {
+  try {
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+export function defaultRoot(home = os.homedir()): string {
+  return path.join(process.env.BREAK_FREE_HOME ?? path.join(home, ".break-free"), "firstmate");
+}
+
+export function resolveRoot(cfg: FirstmateConfig, home = os.homedir()): string {
+  return cfg.root ? cfg.root.replace(/^~(?=$|\/)/, home) : defaultRoot(home);
+}
+
+/**
+ * Is a directory actually a firstmate distro, rather than merely present?
+ *
+ * Checked by the files that make it one — AGENTS.md and bin/fm-update.sh — so an empty or
+ * half-cloned directory is reported as not installed instead of being driven as if it were.
+ */
+export function looksLikeDistro(root: string): boolean {
+  return fs.existsSync(path.join(root, "AGENTS.md")) && fs.existsSync(path.join(root, "bin", "fm-update.sh"));
+}
+
+export function status(cfg: FirstmateConfig, home = os.homedir()): FirstmateStatus {
+  const root = resolveRoot(cfg, home);
+  if (!looksLikeDistro(root)) {
+    return { installed: false, root, drifted: false, dirty: false, pinState: "unknown", reason: fs.existsSync(root) ? `${root} exists but is not a firstmate distro` : "not installed" };
+  }
+  const head = git(root, ["rev-parse", "HEAD"]);
+  const porcelain = git(root, ["status", "--porcelain"]);
+  // A failed git read is UNKNOWN, never "fine". Reporting an unreadable checkout as clean is
+  // the worst of the three answers.
+  if (head === undefined || porcelain === undefined) {
+    return { installed: true, root, head, pin: cfg.pin, drifted: false, dirty: false, pinState: "unknown", reason: "could not read the checkout with git" };
+  }
+  const pin = cfg.pin;
+  const dirty = porcelain.length > 0;
+  // A pin HEAD does not match means the agent obeys instructions nobody approved. So does a
+  // dirty tree at the right commit: the bytes on disk are what gets read, not the commit id.
+  const drifted = !!pin && !head.startsWith(pin) && !pin.startsWith(head);
+  const pinState = !pin ? "unpinned" : drifted ? "drifted" : dirty ? "dirty" : "clean";
+  return { installed: true, root, head, pin, drifted, dirty, pinState };
+}
+
+export interface UpdatePlan {
+  root: string;
+  from?: string;
+  to?: string;
+  /** Changes to surfaces that steer an agent, including executable harness hooks. */
+  instructionChanges: string[];
+  /** Every changed path, because "not an instruction surface" is a judgement the user may not share. */
+  allChanges: string[];
+  /** True when the revisions could not be read; NOT the same as "nothing changed". */
+  unknown: boolean;
+  /** True when nothing would move. */
+  current: boolean;
+}
+
+/**
+ * What moving the pin to `target` would change, WITHOUT changing anything.
+ *
+ * The diff is limited to the surfaces that steer an agent — AGENTS.md, skills and bin — because
+ * those are what a human needs to have seen. A thousand-line docs change is not the thing that
+ * can quietly alter what the agent does.
+ */
+export function planUpdate(root: string, target: string): UpdatePlan {
+  const from = git(root, ["rev-parse", "HEAD"]);
+  const to = git(root, ["rev-parse", target]);
+  if (!from || !to) return { root, from, to, instructionChanges: [], allChanges: [], unknown: true, current: false };
+  const changed = (git(root, ["diff", "--name-only", `${from}..${to}`]) ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  return { root, from, to, instructionChanges: changed.filter(steersAnAgent), allChanges: changed, unknown: false, current: from === to };
+}
+
+/**
+ * Does changing this file change what an agent does?
+ *
+ * Prose is the obvious case and the least dangerous. The executable harness assets matter more:
+ * a `.claude/settings.json` hook or a `.cursor/hooks.json` entry runs without anybody reading
+ * it. Excluding them because they are "config" would hide the changes with the shortest path
+ * to execution.
+ */
+function steersAnAgent(p: string): boolean {
+  return (
+    p === "AGENTS.md" ||
+    p === "CLAUDE.md" ||
+    p.startsWith("bin/") ||
+    p.startsWith("skills/") ||
+    p.startsWith(".agents/") ||
+    p.startsWith(".claude/") ||
+    p.startsWith(".cursor/") ||
+    p.startsWith(".pi/") ||
+    p.startsWith(".omp/") ||
+    /(^|\/)hooks?\.(json|toml|ya?ml)$/.test(p) ||
+    /(^|\/)settings\.json$/.test(p)
+  );
+}
+
+/**
+ * The command that moves the tree, which is upstream's own.
+ *
+ * Returned rather than executed so the caller decides when a third party's script runs against
+ * the user's machine, and so the same string can be shown to them first.
+ */
+export function updateCommand(root: string): { command: string; args: string[]; cwd: string; caveat: string } {
+  return {
+    command: path.join(root, "bin", "fm-update.sh"),
+    args: [],
+    cwd: root,
+    // fm-update.sh takes no arguments and fast-forwards from ORIGIN. It cannot be aimed at the
+    // revision a plan reviewed, so between planning and applying, origin may have moved. The
+    // two are not connected and must not be presented as if they were.
+    caveat: "fast-forwards to origin's current tip, which is not necessarily the revision you planned against; re-plan if origin moved",
+  };
+}
+
+/** Upstream's parseable summary: which of its lines the caller must act on. */
+export function parseUpdateSummary(out: string): { rereadInstructions: boolean; restart: string[]; nudge: string[] } {
+  const field = (name: string) => out.split("\n").find((l) => l.startsWith(`${name}:`))?.slice(name.length + 1).trim() ?? "";
+  const list = (v: string) => (v && v !== "none" ? v.split(/\s+/).filter(Boolean) : []);
+  return {
+    rereadInstructions: field("reread-firstmate") === "yes",
+    restart: list(field("restart-secondmates")),
+    nudge: list(field("nudge-secondmates")),
+  };
+}
+
+/**
+ * How a firstmate-backed session announces itself.
+ *
+ * The user asked to see which system is driving. A crew session that looks like any other
+ * terminal is the thing that makes a fleet confusing, so every session break-free starts
+ * through the distro carries the label in its name.
+ */
+export function sessionLabel(task?: string): string {
+  return task ? `${FIRSTMATE_LABEL}: ${task.replace(/\s+/g, " ").slice(0, 60)}` : FIRSTMATE_LABEL;
+}

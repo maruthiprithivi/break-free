@@ -35,6 +35,7 @@ import { startServe } from "./serve.js";
 import { WorktreeRegistry, WORKTREE_STATUSES, isLinkedWorktree, shadowLedgerDir, installGuardHook, guardHookStatus, removeGuardHook, LEDGER_GUARD_WORKFLOW } from "./worktrees.js";
 import { LEDGER_DIR } from "./ledger.js";
 import { resolveVault, linkLedger, resolveGraph, type GraphProbe } from "./knowledge.js";
+import { status as firstmateStatus, planUpdate, updateCommand, parseUpdateSummary, sessionLabel, FIRSTMATE_REPO, FIRSTMATE_LABEL } from "./firstmate.js";
 import { estimateTokens, line as ctxLine, report as ctxReport, renderReport, type ContextLine } from "./context.js";
 import { runSteward, hygiene } from "./steward.js";
 import { DEFAULT_PRICING } from "./config.js";
@@ -1303,6 +1304,29 @@ server.registerTool("context_report", {
   return text(`${renderReport(r)}\n\n${JSON.stringify(r, null, 2)}`);
 });
 
+server.registerTool("firstmate_status", {
+  title: "Is the firstmate distro provisioned, and what is it pinned to",
+  description: "Report the firstmate distro break-free drives for crew, worktrees and merge authority: where it lives, the commit the agent is actually obeying, the pinned commit, and whether the two have drifted apart. Drift means instructions nobody approved are in force.",
+  inputSchema: {},
+}, async () => json({ ...firstmateStatus(ctx.config.firstmate), repo: FIRSTMATE_REPO, label: FIRSTMATE_LABEL }));
+
+server.registerTool("firstmate_update_plan", {
+  title: "What moving the firstmate pin would change",
+  description: "Show what a revision would change in the surfaces that steer an agent — AGENTS.md, bin/ and skills/ — WITHOUT changing anything. An upstream commit becomes the instructions your agent obeys, so it is reviewed before it is applied, never after. Returns the command break-free would run, which is upstream's own fast-forward-only script, so you can run it yourself instead.",
+  inputSchema: {
+    target: z.string().optional().describe("Revision to plan towards. Default: origin's current default branch."),
+  },
+}, async (a) => {
+  try {
+    const st = firstmateStatus(ctx.config.firstmate);
+    if (!st.installed) return json({ installed: false, reason: st.reason, repo: FIRSTMATE_REPO });
+    const plan = planUpdate(st.root, a.target ?? "origin/HEAD");
+    return json({ ...plan, apply: updateCommand(st.root), note: plan.instructionChanges.length ? "These files steer the agent. Read them before applying." : "No change to instruction surfaces." });
+  } catch (e) {
+    return fail(e);
+  }
+});
+
 server.registerTool("obsidian_link", {
   title: "Surface this project's ledger in an Obsidian vault",
   description: "Link (or index) the project ledger into the Obsidian vault, so notes, tasks and the journal open in the vault with their wikilinks intact. The repository stays the source of truth: `link` symlinks the ledger rather than copying it. Does nothing when no vault is detected. Anything already at the target that is not our own link is left untouched.",
@@ -1521,8 +1545,10 @@ async function main() {
     // "Which knowledge layer am I actually using" is otherwise unanswerable. An absent vault
     // is reported as absent, not as a problem: Obsidian is optional and most machines lack it.
     const vault = resolveVault(ctx.config.knowledge);
+    const fm = firstmateStatus(ctx.config.firstmate);
     const knowledge = {
       graph: { configured: ctx.config.knowledge.graph.provider, ...(await graphResolution()) },
+      firstmate: { installed: fm.installed, root: fm.root, head: fm.head?.slice(0, 12) ?? null, pin: fm.pin ?? null, drifted: fm.drifted, ...(fm.reason ? { reason: fm.reason } : {}) },
       obsidian: vault
         ? { vault: vault.path, source: vault.source, mode: ctx.config.knowledge.obsidian.mode }
         : { vault: null, detected: false },
