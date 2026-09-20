@@ -186,6 +186,7 @@ function crewSet(dir, ids, probes, mode = "first-attempts") {
   const file = path.join(path.dirname(dir), `${path.basename(dir)}-set.jsonl`);
   const rows = ids.map((id) =>
     JSON.stringify({
+      context: { toolProfile: "full" },
       id,
       task: `Implement ${id}() in src/${id}.mjs so its test passes.`,
       acceptance: `\`node flip.mjs ${probes} ${mode}\` exits 0`,
@@ -206,6 +207,7 @@ function gatewayConfig({ dir, laneMap, doubleUrl }) {
   fs.writeFileSync(
     file,
     JSON.stringify({
+      context: { toolProfile: "full" },
       logFile: false,
       sessionDir: path.join(dir, "sessions"),
       defaults: { model: "mock/good", reviewer: "mock/good", supervisor: "mock/good", timeoutMs: 20_000, maxToolIterations: 2 },

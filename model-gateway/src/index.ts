@@ -329,9 +329,29 @@ const server = new McpServer({ name: "break-free-gateway", version: VERSION }, {
   instructions: SERVER_INSTRUCTIONS.join("\n"),
 });
 
-// Wrap once, so every registerTool below is accounted without each call site knowing.
+/**
+ * Execution, its lifecycle, and the first call of a session stay typed and resident.
+ *
+ * Astra's rule, and it is right: keep operations with their lifecycle. Advertising `delegate`
+ * while hiding `job_cancel` would leave an agent able to start work it cannot stop.
+ */
+const RESIDENT_TOOLS = new Set([
+  "delegate", "run_plan", "supervise", "review",
+  "job_status", "job_result", "job_cancel", "job_list",
+  "ledger_resume", "list_models",
+  "bf_discover", "bf_invoke",
+]);
+
+/** Every registered operation, whether or not its schema is advertised. */
+const operations = new Map<string, { def: Record<string, unknown>; handler: (a: Record<string, unknown>) => unknown }>();
+
+// Wrap once, so every registerTool below is accounted and, under the compact profile, the
+// rarely-used operations move behind discovery instead of being advertised in every turn.
 const registerToolRaw = server.registerTool.bind(server);
 (server as unknown as { registerTool: typeof registerToolRaw }).registerTool = ((name: string, def: Record<string, unknown>, handler: unknown) => {
+  operations.set(name, { def, handler: handler as (a: Record<string, unknown>) => unknown });
+  const compact = ctx.config.context.toolProfile === "compact" && !RESIDENT_TOOLS.has(name);
+  if (compact) return undefined as unknown as ReturnType<typeof registerToolRaw>;
   const text = `${name}${def.title ?? ""}${def.description ?? ""}${schemaText(def.inputSchema as Record<string, unknown> | undefined)}`;
   toolSchemaCost.push({ name, tokens: estimateTokens(text) });
   return (registerToolRaw as (...a: unknown[]) => unknown)(name, def, handler);
@@ -1533,6 +1553,55 @@ server.registerTool("harness_list", {
   description: "Every harness sub-agent with its tmux name, harness, cwd, state, timestamps and `attach` command — use to resume work a previous session started.",
   inputSchema: {},
 }, async () => json({ sessions: (await ctx.harnessctl.list()).map((s) => ({ ...s, attach: ctx.harnessctl.attach(s) })) }));
+/**
+ * Discovery and dispatch for everything not advertised permanently.
+ *
+ * Registered last, so every other operation is already in the map. Under the compact profile
+ * these two are the only way to reach the rest — which is why they are resident, and why
+ * nothing is ever truly hidden: an agent can always ask what exists and then call it.
+ */
+server.registerTool("bf_discover", {
+  title: "List the operations that are not advertised permanently",
+  description: "break-free keeps execution and its lifecycle typed and resident, and moves everything else — worktrees, the ledger and its tasks and notes, provider and alias configuration, sessions, harnesses, cost, routing, the steward, firstmate — behind this. Call it with no argument for the list, or with `operation` for that one's full schema, then call it through bf_invoke. Nothing is unreachable; it is simply not spent on every turn.",
+  inputSchema: {
+    operation: z.string().optional().describe("Return this operation's full input schema instead of the list."),
+    match: z.string().optional().describe("Substring filter over names and titles, e.g. 'worktree' or 'note'."),
+  },
+}, async (a) => {
+  const hidden = [...operations.entries()].filter(([n]) => !RESIDENT_TOOLS.has(n));
+  if (a.operation) {
+    const op = operations.get(a.operation);
+    if (!op) return fail(new Error(`no operation "${a.operation}". Call bf_discover with no argument for the list.`));
+    return json({ operation: a.operation, title: op.def.title, description: op.def.description, input_schema: zodToJsonSchema(z.object((op.def.inputSchema ?? {}) as z.ZodRawShape)) });
+  }
+  const needle = a.match?.toLowerCase();
+  const rows = hidden
+    .filter(([n, op]) => !needle || n.toLowerCase().includes(needle) || String(op.def.title ?? "").toLowerCase().includes(needle))
+    .map(([n, op]) => ({ operation: n, title: op.def.title }));
+  return json({ operations: rows, count: rows.length, call_with: "bf_invoke {operation, arguments}", schema_with: "bf_discover {operation}" });
+});
+
+server.registerTool("bf_invoke", {
+  title: "Call an operation returned by bf_discover",
+  description: "Run one of the operations bf_discover lists. Arguments are validated against that operation's own schema by the same code path a permanently advertised tool uses, so an invalid call fails the same way rather than reaching the handler.",
+  inputSchema: {
+    operation: z.string().describe("Name from bf_discover."),
+    arguments: z.record(z.unknown()).optional().describe("That operation's arguments. Get its schema from bf_discover {operation}."),
+  },
+}, async (a) => {
+  const op = operations.get(a.operation);
+  if (!op) return fail(new Error(`no operation "${a.operation}". Call bf_discover for the list.`));
+  if (RESIDENT_TOOLS.has(a.operation) && a.operation.startsWith("bf_")) return fail(new Error(`${a.operation} cannot invoke itself`));
+  try {
+    // Same validation the tool would have had. Dispatching around it would make the compact
+    // profile a hole rather than a saving.
+    const parsed = z.object((op.def.inputSchema ?? {}) as z.ZodRawShape).parse(a.arguments ?? {});
+    return (await op.handler(parsed as Record<string, unknown>)) as ReturnType<typeof json>;
+  } catch (e) {
+    return fail(e);
+  }
+});
+
 // ------------------------------------------------------------ main
 async function main() {
   if (argv.includes("--selftest")) {

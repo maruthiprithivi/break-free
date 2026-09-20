@@ -118,6 +118,14 @@ const ConfigSchema = z.object({
        * firstmate's startup-memory allowance, so someone running both has one number to hold.
        */
       budgetTokens: z.number().int().positive().default(7500),
+      /**
+       * Which tools are advertised with a full schema at all times.
+       *
+       * "compact" keeps execution and its lifecycle typed and resident, and moves the rest
+       * behind discovery. Nothing becomes unreachable — that is the difference between this
+       * and simply not registering a tool, which would make the surface depend on the machine.
+       */
+      toolProfile: z.enum(["full", "compact"]).default("compact"),
     })
     .default({}),
   /** Where the ledger shows up outside the repository. Both parts optional, both detected. */

@@ -32,6 +32,7 @@ before(async () => {
   configPath = path.join(tmp, "config.json");
 
   fs.writeFileSync(configPath, JSON.stringify({
+    context: { toolProfile: "full" },
     sessionDir,
     logFile: false,
     // `slow` sleeps 3s, so 400ms is a timeout and not a slow answer.

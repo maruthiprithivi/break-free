@@ -62,6 +62,9 @@ before(async () => {
     // Merge autonomy is opt-in since named modes landed; these tests exercise gh argument
     // validation and merge behaviour, not the default policy, so they ask for it explicitly.
     mergeAutonomy: true,
+    // These tests exercise what each tool DOES, so they ask for every tool to be advertised.
+    // The compact default, and how a non-advertised operation is reached, is profile.test.mjs.
+    context: { toolProfile: "full" },
     logFile: path.join(tmp, "gateway.log"),
     // 8 s of headroom: a delegate is up to two provider round trips (tool call, then summary) plus
     // real git subprocesses, so on a loaded machine a tighter budget fails a test on a timeout that

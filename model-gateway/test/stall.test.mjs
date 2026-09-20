@@ -47,6 +47,7 @@ function startPacedProvider({ turnMs = 0, toolCalls = 0 } = {}) {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(
           JSON.stringify({
+            context: { toolProfile: "full" },
             id: "paced-1",
             choices: [
               {
@@ -90,6 +91,7 @@ async function startGateway({ port, workers = {}, defaults = {} } = {}) {
   fs.writeFileSync(
     configPath,
     JSON.stringify({
+      context: { toolProfile: "full" },
       sessionDir: path.join(tmp, "sessions"),
       logFile: path.join(tmp, "gateway.log"),
       defaults: { model: "paced/worker", reviewer: "paced/worker", supervisor: "paced/worker", timeoutMs: 8000, maxToolIterations: 4, ...defaults },

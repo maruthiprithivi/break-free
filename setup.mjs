@@ -1219,6 +1219,22 @@ function stopHookInstalled(file) {
 
 
 // ---- Responses-API shim (Codex profiles) ---------------------------------------
+
+/**
+ * Call a gateway tool whether or not the profile advertises it.
+ *
+ * The installer verifies with the SAME profile the user will run, so it cannot assume every
+ * tool is advertised. Under the compact default the rarely-used ones are reached through
+ * bf_invoke, which validates identically — verifying under a profile nobody uses would prove
+ * nothing about the install.
+ */
+async function callGatewayTool(client, name, args, timeoutMs, label) {
+  const advertised = await client.listTools().then((t) => t.tools.some((x) => x.name === name)).catch(() => true);
+  return advertised
+    ? withTimeout(client.callTool({ name, arguments: args }), timeoutMs, label)
+    : withTimeout(client.callTool({ name: "bf_invoke", arguments: { operation: name, arguments: args } }), timeoutMs, label);
+}
+
 async function shimHealthy() {
   try { const r = await fetch(`http://127.0.0.1:${SERVE_PORT}/healthz`, { signal: AbortSignal.timeout(2000) }); return r.ok; } catch { return false; }
 }
@@ -1436,16 +1452,28 @@ async function verify() {
     const { tools } = await withTimeout(client.listTools(), 10_000, "tools/list");
     const names = tools.map((t) => t.name);
     const expected = ["delegate", "review", "panel", "supervise", "run_plan", "job_status", "list_mcp_servers", "ledger_resume", "task_create", "note_write", "code_map", "list_providers", "configure_provider"];
-    const missing = expected.filter((n) => !names.includes(n));
-    missing.length ? report.fail("tool list incomplete", `missing ${missing.join(", ")}`) : report.pass(`MCP handshake ok in ${Date.now() - t0} ms`, `${names.length} tools`);
+    // What matters is that every operation is REACHABLE, not that every one is advertised.
+    // Under the compact profile the rarely-used ones live behind bf_discover, so asserting the
+    // tool list would fail an install that is working exactly as designed.
+    let reachable = new Set(names);
+    if (names.includes("bf_discover")) {
+      try {
+        const d = await withTimeout(client.callTool({ name: "bf_discover", arguments: {} }), 10_000, "bf_discover");
+        for (const op of JSON.parse(d.content.map((c) => c.text).join("")).operations ?? []) reachable.add(op.operation);
+      } catch { /* leave the advertised set as the answer; the miss is reported below */ }
+    }
+    const missing = expected.filter((n) => !reachable.has(n));
+    missing.length
+      ? report.fail("tool list incomplete", `missing ${missing.join(", ")}`)
+      : report.pass(`MCP handshake ok in ${Date.now() - t0} ms`, `${names.length} advertised, ${reachable.size} reachable`);
     // v3 features must actually work through MCP, not just be listed
     try {
-      const r = await withTimeout(client.callTool({ name: "list_mcp_servers", arguments: {} }), 15_000, "list_mcp_servers");
+      const r = await callGatewayTool(client, "list_mcp_servers", {}, 15_000, "list_mcp_servers");
       const j = JSON.parse(r.content.map((c) => c.text).join(""));
       report.pass(`MCP bridge: ${j.servers.length} other server(s) discovered for workers`, j.servers.map((x) => `${x.name} (${x.source})`).join(", ") || "none yet — add servers to Claude/Codex or config.workers.mcp.servers");
     } catch (e) { report.warn("MCP bridge discovery failed", String(e.message).slice(0, 200)); }
     try {
-      const r = await withTimeout(client.callTool({ name: "run_plan", arguments: { track: false, tasks: [{ id: "x", task: "x", depends_on: ["y"] }, { id: "y", task: "y", depends_on: ["x"] }] } }), 15_000, "run_plan validation");
+      const r = await callGatewayTool(client, "run_plan", { track: false, tasks: [{ id: "x", task: "x", depends_on: ["y"] }, { id: "y", task: "y", depends_on: ["x"] }] }, 15_000, "run_plan validation");
       /cycle/.test(r.content.map((c) => c.text).join("")) ? report.pass("run_plan validates dependency graphs") : report.warn("run_plan did not reject a dependency cycle");
     } catch (e) { report.warn("run_plan check failed", String(e.message).slice(0, 200)); }
     report.info(`runtime log: ${path.join(CFG_DIR, "gateway.log")} — every delegation, fallback and worker tool call lands there; \`node setup.mjs --doctor\` summarises it`);
@@ -1453,7 +1481,7 @@ async function verify() {
       const local = ["ollama", "vllm"].includes(name);
       if (local && state.providersVerified.length && !state.providersVerified.includes(name)) { report.warn(`through MCP: ${name} skipped`, "its direct probe did not answer earlier", "fix that first, then `node setup.mjs --doctor`"); continue; }
       try {
-        const r = await withTimeout(client.callTool({ name: "test_provider", arguments: { spec: name, with_tools: !local } }), local ? 300_000 : 90_000, `test_provider ${name}`);
+        const r = await callGatewayTool(client, "test_provider", { spec: name, with_tools: !local }, local ? 300_000 : 90_000, `test_provider ${name}`);
         const text = r.content?.map((c) => c.text).join("") ?? "";
         let j; try { j = JSON.parse(text); } catch { /* error text */ }
         const row = j?.results?.[0];
