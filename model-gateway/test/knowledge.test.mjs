@@ -118,3 +118,60 @@ test("a project with no ledger yet is skipped, not half-linked", () => {
   assert.match(r.reason, /no ledger at/);
   assert.ok(!fs.existsSync(path.join(vault, "break-free", "myproj")), "nothing is created for a project that has no ledger");
 });
+
+// --- the code graph ---------------------------------------------------------------
+// The builtin import map is the floor: code_map must answer on a machine with nothing
+// installed. A real graph service is preferred when one is there, detected by the shape
+// of its tools rather than by its name, because a name is not a contract.
+
+import { looksLikeGraphServer, resolveGraph } from "../dist/knowledge.js";
+
+const probe = (servers) => ({
+  servers: () => Object.keys(servers),
+  toolNames: async (n) => {
+    const t = servers[n];
+    if (t === "unreachable") throw new Error("connect failed");
+    return t;
+  },
+});
+
+test("a graph service is recognised by what it can do, not by what it is called", () => {
+  assert.equal(looksLikeGraphServer(["search_graph", "trace_path", "get_code_snippet"]), true);
+  // Host-prefixed names are the same capability.
+  assert.equal(looksLikeGraphServer(["mcp__weird-name__search_graph", "mcp__weird-name__query_graph"]), true);
+  // One lonely search tool cannot answer a structural question.
+  assert.equal(looksLikeGraphServer(["search_code"]), false);
+  assert.equal(looksLikeGraphServer(["browser_click", "browser_snapshot"]), false);
+  assert.equal(looksLikeGraphServer([]), false);
+});
+
+test("auto prefers a detected graph service and falls back to the builtin floor", async () => {
+  const found = await resolveGraph("auto", probe({ chrome: ["browser_click"], codegraph: ["search_graph", "trace_path"] }));
+  assert.equal(found.provider, "codegraph");
+  assert.equal(found.external, true);
+  assert.match(found.reason, /detected/);
+
+  const none = await resolveGraph("auto", probe({ chrome: ["browser_click"] }));
+  assert.deepEqual([none.provider, none.external], ["builtin", false], "with no graph service the builtin map still answers");
+
+  // A server that will not answer is skipped rather than taken on faith or made fatal.
+  const skipped = await resolveGraph("auto", probe({ broken: "unreachable", codegraph: ["query_graph", "get_architecture"] }));
+  assert.equal(skipped.provider, "codegraph");
+});
+
+test("builtin is honoured even when a graph service is present", async () => {
+  const r = await resolveGraph("builtin", probe({ codegraph: ["search_graph", "trace_path"] }));
+  assert.deepEqual([r.provider, r.external], ["builtin", false]);
+});
+
+test("an explicitly named provider that is missing fails loudly instead of degrading", async () => {
+  // Silently answering structural questions from regex import edges, without saying so, is the
+  // failure the tier floor exists to prevent. Here it would be invisible in the answer itself.
+  await assert.rejects(
+    () => resolveGraph("codegraph", probe({ chrome: ["browser_click"] })),
+    /no such MCP server is available/,
+  );
+  // Named and present is simply used, without probing its tools.
+  const r = await resolveGraph("codegraph", probe({ codegraph: "unreachable" }));
+  assert.deepEqual([r.provider, r.external], ["codegraph", true]);
+});

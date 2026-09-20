@@ -139,3 +139,64 @@ function indexNote(project: string, ledgerDir: string): string {
     "",
   ].join("\n");
 }
+
+// ---------------------------------------------------------------- the code graph
+
+/**
+ * Tool names a code-graph service tends to expose. Detection is by SHAPE, never by server
+ * name: a name is not a contract and the same capability ships under many of them.
+ *
+ * Two matches are required. One is too easy — plenty of servers expose a lone `search_code`
+ * and cannot answer a single structural question.
+ */
+const GRAPH_SIGNATURE = ["search_graph", "trace_path", "query_graph", "get_architecture", "get_code_snippet", "index_repository"];
+
+export function looksLikeGraphServer(toolNames: string[]): boolean {
+  // Hosts prefix bridged tools (`server__tool`), so compare on the bare name.
+  const bare = new Set(toolNames.map((n) => n.toLowerCase().replace(/^.*__/, "")));
+  return GRAPH_SIGNATURE.filter((sig) => bare.has(sig)).length >= 2;
+}
+
+/** Just enough of the MCP bridge to resolve a provider, so this is testable without MCP. */
+export interface GraphProbe {
+  servers(): string[];
+  toolNames(server: string): Promise<string[]>;
+}
+
+export interface GraphResolution {
+  /** "builtin" or the name of an MCP server that answers structural questions. */
+  provider: string;
+  reason: string;
+  /** True when a real graph service is in play, rather than the regex import map. */
+  external: boolean;
+}
+
+/**
+ * Which code graph answers structural questions.
+ *
+ * `builtin` is always available and is the floor: `code_map` must answer even when nothing else
+ * is installed. An explicitly named server that cannot be reached is an ERROR rather than a
+ * quiet fall back to the import map — a silent downgrade to something far weaker is the exact
+ * class of failure the tier floor exists to prevent, and it is worse here because nothing in
+ * the answer would say the graph was guessed from regexes.
+ */
+export async function resolveGraph(provider: string, probe: GraphProbe): Promise<GraphResolution> {
+  if (provider === "builtin") return { provider: "builtin", reason: "configured", external: false };
+
+  if (provider !== "auto") {
+    const names = probe.servers();
+    if (!names.includes(provider)) throw new Error(`knowledge.graph.provider is "${provider}", but no such MCP server is available. Set it to "auto" or "builtin", or fix the server — falling back silently would answer structural questions from regex import edges without saying so.`);
+    return { provider, reason: "configured", external: true };
+  }
+
+  for (const name of probe.servers()) {
+    let tools: string[];
+    try {
+      tools = await probe.toolNames(name);
+    } catch {
+      continue; // a server that will not answer cannot be the graph
+    }
+    if (looksLikeGraphServer(tools)) return { provider: name, reason: "detected by tool signature", external: true };
+  }
+  return { provider: "builtin", reason: "no graph service detected", external: false };
+}
