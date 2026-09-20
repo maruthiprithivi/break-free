@@ -644,7 +644,9 @@ function redact(k) { return !k ? "(none)" : k.length <= 8 ? "****" : `${k.slice(
  * have never read.
  */
 async function firstmateAnswer() {
-  return { firstmate: await prompter.confirm("firstmate", "Install firstmate for crew, worktrees and merge authority? It leads the sessions you start with `bf firstmate`.", false) };
+  // Default YES: firstmate ships WITH break-free. It is what runs the crew and the worktrees,
+  // and a session that never engages it pays only the standing rule, not its instructions.
+  return { firstmate: await prompter.confirm("firstmate", "Install firstmate for crew, worktrees and merge authority? (recommended: it is how break-free runs a crew)", true) };
 }
 
 // ---- firstmate ---------------------------------------------------------------
@@ -668,7 +670,15 @@ async function installFirstmate(answers) {
   const root = path.join(process.env.BREAK_FREE_HOME ?? path.join(home(), ".break-free"), "firstmate");
   try {
     if (fs.existsSync(path.join(root, "AGENTS.md"))) {
-      report.pass("firstmate already provisioned", root);
+      // Already there: move it to the latest upstream with THEIR script, which is
+      // fast-forward only and never touches the gitignored operational directories.
+      const up = await run(path.join(root, "bin", "fm-update.sh"), [], { cwd: root, timeoutMs: 300_000 });
+      if (up.ok) {
+        const reread = /reread-firstmate:\s*yes/.test(up.stdout);
+        report.pass("firstmate updated", reread ? "its instructions changed — agents re-read them next session" : "already current");
+      } else {
+        report.warn("firstmate not updated", up.stderr.slice(0, 160) || "fm-update.sh failed; the pinned revision is unchanged");
+      }
     } else {
       fs.mkdirSync(path.dirname(root), { recursive: true });
       // Full history on purpose: pinning and reviewing an update both need to diff two
@@ -685,8 +695,21 @@ async function installFirstmate(answers) {
     const cfg = readJsonSafe(CFG_FILE) ?? {};
     cfg.firstmate = { ...(cfg.firstmate ?? {}), enabled: true, root, pin: head };
     writeSecret(CFG_FILE, JSON.stringify(cfg, null, 2) + "\n");
-    report.pass("firstmate pinned", `${head.slice(0, 12)} — move it deliberately with firstmate_update_plan`);
-    report.info("start a firstmate-led session with: bf firstmate");
+    report.pass("firstmate pinned", `${head.slice(0, 12)}`);
+
+    // The standing rule is what makes an ORDINARY session firstmate-aware. A harness reads
+    // AGENTS.md from where it starts, so a session started in a project would never see the
+    // distro — but it always reads these, which is how the delegation rule already works.
+    const rule = (f) => fs.readFileSync(path.join(AGENT_CFG, f), "utf8").replaceAll("__FM_ROOT__", root);
+    if (scope.claude !== "none") {
+      appendOnce(path.join(home(), ".claude", "CLAUDE.md"), FM_MARKER, rule(path.join("claude", "CLAUDE.firstmate.snippet")))
+        ? report.pass("firstmate rule added to ~/.claude/CLAUDE.md") : report.pass("~/.claude/CLAUDE.md already has the firstmate rule");
+    }
+    if (scope.codex !== "none") {
+      appendOnce(path.join(home(), ".codex", "AGENTS.md"), FM_MARKER, rule(path.join("codex", "AGENTS.firstmate.snippet")))
+        ? report.pass("firstmate rule added to ~/.codex/AGENTS.md") : report.pass("~/.codex/AGENTS.md already has the firstmate rule");
+    }
+    report.info("any session now knows firstmate is there; `bf firstmate` starts a dedicated firstmate-led one");
   } catch (e) {
     report.fail("firstmate not provisioned", String(e.message).slice(0, 200));
   }
@@ -1387,6 +1410,7 @@ function stripBlock(file, marker) {
 }
 const GF_MARKER = "## Work tracking (break-free-github-flow)";
 const GW_MARKER = "## Delegating to other models (break-free-model-gateway)";
+const FM_MARKER = "## Crew, worktrees and merge authority (firstmate)";
 const LEGACY_GF_MARKER = "## Work tracking (github-flow)";
 
 async function installGithubFlow() {

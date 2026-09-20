@@ -267,3 +267,21 @@ export function planLaunch(
     label,
   };
 }
+
+/**
+ * Is there a newer firstmate upstream, and what would taking it change?
+ *
+ * Offline by default: it reads what the local clone already knows about origin. `fetch` asks
+ * upstream first, which is the only way to notice a release that landed since the last clone.
+ * An update is reported, never applied — the whole point of the pin is that moving it is a
+ * decision somebody makes.
+ */
+export function updateAvailable(root: string, opts: { fetch?: boolean } = {}): { behind: number; target?: string; instructionChanges: string[]; unknown: boolean } {
+  if (opts.fetch) git(root, ["fetch", "--quiet", "origin"]);
+  const target = git(root, ["rev-parse", "origin/HEAD"]) ?? git(root, ["rev-parse", "origin/main"]);
+  const head = git(root, ["rev-parse", "HEAD"]);
+  if (!target || !head) return { behind: 0, instructionChanges: [], unknown: true };
+  if (target === head) return { behind: 0, target, instructionChanges: [], unknown: false };
+  const behind = Number(git(root, ["rev-list", "--count", `${head}..${target}`]) ?? "0");
+  return { behind, target, instructionChanges: planUpdate(root, target).instructionChanges, unknown: false };
+}

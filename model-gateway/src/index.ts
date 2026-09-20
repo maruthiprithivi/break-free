@@ -35,7 +35,7 @@ import { startServe } from "./serve.js";
 import { WorktreeRegistry, WORKTREE_STATUSES, isLinkedWorktree, shadowLedgerDir, installGuardHook, guardHookStatus, removeGuardHook, LEDGER_GUARD_WORKFLOW } from "./worktrees.js";
 import { LEDGER_DIR } from "./ledger.js";
 import { resolveVault, linkLedger, resolveGraph, type GraphProbe } from "./knowledge.js";
-import { status as firstmateStatus, planUpdate, updateCommand, parseUpdateSummary, sessionLabel, FIRSTMATE_REPO, FIRSTMATE_LABEL } from "./firstmate.js";
+import { status as firstmateStatus, planUpdate, updateCommand, parseUpdateSummary, updateAvailable, sessionLabel, FIRSTMATE_REPO, FIRSTMATE_LABEL } from "./firstmate.js";
 import { estimateTokens, line as ctxLine, report as ctxReport, renderReport, type ContextLine } from "./context.js";
 import { runSteward, hygiene } from "./steward.js";
 import { DEFAULT_PRICING } from "./config.js";
@@ -1617,7 +1617,7 @@ async function main() {
     const fm = firstmateStatus(ctx.config.firstmate);
     const knowledge = {
       graph: { configured: ctx.config.knowledge.graph.provider, ...(await graphResolution()) },
-      firstmate: { installed: fm.installed, root: fm.root, head: fm.head?.slice(0, 12) ?? null, pin: fm.pin ?? null, drifted: fm.drifted, ...(fm.reason ? { reason: fm.reason } : {}) },
+      firstmate: { installed: fm.installed, root: fm.root, head: fm.head?.slice(0, 12) ?? null, pin: fm.pin ?? null, drifted: fm.drifted, ...(fm.installed ? { update: updateAvailable(fm.root) } : {}), ...(fm.reason ? { reason: fm.reason } : {}) },
       obsidian: vault
         ? { vault: vault.path, source: vault.source, mode: ctx.config.knowledge.obsidian.mode }
         : { vault: null, detected: false },

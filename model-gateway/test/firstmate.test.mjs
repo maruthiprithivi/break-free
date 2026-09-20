@@ -252,3 +252,31 @@ test("a good launch runs in the distro, keeps FM_HOME outside it, and says who i
   assert.deepEqual(planLaunch({ enabled: true, root, pin: head }, { harness: "grok", available: everything }).args, ["--trust"]);
   assert.ok(FIRSTMATE_HARNESSES.includes("claude"));
 });
+
+test("an upstream update is reported, never taken on its own", async () => {
+  const { updateAvailable } = await import("../dist/firstmate.js");
+  // A clone with an origin that has moved ahead — the ordinary case after upstream ships.
+  const upstream = fakeDistro();
+  const clone = path.join(tmp(), "clone");
+  git(path.dirname(clone), ["clone", "-q", upstream, clone]);
+  const before = git(clone, ["rev-parse", "HEAD"]);
+
+  assert.deepEqual(
+    [updateAvailable(clone).behind, updateAvailable(clone).unknown],
+    [0, false],
+    "nothing waiting when the clone is level with origin",
+  );
+
+  fs.writeFileSync(path.join(upstream, "AGENTS.md"), "# firstmate\n\nhard rule 1 CHANGED UPSTREAM\n");
+  fs.writeFileSync(path.join(upstream, "notes.md"), "just docs\n");
+  git(upstream, ["add", "-A"]);
+  git(upstream, ["commit", "-q", "-m", "upstream release"]);
+
+  // Without a fetch the clone cannot know: reporting 0 here is honest, not a miss.
+  assert.equal(updateAvailable(clone).behind, 0);
+
+  const found = updateAvailable(clone, { fetch: true });
+  assert.equal(found.behind, 1, "one commit waiting");
+  assert.deepEqual(found.instructionChanges, ["AGENTS.md"], "and it changes what the agent obeys");
+  assert.equal(git(clone, ["rev-parse", "HEAD"]), before, "checking must never move the checkout");
+});
