@@ -95,6 +95,21 @@ const ConfigSchema = z.object({
         .default({}),
     })
     .default({}),
+  /**
+   * firstmate: the agent distro break-free provisions and drives for crew and worktrees.
+   * Never forked — cloned, pinned, and moved deliberately, because its contents become the
+   * instructions the user's agent obeys.
+   */
+  firstmate: z
+    .object({
+      /** Opt-in: firstmate becomes the lead of the sessions it runs, which is the user's call. */
+      enabled: z.boolean().default(false),
+      /** Where the distro CODE lives, separate from FM_HOME, which holds operational state. */
+      root: z.string().optional(),
+      /** The commit this machine is pinned to. Absent means unpinned, which is not a default. */
+      pin: z.string().optional(),
+    })
+    .default({}),
   /** What break-free may charge a session before any work happens. */
   context: z
     .object({
