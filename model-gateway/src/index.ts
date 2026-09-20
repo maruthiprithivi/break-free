@@ -34,6 +34,7 @@ import { startServe } from "./serve.js";
 import { WorktreeRegistry, WORKTREE_STATUSES, isLinkedWorktree, shadowLedgerDir, installGuardHook, guardHookStatus, removeGuardHook, LEDGER_GUARD_WORKFLOW } from "./worktrees.js";
 import { LEDGER_DIR } from "./ledger.js";
 import { resolveVault, linkLedger, resolveGraph, type GraphProbe } from "./knowledge.js";
+import { estimateTokens, line as ctxLine, report as ctxReport, renderReport, type ContextLine } from "./context.js";
 import { runSteward, hygiene } from "./steward.js";
 import { DEFAULT_PRICING } from "./config.js";
 import { ghAvailable } from "./github.js";
@@ -287,8 +288,13 @@ const VERSION: string = (() => {
     return "0.0.0-unknown";
   }
 })();
-const server = new McpServer({ name: "break-free-gateway", version: VERSION }, {
-  instructions: [
+/**
+ * Every registered tool's schema is sent to the lead in every session and re-sent every turn,
+ * so the tool surface is a standing cost, not a per-call one. Recording it at registration is
+ * the only place that sees all of it without re-deriving the list by hand and drifting.
+ */
+/** Sent to the lead at every session start, so it is a standing cost and named as one. */
+const SERVER_INSTRUCTIONS = [
     "break-free-gateway lets you (the orchestrating frontier agent) keep the high-order work — deciding, designing, reviewing, owning outcomes — and hand execution to other LLMs: DeepSeek, Ollama (local/cloud), Kimi, MiniMax, Z.AI/GLM, OpenRouter, OpenCode Zen, vLLM.",
     "Model specs: an alias (fast, strong, reviewer, local, cloud, …), 'provider/model' (e.g. deepseek/deepseek-v4-pro), a bare provider name, or a comma-separated fallback list. Every call falls back automatically according to config.fallback.",
     "Modes: delegate (one worker, tools, optional session memory), run_plan (many workers in parallel as a dependency graph, with verification and review gates), supervise (worker/supervisor loop), review (independent JSON verdict), panel (N models + judge). Add async:true to delegate/run_plan for long work and poll job_status / job_result.",
@@ -298,8 +304,29 @@ const server = new McpServer({ name: "break-free-gateway", version: VERSION }, {
     "Guardrails you configure once and the gateway enforces: configure_policy (deny paths to workers; force a different-vendor review when sensitive paths change), configure_budget (per task/plan/day USD caps; cost_report shows spend), note_review (worker-written notes stay quarantined until you promote them). steward / ledger_doctor keep main absorbed, reconciled and tidy.",
     "Workers get least privilege: pass capabilities explicitly. 'github' lets them branch/commit/push/PR/merge/monitor Actions via gh, never delete or force-push. mcp_servers:[...] lends them your other MCP servers' tools (list_mcp_servers), minus destructive tools.",
     "Workers automatically receive the workspace's CLAUDE.md / AGENTS.md / .claude/rules and the ledger's decisions/gotchas as standing context; pass skills:[...] to attach specific SKILL.md files.",
-  ].join("\n"),
+];
+
+const toolSchemaCost: { name: string; tokens: number }[] = [];
+
+/** Schema text as the client receives it: the field names plus whatever .describe() carries. */
+function schemaText(shape: Record<string, unknown> | undefined): string {
+  if (!shape) return "";
+  return Object.entries(shape)
+    .map(([k, v]) => `${k}${(v as { _def?: { description?: string } })?._def?.description ?? ""}`)
+    .join(" ");
+}
+
+const server = new McpServer({ name: "break-free-gateway", version: VERSION }, {
+  instructions: SERVER_INSTRUCTIONS.join("\n"),
 });
+
+// Wrap once, so every registerTool below is accounted without each call site knowing.
+const registerToolRaw = server.registerTool.bind(server);
+(server as unknown as { registerTool: typeof registerToolRaw }).registerTool = ((name: string, def: Record<string, unknown>, handler: unknown) => {
+  const text = `${name}${def.title ?? ""}${def.description ?? ""}${schemaText(def.inputSchema as Record<string, unknown> | undefined)}`;
+  toolSchemaCost.push({ name, tokens: estimateTokens(text) });
+  return (registerToolRaw as (...a: unknown[]) => unknown)(name, def, handler);
+}) as typeof registerToolRaw;
 
 // Every tool handler is wrapped so the runtime log records start/end, duration, outcome and a correlation id.
 {
@@ -1245,6 +1272,29 @@ server.registerTool("note_search", {
   if (!query) return json(ctx.ledger.listNotes().map((n) => ({ slug: n.slug, title: n.title, tags: n.tags, updated: n.updated, ...(full ? { body: n.body } : { preview: n.body.slice(0, 200) }) })));
   return json(ctx.ledger.searchNotes(query).map(({ note, hits }) => ({ slug: note.slug, title: note.title, tags: note.tags, hits, ...(full ? { body: note.body } : {}) })));
 });
+/** Everything break-free charges a session, so the cost can be argued about instead of guessed. */
+function contextLines(): ContextLine[] {
+  const lines: ContextLine[] = [];
+  const toolTokens = toolSchemaCost.reduce((n, t) => n + t.tokens, 0);
+  const heaviest = toolSchemaCost.slice().sort((a, b) => b.tokens - a.tokens).slice(0, 3).map((t) => `${t.name} ${t.tokens}`).join(", ");
+  lines.push({ surface: "mcp tool schemas", bytes: toolTokens * 3, tokens: toolTokens, always: true, detail: `${toolSchemaCost.length} tools; heaviest: ${heaviest}` });
+  lines.push(ctxLine("server instructions", SERVER_INSTRUCTIONS.join(" "), true));
+  try {
+    const brief = ctx.ledger.exists() ? ctx.ledger.resumeBrief() : "";
+    lines.push(ctxLine("ledger resume brief", brief, true, "injected into the lead and every worker"));
+  } catch { /* a ledger that will not render is a separate problem, not a budget one */ }
+  return lines;
+}
+
+server.registerTool("context_report", {
+  title: "What break-free costs this session before any work happens",
+  description: "Account every surface break-free adds to the context — tool schemas, server instructions, the ledger brief — against context.budgetTokens. An unmeasured cost only ever grows, and the tool surface is re-sent every turn, so it is paid per turn and not per call.",
+  inputSchema: {},
+}, async () => {
+  const r = ctxReport(contextLines(), ctx.config.context.budgetTokens);
+  return text(`${renderReport(r)}\n\n${JSON.stringify(r, null, 2)}`);
+});
+
 server.registerTool("obsidian_link", {
   title: "Surface this project's ledger in an Obsidian vault",
   description: "Link (or index) the project ledger into the Obsidian vault, so notes, tasks and the journal open in the vault with their wikilinks intact. The repository stays the source of truth: `link` symlinks the ledger rather than copying it. Does nothing when no vault is detected. Anything already at the target that is not our own link is left untouched.",

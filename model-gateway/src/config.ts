@@ -95,6 +95,16 @@ const ConfigSchema = z.object({
         .default({}),
     })
     .default({}),
+  /** What break-free may charge a session before any work happens. */
+  context: z
+    .object({
+      /**
+       * Estimated tokens allowed for the surfaces paid in EVERY session. 7500 matches
+       * firstmate's startup-memory allowance, so someone running both has one number to hold.
+       */
+      budgetTokens: z.number().int().positive().default(7500),
+    })
+    .default({}),
   /** Where the ledger shows up outside the repository. Both parts optional, both detected. */
   knowledge: z
     .object({
