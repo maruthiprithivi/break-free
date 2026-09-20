@@ -102,8 +102,8 @@ const ConfigSchema = z.object({
    */
   firstmate: z
     .object({
-      /** Opt-in: firstmate becomes the lead of the sessions it runs, which is the user's call. */
-      enabled: z.boolean().default(false),
+      /** firstmate ships with break-free; this turns the integration off, it does not turn it on. */
+      enabled: z.boolean().default(true),
       /** Where the distro CODE lives, separate from FM_HOME, which holds operational state. */
       root: z.string().optional(),
       /** The commit this machine is pinned to. Absent means unpinned, which is not a default. */

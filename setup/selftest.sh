@@ -48,7 +48,7 @@ cat > "$T/answers.json" <<EOF
 { "fix_stale_wire_api": true, "extra_agents": "detected", "extra_scope": "both", "claude_scope": "both", "codex_scope": "both", "project_dir": "$T/proj", "key_storage": "config",
   "deepseek_key_source": "paste", "deepseek_api_key": "test-key",
   "kimi_key_source": "skip", "zai_key_source": "skip", "minimax_key_source": "skip", "openrouter_key_source": "skip", "opencode_key_source": "skip", "ollama-cloud_key_source": "skip",
-  "ollama_enabled": false, "vllm_enabled": false, "fallback_chain": "deepseek/good", "skip_tests": false, "github_flow": "full", "harness_profiles": true, "harness_shell_rc": true }
+  "firstmate": false, "ollama_enabled": false, "vllm_enabled": false, "fallback_chain": "deepseek/good", "skip_tests": false, "github_flow": "full", "harness_profiles": true, "harness_shell_rc": true }
 EOF
 
 # An agent config that exists but is EMPTY. Zero bytes is not corruption: there is no
