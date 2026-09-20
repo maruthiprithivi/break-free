@@ -95,6 +95,27 @@ const ConfigSchema = z.object({
         .default({}),
     })
     .default({}),
+  /** Where the ledger shows up outside the repository. Both parts optional, both detected. */
+  knowledge: z
+    .object({
+      graph: z
+        .object({
+          /** "auto" prefers a detected graph service and falls back to the builtin import map. */
+          provider: z.string().default("auto"),
+        })
+        .default({}),
+      obsidian: z
+        .object({
+          /** Explicit vault path. Omitted means: ask Obsidian's own registry. */
+          vault: z.string().optional(),
+          /** link = symlink the ledger in; index = one note pointing at it; off = do nothing. */
+          mode: z.enum(["link", "index", "off"]).default("link"),
+          /** Folder inside the vault that break-free projects live under. */
+          folder: z.string().default("break-free"),
+        })
+        .default({}),
+    })
+    .default({}),
   providers: z.record(ProviderConfigSchema).default({}),
   aliases: z.record(AliasSchema).default({}),
   github: z

@@ -219,6 +219,22 @@ A worker that reads for thirty minutes and writes nothing looks exactly like one
 
 `0` disables any of the three. `delegate`, `supervise` and each `run_plan` task also take `stall_abort_ms` / `stall_warn_ms` per call, which is how you give one deliberately long task a wider window without loosening the default for everything else. The clock measures the silence _between tool calls_, not the run: a worker that keeps calling tools is never stalled, however long it takes. Every trip is in the runtime log as `worker.stall` (`reason: idle | no-writes | abort`).
 
+## Obsidian: the ledger in your vault
+
+`.break-free/` is already Markdown with frontmatter and `[[wikilinks]]`, so it opens as a vault. That left the wiring to you; `obsidian_link` does it.
+
+Detection reads **Obsidian's own vault registry** rather than scanning your disk — exact, one small JSON read, and it cannot wander into folders nobody asked it to look at. No Obsidian installed means no vault, silently: a machine without it never grows a warning about not having it. An explicit `knowledge.obsidian.vault` wins, then `$OBSIDIAN_VAULT`, then the registry, preferring the vault Obsidian currently has open.
+
+| mode | what it does |
+|---|---|
+| `link` (default) | symlinks the ledger into `<vault>/break-free/<project>`, so a note edited in Obsidian is the same bytes git sees |
+| `index` | writes one note in the vault pointing at the ledger, for people who would rather not have repository folders in a vault |
+| `off` | nothing |
+
+It never copies, so the repository stays the single source of truth, and it **refuses rather than overwrites**: anything already at the target that is not our own link to that same ledger is left exactly as it is. A vault is someone's notes, and losing them to an integration they did not ask for would be far worse than a skipped step.
+
+`--doctor` reports the detected vault and the graph provider, because "which knowledge layer am I actually using" was otherwise unanswerable.
+
 ## Project modes
 
 One named mode derives the git and GitHub policy, instead of setting three flags and hoping they agree:
