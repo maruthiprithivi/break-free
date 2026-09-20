@@ -4,6 +4,10 @@
      branches never edit the same block here. scripts/changelog.sh release <version>
      folds them in. -->
 
+## 4.1.0 — 2026-09-21
+
+- **firstmate ships with break-free, and any session knows it is there (#31).** The installer provisions it by default, pulls the latest on every install and update — through upstream's own fast-forward-only `fm-update.sh`, never a reimplementation — and re-pins to what landed. A standing rule goes into `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` beside the delegation rule, so an ordinary session started anywhere already knows the distro exists and when to engage it. That is the mechanism that matters: a harness reads `AGENTS.md` from where it starts, so a session started in your project would otherwise never see a distro living somewhere else. The rule costs about 350 tokens; firstmate's own 82K of instructions are read only when a job actually wants a crew, so a session that never spawns one pays nothing for it. `--doctor` reports whether an upstream update is waiting and whether it changes the instruction surfaces, and never takes it on its own. `bf firstmate` still starts a dedicated firstmate-led session, but you no longer need it to use the distro.
+
 ## 4.0.1 — 2026-09-20
 
 - **`bf firstmate` looks up a harness on PATH without a shell.** It ran `command -v <bin>` through `/bin/sh`, which concatenates rather than escapes its arguments — node deprecates that for the reason that applies here: the binary name comes from `--harness`, so it is caller input. It now walks `PATH` and checks for an executable directly, and refuses a name containing a path separator outright.
