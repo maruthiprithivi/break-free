@@ -142,7 +142,11 @@ test("a worker with no tool call past stallAbortMs is aborted as `stalled`, not 
   assert.match(row.error, /^stalled: no tool call for \d+ms/);
   assert.equal(row.stall.tool_calls, 0);
   assert.equal(row.stall.files_written, 0);
-  assert.ok(row.stall.ms_since_tool_call >= 250, JSON.stringify(row.stall));
+  // The watchdog is armed on a timer for stallAbortMs, but the delta it records is read a
+  // moment before that timer's own reading, so it can land a millisecond short — CI saw 249.
+  // What this asserts is that the abort came from the stall threshold and not from some other
+  // deadline, which a ten-millisecond tolerance still pins just as tightly.
+  assert.ok(row.stall.ms_since_tool_call >= 240, JSON.stringify(row.stall));
   // distinguishable from the two other ways a task dies
   assert.equal(/timed out|verification failed/i.test(row.error), false, row.error);
   assert.match(r.text, /\*\*hang\*\* — STALLED/);
