@@ -891,16 +891,21 @@ const COMMANDS: Record<string, { flags: string[]; usage: string }> = {
 async function cmdFirstmate(flags: Record<string, string | boolean>): Promise<number> {
   const { loadConfig } = await import("./config.js");
   const { planLaunch, FIRSTMATE_LABEL } = await import("./firstmate.js");
-  const { execFileSync, spawnSync } = await import("node:child_process");
+  const { spawnSync } = await import("node:child_process");
 
   const cfg = loadConfig().config;
+  // Walk PATH directly rather than shelling out. `command -v <bin>` through a shell concatenates
+  // rather than escapes its arguments, which node deprecates for exactly the reason that matters
+  // here: the name comes from --harness, so it is caller input.
   const onPath = (bin: string) => {
-    try {
-      execFileSync("command", ["-v", bin], { stdio: "ignore", shell: "/bin/sh" });
-      return true;
-    } catch {
-      return false;
+    if (bin.includes("/") || bin.includes("\\")) return false;
+    for (const dir of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+      try {
+        fs.accessSync(path.join(dir, bin), fs.constants.X_OK);
+        return true;
+      } catch { /* not here; try the next entry */ }
     }
+    return false;
   };
   const plan = planLaunch(cfg.firstmate, {
     harness: typeof flags.harness === "string" ? flags.harness : undefined,
