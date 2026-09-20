@@ -634,6 +634,64 @@ async function askModel(name, label, models, def) {
 
 function redact(k) { return !k ? "(none)" : k.length <= 8 ? "****" : `${k.slice(0, 4)}…${k.slice(-4)}`; }
 
+
+
+/**
+ * Does the user want firstmate? Default no.
+ *
+ * It is not a dependency of break-free; it changes who leads a session. Someone who did not ask
+ * for that should not find their crew, worktrees and merge authority owned by a distro they
+ * have never read.
+ */
+async function firstmateAnswer() {
+  return { firstmate: await prompter.confirm("firstmate", "Install firstmate for crew, worktrees and merge authority? It leads the sessions you start with `bf firstmate`.", false) };
+}
+
+// ---- firstmate ---------------------------------------------------------------
+/**
+ * Provision the firstmate distro, if the user wants it.
+ *
+ * Off unless asked for. firstmate becomes the LEAD of the sessions it runs — it owns the crew,
+ * the worktrees and the merge authority — and that is a change to how someone works, not a
+ * dependency an installer should decide for them. Declining leaves break-free exactly as it is.
+ *
+ * The clone is pinned to the commit it landed on, so the instructions the agent obeys are a
+ * revision somebody can name rather than whatever origin happened to hold that morning.
+ */
+async function installFirstmate(answers) {
+  report.section("firstmate (crew, worktrees, merge authority)");
+  const want = answers.firstmate ?? false;
+  if (!want) {
+    report.info("firstmate not installed — break-free works standalone; `bf firstmate` needs it");
+    return;
+  }
+  const root = path.join(process.env.BREAK_FREE_HOME ?? path.join(home(), ".break-free"), "firstmate");
+  try {
+    if (fs.existsSync(path.join(root, "AGENTS.md"))) {
+      report.pass("firstmate already provisioned", root);
+    } else {
+      fs.mkdirSync(path.dirname(root), { recursive: true });
+      // Full history on purpose: pinning and reviewing an update both need to diff two
+      // revisions, and a shallow clone cannot do that offline.
+      const cloned = await run("git", ["clone", "https://github.com/kunchenguid/firstmate", root], { timeoutMs: 600_000 });
+      if (!cloned.ok) throw new Error(cloned.stderr.slice(0, 200));
+      report.pass("firstmate cloned", root);
+    }
+    // Pin to what was actually cloned. An unpinned distro is a moving target that becomes the
+    // agent's instructions, which is the supply-chain problem this exists to bound.
+    const rev = await run("git", ["-C", root, "rev-parse", "HEAD"]);
+    if (!rev.ok) throw new Error("cloned, but could not read HEAD to pin it");
+    const head = rev.stdout.trim();
+    const cfg = readJsonSafe(CFG_FILE) ?? {};
+    cfg.firstmate = { ...(cfg.firstmate ?? {}), enabled: true, root, pin: head };
+    writeSecret(CFG_FILE, JSON.stringify(cfg, null, 2) + "\n");
+    report.pass("firstmate pinned", `${head.slice(0, 12)} — move it deliberately with firstmate_update_plan`);
+    report.info("start a firstmate-led session with: bf firstmate");
+  } catch (e) {
+    report.fail("firstmate not provisioned", String(e.message).slice(0, 200));
+  }
+}
+
 // ---- scope ------------------------------------------------------------------
 async function chooseScope() {
   report.section("Install scope");
@@ -1812,6 +1870,7 @@ function finish() {
   await installProject();
   await installGithubFlow();
   await installExtraAgents();
+  await installFirstmate(await firstmateAnswer());
   await verify();
   writeInstallState();
   finish();

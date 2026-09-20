@@ -181,3 +181,74 @@ test("a firstmate-backed session says so on screen", () => {
   assert.ok(long.length < 100, `session label must stay short, got ${long.length}`);
   assert.match(sessionLabel("two\n\nlines   here"), /two lines here/, "newlines would break a session name");
 });
+
+// --- launching -------------------------------------------------------------------
+// An MCP server cannot make a running client adopt firstmate's identity, so break-free
+// launches a NEW session inside the distro. These pin the refusals, which are the point:
+// launching past a bad pin would make the audit decorative.
+
+import { planLaunch, FIRSTMATE_HARNESSES } from "../dist/firstmate.js";
+
+const everything = () => true;
+
+test("a launch is refused when firstmate is off, absent, drifted or dirty", () => {
+  const root = fakeDistro();
+  const head = git(root, ["rev-parse", "HEAD"]);
+
+  assert.match(planLaunch({ enabled: false, root, pin: head }, { available: everything }).reason, /firstmate is off/);
+  // tmp() creates the directory, so this is the "present but not a distro" case, which is the
+  // more dangerous one: something is there, and driving it would be driving the wrong thing.
+  assert.match(planLaunch({ enabled: true, root: tmp() }, { available: everything }).reason, /not a firstmate distro/);
+  assert.match(planLaunch({ enabled: true, root: path.join(tmp(), "absent") }, { available: everything }).reason, /not installed/);
+
+  // Dirty: the commit matches but the bytes on disk do not.
+  fs.writeFileSync(path.join(root, "AGENTS.md"), "# edited locally\n");
+  const dirty = planLaunch({ enabled: true, root, pin: head }, { available: everything });
+  assert.equal(dirty.ok, false);
+  assert.match(dirty.reason, /dirty/, "launching would run instructions nobody approved");
+
+  // Drifted: someone moved the checkout past the pin.
+  git(root, ["commit", "-qam", "moved"]);
+  const drifted = planLaunch({ enabled: true, root, pin: head }, { available: everything });
+  assert.equal(drifted.ok, false);
+  assert.match(drifted.reason, /drifted/);
+});
+
+test("an unverified harness is refused rather than launched", () => {
+  const root = fakeDistro();
+  const head = git(root, ["rev-parse", "HEAD"]);
+  const cfg = { enabled: true, root, pin: head };
+
+  // firstmate's turn-end guard and watcher re-arm are per-harness. An unsupported one looks
+  // like it works while the supervision it depends on is silently absent — worse than refusing.
+  const bad = planLaunch(cfg, { harness: "my-own-agent", available: everything });
+  assert.equal(bad.ok, false);
+  assert.match(bad.reason, /not verified as a firstmate primary/);
+
+  // A verified harness that is not installed is also refused, with a different reason.
+  const missing = planLaunch(cfg, { harness: "codex", available: () => false });
+  assert.equal(missing.ok, false);
+  assert.match(missing.reason, /not on PATH/);
+
+  // Nothing at all on PATH names what was tried.
+  const none = planLaunch(cfg, { available: () => false });
+  assert.match(none.reason, /no verified harness found/);
+});
+
+test("a good launch runs in the distro, keeps FM_HOME outside it, and says who is leading", () => {
+  const root = fakeDistro();
+  const head = git(root, ["rev-parse", "HEAD"]);
+  const plan = planLaunch({ enabled: true, root, pin: head }, { harness: "claude", task: "fix the auth test", available: everything });
+
+  assert.equal(plan.ok, true);
+  assert.equal(plan.command, "claude");
+  assert.equal(plan.cwd, root, "cwd must be the distro, which is how AGENTS.md is picked up");
+  assert.match(plan.label, /^break-free -firstmate: fix the auth test/, "the screen has to say which system is leading");
+  assert.equal(plan.env.BREAK_FREE_FIRSTMATE, "1");
+  assert.ok(!plan.env.FM_HOME.startsWith(root + path.sep), "FM_HOME outside the code root, so rolling back code never hides the crew registry");
+
+  // Grok needs --trust or none of its project hooks load, which is exactly the silent
+  // supervision loss this refuses elsewhere.
+  assert.deepEqual(planLaunch({ enabled: true, root, pin: head }, { harness: "grok", available: everything }).args, ["--trust"]);
+  assert.ok(FIRSTMATE_HARNESSES.includes("claude"));
+});
