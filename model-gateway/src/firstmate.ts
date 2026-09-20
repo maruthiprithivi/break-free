@@ -227,10 +227,24 @@ const HARNESS_MARKERS: ReadonlyArray<readonly [FirstmateHarness, readonly string
   ["pi", ["PI_CODING_AGENT"]],
 ];
 
-/** Which harness is running this process, when it can be told. */
+/** Every harness whose markers are present. More than one means the session is nested. */
+export function runningHarnesses(env: NodeJS.ProcessEnv = process.env): FirstmateHarness[] {
+  return HARNESS_MARKERS.filter(([, markers]) => markers.some((m) => env[m])).map(([h]) => h);
+}
+
+/**
+ * The harness running this process, or undefined when that cannot be told.
+ *
+ * Undefined covers two different situations on purpose. An ordinary shell has no markers. A
+ * NESTED session — Codex started from inside Claude Code, say — carries BOTH sets, because the
+ * outer harness's variables are inherited by everything it spawns. Breaking that tie by the
+ * order of a list in this file would be a coin flip wearing a suit: the answer would depend on
+ * which name I happened to type first. Ambiguity falls through to what the user configured or
+ * wired, which they actually chose.
+ */
 export function runningHarness(env: NodeJS.ProcessEnv = process.env): FirstmateHarness | undefined {
-  for (const [harness, markers] of HARNESS_MARKERS) if (markers.some((m) => env[m])) return harness;
-  return undefined;
+  const found = runningHarnesses(env);
+  return found.length === 1 ? found[0] : undefined;
 }
 
 /**
