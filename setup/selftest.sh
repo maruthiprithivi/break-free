@@ -126,6 +126,16 @@ echo "### firstmate provisioning"
 [ -f "$T/home/.break-free/firstmate/AGENTS.md" ] || fail "firstmate was not cloned"
 grep -q '"pin"' "$T/home/.config/model-gateway/config.json" || fail "firstmate was cloned but not pinned"
 grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.claude/CLAUDE.md" || fail "the firstmate standing rule is missing; a clone nothing points at is a clone nothing uses"
+# The rule has to reach every harness the install wired, not just Claude and Codex. An omp user
+# had the server, the skills and the delegation rule but no firstmate rule, so the distro sat
+# there unmentioned.
+grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.codex/AGENTS.md" || fail "codex has no firstmate rule"
+grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.omp/agent/AGENTS.md" || fail "omp has no firstmate rule — the rule is the integration for an ordinary session"
+grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.gemini/GEMINI.md" || fail "gemini has no firstmate rule"
+# and it must not have eaten the delegation rule that was already there
+grep -q "Delegating to other models" "$T/home/.omp/agent/AGENTS.md" || fail "omp lost its delegation rule when the firstmate rule was added"
+# idempotent: exactly one copy after the re-install that happens later in this script
+[ "$(grep -c "Crew, worktrees and merge authority (firstmate)" "$T/home/.omp/agent/AGENTS.md")" = "1" ] || fail "firstmate rule duplicated in omp AGENTS.md"
 grep -q "firstmate" "$T/install.out" || fail "the install said nothing about firstmate"
 echo ok
 
@@ -229,6 +239,11 @@ grep -q "read:" "$T/home/.aider.conf.yml" && fail "aider read: not removed"
 [ ! -f "$T/home/.cursor/mcp.json" ] || fail "cursor mcp.json not removed"
 ( ! grep -q -- '--fleet-check --hook' "$T/home/.claude/settings.json" ) && grep -q 'echo unrelated-stop' "$T/home/.claude/settings.json" || fail "Stop hook not removed or unrelated hook damaged"
 echo "ok"
+
+# A rule left pointing at a distro that is gone reads as an instruction, not a suggestion.
+grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.claude/CLAUDE.md" && fail "uninstall left the firstmate rule in claude"
+grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.omp/agent/AGENTS.md" && fail "uninstall left the firstmate rule in omp"
+echo ok
 
 echo "### doctor after uninstall (expect RED, exit 1)"
 if node "$ROOT/setup.mjs" --doctor > "$T/doctor2.out" 2>&1; then fail "doctor should be RED after uninstall"; fi
