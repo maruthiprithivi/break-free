@@ -653,7 +653,12 @@ export interface RunPlanArgs {
 export interface PlanTaskResult {
   id: string;
   ledger_id?: string;
-  status: "done" | "failed" | "skipped" | "cancelled" | "escalated" | "stalled";
+  /**
+   * `needs_revision` is a reviewer saying the work is not right yet. It is deliberately NOT
+   * `done`: a dependant handed the report of work a reviewer rejected would build on it, and
+   * a verdict that changes nothing downstream is a verdict that did not happen.
+   */
+  status: "done" | "failed" | "skipped" | "cancelled" | "escalated" | "stalled" | "needs_revision";
   model?: string;
   report?: string;
   verify?: VerifyMeta | null;
@@ -877,7 +882,17 @@ export async function runPlan(ctx: Ctx, a: RunPlanArgs): Promise<RunPlanResult> 
         if (rev.verdict === "reject") throw new Error(`rejected by reviewer (${rr.run.usedModel}): ${rev.summary ?? ""}`);
       }
       reports.set(t.id, report);
-      results.set(t.id, { id: t.id, ledger_id: lid, status: "done", model, report, verify, review: rev, ms: Date.now() - t0, meta, route: decision, ...(tripwireMeta ? { tripwire: tripwireMeta } : {}) });
+      // The plan result and the ledger now agree about the same task. They used to disagree —
+      // the ledger said `review` while the result said `done` — and the result was the one
+      // dependants were scheduled from.
+      const revised = rev?.verdict === "revise";
+      results.set(t.id, {
+        id: t.id, ledger_id: lid, status: revised ? "needs_revision" : "done", model, report, verify, review: rev,
+        // The report lists non-done rows under "Needs your decision" using `error`, so a
+        // revised task has to say what the reviewer actually wanted changed.
+        ...(revised ? { error: `reviewer asked for changes: ${rev?.summary ?? "no summary given"}` } : {}),
+        ms: Date.now() - t0, meta, route: decision, ...(tripwireMeta ? { tripwire: tripwireMeta } : {}),
+      });
       // `reusedBlocked` is the reconciliation the ledger was missing: the entry an earlier run left
       // at blocked closes here, naming the re-run that finished it, instead of sitting blocked forever.
       const closed = reusedBlocked.has(t.id) ? `; closes the earlier blocked attempt (re-run of plan task ${t.id}${a.goal ? ` in "${a.goal}"` : ""})` : "";
@@ -945,6 +960,7 @@ export async function runPlan(ctx: Ctx, a: RunPlanArgs): Promise<RunPlanResult> 
   const rows = tasks.map((t) => results.get(t.id)!);
   // An escalated task is not a failure: the router deliberately handed it back. The plan is
   // "left" to the lead, not broken, so it does not turn `ok` false — but it is listed loudly.
+  // A task a reviewer sent back is not a completed plan, whatever else finished around it.
   const ok = rows.every((r) => r.status === "done" || r.status === "escalated");
   const escalated = rows.filter((r) => r.status === "escalated");
   const line = (r: PlanTaskResult) => `- **${r.id}** — ${r.status.toUpperCase()}${r.route ? ` · lane ${r.route.lane}${r.route.confidence !== null ? ` (${r.route.confidence.toFixed(2)})` : ""}` : ""}${r.model ? ` (${r.model}, ${Math.round(r.ms / 1000)}s)` : ""}${r.verify ? ` · verify ${r.verify.ok ? "ok" : "FAILED"}` : ""}${r.review ? ` · review ${r.review.verdict}` : ""}${r.tripwire && r.tripwire.verdict !== "allow" ? ` · tripwire ${String(r.tripwire.verdict).toUpperCase()}` : ""}${r.error ? ` — ${r.error.slice(0, 200)}` : ""}`;
