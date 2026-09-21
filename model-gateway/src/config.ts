@@ -112,6 +112,20 @@ const ConfigSchema = z.object({
       harness: z.string().optional(),
     })
     .default({}),
+  /** Keeping break-free and firstmate current. */
+  updates: z
+    .object({
+      /** Ask origin whether either is behind. Off means never touch the network for this. */
+      check: z.boolean().default(true),
+      /**
+       * Fast-forward both at session start. break-free's new bytes land next start because the
+       * process is already running; firstmate's are read during the session, so they land now.
+       */
+      apply: z.boolean().default(true),
+      /** How long a check is considered current, so a session start is not a round trip. */
+      intervalHours: z.number().min(0).default(6),
+    })
+    .default({}),
   /** What break-free may charge a session before any work happens. */
   context: z
     .object({
