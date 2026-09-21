@@ -500,13 +500,32 @@ test("run_plan runs independent tasks in parallel, honours dependencies, hands r
   assert.match(bad.text, /cycle/);
 });
 
-test("run_plan review gate rejects on 'reject' and flags 'revise'", async () => {
+test("run_plan review gate rejects on 'reject' and does not call a revised task done", async () => {
   // the mock reviewer always says "revise"
   const r = await call("run_plan", { track: false, review: true, review_model: "mock/good", tasks: [{ id: "a", task: "task A", model: "mock/good" }] });
   assert.match(r.text, /review revise/);
   const meta = JSON.parse(r.text.split("\nmeta: ").pop());
-  assert.equal(meta.results[0].status, "done");
+  // It used to report `done` here while the ledger recorded `review` — two records of one task
+  // disagreeing, and the one dependants were scheduled from was the wrong one.
+  assert.equal(meta.results[0].status, "needs_revision");
   assert.equal(meta.results[0].review.verdict, "revise");
+  assert.match(meta.results[0].error, /reviewer asked for changes/);
+  assert.equal(meta.ok, false, "a plan holding work a reviewer sent back is not a completed plan");
+  assert.match(r.text, /Needs your decision/);
+});
+
+test("a dependant is not handed work a reviewer sent back", async () => {
+  // The consequence that made this worth fixing: run_plan gives a dependant its prerequisite's
+  // report, so building on a revised one means building on work a reviewer rejected.
+  const r = await call("run_plan", {
+    track: false, review: true, review_model: "mock/good",
+    tasks: [{ id: "a", task: "task A", model: "mock/good" }, { id: "b", task: "task B", model: "mock/good", depends_on: ["a"] }],
+  });
+  const meta = JSON.parse(r.text.split("\nmeta: ").pop());
+  const byId = Object.fromEntries(meta.results.map((x) => [x.id, x]));
+  assert.equal(byId.a.status, "needs_revision");
+  assert.equal(byId.b.status, "skipped", "the dependant must not run on a report a reviewer rejected");
+  assert.match(byId.b.error, /prerequisite a needs_revision/);
 });
 
 test("async jobs: delegate and run_plan return a job id; status/result/cancel work", async () => {

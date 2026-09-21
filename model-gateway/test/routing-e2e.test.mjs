@@ -120,16 +120,23 @@ test("run_plan routes every model-less task in one Jev call and records why", as
   assert.equal(Object.keys(double.requests.at(-1).questions).length, 20, "four typed questions per task");
 
   const byId = new Map(meta.results.map((x) => [x.id, x]));
+  // This asserts which LANE each task was routed to. The statuses come from the mock reviewer,
+  // which always says "revise" — and since #53 a reviewer asking for changes no longer reports
+  // the task done, so the reviewed ones land on needs_revision.
   assert.deepEqual(
-    [...byId].map(([id, x]) => [id, x.status, x.model]),
+    [...byId].map(([id, x]) => [id, x.model]),
     [
-      ["doc", "done", LANE_MODEL.local],
-      ["tst", "done", LANE_MODEL.fast],
-      ["mig", "done", LANE_MODEL.strong],
-      ["q", "done", LANE_MODEL.thinker],
-      ["escalate", "escalated", undefined],
+      ["doc", LANE_MODEL.local],
+      ["tst", LANE_MODEL.fast],
+      ["mig", LANE_MODEL.strong],
+      ["q", LANE_MODEL.thinker],
+      ["escalate", undefined],
     ],
   );
+  assert.equal(byId.get("escalate").status, "escalated");
+  for (const id of ["doc", "tst", "mig", "q"]) {
+    assert.ok(["done", "needs_revision"].includes(byId.get(id).status), `${id}: ${byId.get(id).status}`);
+  }
   assert.equal(byId.get("doc").route.lane, "local");
   assert.equal(byId.get("q").route.confidence, 0.78);
   assert.equal(byId.get("q").route.difficulty, 4);
