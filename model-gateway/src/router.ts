@@ -161,7 +161,7 @@ export function aliasParams(config: GatewayConfig, spec: string | undefined): { 
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const TRANSIENT: FallbackReason[] = ["rate_limit", "server_error", "timeout", "network"];
+const TRANSIENT: FallbackReason[] = ["rate_limit", "server_error", "timeout", "network", "no_response"];
 
 /**
  * Execute one chat completion across the candidate list with fallback.
@@ -212,7 +212,7 @@ export async function routeChat(
       const started = Date.now();
       try {
         const req = buildRequest(cand);
-        const response = await chatCompletion(cand.provider, req, { timeoutMs: cand.provider.timeoutMs ?? opts.timeoutMs ?? config.defaults.timeoutMs, signal: opts.signal });
+        const response = await chatCompletion(cand.provider, req, { timeoutMs: cand.provider.timeoutMs ?? opts.timeoutMs ?? config.defaults.timeoutMs, firstByteMs: cand.provider.firstByteMs ?? config.defaults.firstByteMs, signal: opts.signal });
         attempts.push({ spec: cand.spec, ok: true, ms: Date.now() - started });
         breaker.clear(cand.provider.name);
         const cost = costUsd(config, cand.provider.name, cand.model, response.usage);
@@ -226,7 +226,7 @@ export async function routeChat(
         if (opts.signal?.aborted) throw err;
         // Only host-level symptoms count as strikes: a 401 or an unknown model says
         // nothing about whether the host is answering.
-        if (err.reason === "timeout" || err.reason === "network") {
+        if (err.reason === "timeout" || err.reason === "network" || err.reason === "no_response") {
           if (breaker.record(cand.provider.name, err.message)) log(`circuit open: ${cand.provider.name} skipped for the next ${Math.round(config.fallback.breaker.cooldownMs / 1000)}s`);
         }
         const transient = TRANSIENT.includes(err.reason);
