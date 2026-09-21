@@ -74,7 +74,7 @@ export function classifyStatus(status: number, body: string): FallbackReason {
 export async function chatCompletion(
   provider: ResolvedProvider,
   req: ChatRequest,
-  opts: { timeoutMs: number; signal?: AbortSignal; extraBody?: Record<string, unknown> } ,
+  opts: { timeoutMs: number; firstByteMs?: number; signal?: AbortSignal; extraBody?: Record<string, unknown> } ,
 ): Promise<ChatResponse> {
   if (provider.unusableReason) {
     throw new ProviderError(provider.requiresKey && !provider.apiKey ? "no_key" : "bad_request", `${provider.name}: ${provider.unusableReason}`, undefined, provider.name, req.model);
@@ -103,6 +103,15 @@ export async function chatCompletion(
   if (opts.signal?.aborted) throw new ProviderError("network", `${provider.name}/${req.model}: aborted before request`, undefined, provider.name, req.model);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(new Error("timeout")), opts.timeoutMs);
+  // A separate, much shorter deadline for RESPONSE HEADERS. `await fetch` resolves when they
+  // arrive, so clearing this there measures exactly time-to-first-byte — which is what tells a
+  // model generating slowly apart from a host that has stopped talking. Without it both look
+  // identical and both cost the full timeout.
+  let headersSeen = false;
+  const firstByteMs = opts.firstByteMs ?? 0;
+  const fbTimer = firstByteMs > 0
+    ? setTimeout(() => { if (!headersSeen) ctrl.abort(new Error("no_response")); }, firstByteMs)
+    : undefined;
   const onOuterAbort = () => ctrl.abort(opts.signal?.reason);
   opts.signal?.addEventListener("abort", onOuterAbort, { once: true });
 
@@ -110,13 +119,23 @@ export async function chatCompletion(
   let text: string;
   try {
     res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: ctrl.signal });
+    headersSeen = true;
+    if (fbTimer) clearTimeout(fbTimer);
     text = await res.text(); // timer still armed: covers a hanging body, not just headers
   } catch (e) {
     const err = e as Error & { cause?: { code?: string } };
-    const isTimeout = ctrl.signal.aborted && String(ctrl.signal.reason?.message ?? ctrl.signal.reason).includes("timeout");
-    throw new ProviderError(isTimeout ? "timeout" : "network", `${provider.name}/${req.model}: ${isTimeout ? `timed out after ${opts.timeoutMs}ms` : `${err.message}${err.cause?.code ? ` (${err.cause.code})` : ""}`}`, undefined, provider.name, req.model);
+    const why = String(ctrl.signal.reason?.message ?? ctrl.signal.reason);
+    const noResponse = ctrl.signal.aborted && why.includes("no_response");
+    const isTimeout = ctrl.signal.aborted && why.includes("timeout");
+    // Named separately so the difference survives into the report and the circuit breaker: a
+    // host that sent nothing at all is stronger evidence than one that was merely slow.
+    const message = noResponse
+      ? `sent no response headers within ${firstByteMs}ms — the host accepted the connection and then said nothing. Raise providers.${provider.name}.firstByteMs if it buffers headers until the body is ready.`
+      : isTimeout ? `timed out after ${opts.timeoutMs}ms` : `${err.message}${err.cause?.code ? ` (${err.cause.code})` : ""}`;
+    throw new ProviderError(noResponse ? "no_response" : isTimeout ? "timeout" : "network", `${provider.name}/${req.model}: ${message}`, undefined, provider.name, req.model);
   } finally {
     clearTimeout(timer);
+    if (fbTimer) clearTimeout(fbTimer);
     opts.signal?.removeEventListener("abort", onOuterAbort);
   }
 

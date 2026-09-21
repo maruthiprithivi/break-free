@@ -30,6 +30,15 @@ const ProviderConfigSchema = z.object({
   /** Extra JSON merged into every request body (e.g. {"thinking":{"type":"enabled"}}) */
   extraBody: z.record(z.any()).optional(),
   timeoutMs: z.number().int().positive().optional(),
+  /**
+   * How long to wait for RESPONSE HEADERS before giving up, separate from the total budget.
+   *
+   * A model that is generating slowly still answers its headers quickly — measured at 366ms
+   * against a provider whose body took 2,368ms. A host that has stopped talking never sends
+   * them at all. That is the difference `timeoutMs` alone cannot express, and the reason a
+   * wedged host used to cost the full timeout on every call. 0 disables it.
+   */
+  firstByteMs: z.number().int().min(0).optional(),
   /** Context window in tokens. A handover brief handed to this provider is capped to it. */
   contextTokens: z.number().int().positive().optional(),
   label: z.string().optional(),
@@ -45,7 +54,7 @@ const AliasSchema = z.union([
   }),
 ]);
 
-export const FALLBACK_REASONS = ["rate_limit", "server_error", "timeout", "network", "auth", "not_found", "bad_request", "no_key", "circuit_open"] as const;
+export const FALLBACK_REASONS = ["rate_limit", "server_error", "timeout", "network", "auth", "not_found", "bad_request", "no_key", "circuit_open", "no_response"] as const;
 export type FallbackReason = (typeof FALLBACK_REASONS)[number];
 
 const ConfigSchema = z.object({
@@ -65,6 +74,13 @@ const ConfigSchema = z.object({
       temperature: z.number().default(0.2),
       maxTokens: z.number().int().positive().default(8192),
       timeoutMs: z.number().int().positive().default(180_000),
+      /**
+       * Default wait for response headers. Generous — fifty times the 366ms measured against a
+       * real provider — so it only fires for a host that has genuinely stopped answering, not
+       * for a model taking its time. A provider that buffers headers until its body is ready
+       * can raise or disable it with providers.<name>.firstByteMs.
+       */
+      firstByteMs: z.number().int().min(0).default(20_000),
       maxToolIterations: z.number().int().positive().default(25),
       maxSessionMessages: z.number().int().positive().default(40),
       maxHistoryChars: z.number().int().positive().default(200_000),
@@ -75,7 +91,7 @@ const ConfigSchema = z.object({
       enabled: z.boolean().default(true),
       /** Appended after alias/explicit candidates when everything else fails */
       chain: z.array(z.string()).default([]),
-      retryOn: z.array(z.enum(FALLBACK_REASONS)).default(["rate_limit", "server_error", "timeout", "network", "no_key", "not_found", "auth"]),
+      retryOn: z.array(z.enum(FALLBACK_REASONS)).default(["rate_limit", "server_error", "timeout", "network", "no_response", "no_key", "not_found", "auth"]),
       /** Retries of the SAME candidate before moving on (only for rate_limit/server_error/timeout/network) */
       retriesPerCandidate: z.number().int().min(0).default(1),
       retryDelayMs: z.number().int().min(0).default(1500),
@@ -775,6 +791,8 @@ export interface ResolvedProvider {
   kind: "chat" | "decision";
   extraBody?: Record<string, unknown>;
   timeoutMs?: number;
+  /** Header deadline for this provider, separate from the total budget. */
+  firstByteMs?: number;
   docs: string;
   notes?: string;
   /** Why it's unusable, if it is */
@@ -804,6 +822,7 @@ export function resolveProvider(config: GatewayConfig, name: string): ResolvedPr
     kind: catalog?.kind ?? "chat",
     extraBody: catalog?.extraBody || pc?.extraBody ? { ...(catalog?.extraBody ?? {}), ...(pc?.extraBody ?? {}) } : undefined,
     timeoutMs: pc?.timeoutMs,
+    firstByteMs: pc?.firstByteMs,
     docs: catalog?.docs ?? "",
     notes: catalog?.notes,
   };
