@@ -4,6 +4,10 @@
      branches never edit the same block here. scripts/changelog.sh release <version>
      folds them in. -->
 
+## 4.4.1 — 2026-09-21
+
+- **Another project's finished job no longer blocks your turn (#75).** The job store is one directory shared by every project on the machine — 155 records in a single folder on the reporting install — and a record carried no owner, so a gateway reading it could not tell its own work from anyone else's. The fleet watcher then stamped whichever workspace happened to notice a finished job, and the turn-end guard blocked a session in one repository over a seven-minute review that belonged to another. A job record now carries the workspace that started it, the fleet snapshot counts only this workspace's jobs, and `job_list` can be scoped. Records written before this stay visible to everyone rather than disappearing from a listing someone relies on. This is the same observer-is-not-owner mistake fixed for the queue in #43 and for harness sessions in #51; the reasoning that job events were already correct — "the gateway owns the jobs it started" — was wrong, because the store is shared.
+
 ## 4.4.0 — 2026-09-21
 
 - **A slow model and a dead host are no longer the same failure (#37).** Both surfaced as `timed out after Nms` and both cost the full budget, so no single value of `timeoutMs` could be right: short enough to catch a wedged host killed a large model that was answering fine, and long enough for that model meant a dead one cost minutes on every call. The difference is not duration, it is whether any bytes ever arrive — measured at 366ms to headers against a provider whose body took 2,368ms. `firstByteMs` (default 20s, per-provider overridable, 0 disables) is a separate deadline for response headers, and missing it is reported as its own reason, `no_response`, with a message naming the setting so a provider that buffers headers can be fixed in one step. The circuit breaker counts it as a strike alongside timeouts, and the fallback chain moves on rather than stopping.
