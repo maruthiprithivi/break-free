@@ -20,7 +20,7 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { loadConfig, listProviderNames, priceFor, costUsd, redactKey, resolveProvider, saveConfigPatch, FALLBACK_REASONS, type GatewayConfig, type LoadedConfig } from "./config.js";
@@ -36,6 +36,7 @@ import { WorktreeRegistry, WORKTREE_STATUSES, isLinkedWorktree, shadowLedgerDir,
 import { LEDGER_DIR } from "./ledger.js";
 import { resolveVault, linkLedger, resolveGraph, type GraphProbe } from "./knowledge.js";
 import { status as firstmateStatus, planUpdate, updateCommand, parseUpdateSummary, updateAvailable, sessionLabel, FIRSTMATE_REPO, FIRSTMATE_LABEL } from "./firstmate.js";
+import { behindOrigin, isCheckout, readCache, writeCache, cacheIsWarm, notice as updateNotice, type UpdateState, type ComponentUpdate } from "./updates.js";
 import { estimateTokens, line as ctxLine, report as ctxReport, renderReport, type ContextLine } from "./context.js";
 import { runSteward, hygiene } from "./steward.js";
 import { DEFAULT_PRICING } from "./config.js";
@@ -196,6 +197,65 @@ function graphResolution() {
     reason: `unresolved: ${(e as Error).message}`,
     external: false,
   })));
+}
+
+/**
+ * Check for updates, and take them, at session start.
+ *
+ * Deliberately not awaited by anything on the startup path: a session must not wait on a git
+ * fetch, and a network that is down is not a reason for the gateway to be. The result lands in
+ * a cache that ledger_resume reads, so the notice reaches the session whether or not this
+ * finished first.
+ */
+async function refreshUpdates(): Promise<UpdateState | undefined> {
+  const cfg = ctx.config.updates;
+  const sessionDir = ctx.config.sessionDir;
+  if (!cfg.check || !sessionDir) return undefined;
+
+  const cached = readCache(sessionDir);
+  if (cacheIsWarm(cached, cfg.intervalHours)) return cached;
+
+  const roots: { name: ComponentUpdate["name"]; root: string }[] = [
+    { name: "break-free", root: path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..") },
+    { name: "firstmate", root: firstmateStatus(ctx.config.firstmate).root },
+  ];
+
+  const components: ComponentUpdate[] = [];
+  const applied: UpdateState["applied"] = [];
+
+  for (const { name, root } of roots) {
+    if (!isCheckout(root)) { components.push({ name, root, instructionChanges: [], reason: "not a git checkout" }); continue; }
+    const r = behindOrigin(root, { fetch: true });
+    // Only firstmate's changes steer an agent; break-free's are a program's.
+    const instructionChanges = name === "firstmate" && r.target ? planUpdate(root, r.target).instructionChanges : [];
+    const before = r.behind;
+
+    if (cfg.apply && (r.behind ?? 0) > 0) {
+      const from = execFileSyncQuiet(root, ["rev-parse", "HEAD"]);
+      // Fast-forward only: a checkout someone has edited is left exactly as it is, because
+      // discarding their work to install a version they did not ask for would be far worse
+      // than being a version behind.
+      const ok = execFileSyncQuiet(root, ["merge", "--ff-only", r.target ?? "origin/HEAD"]) !== undefined;
+      const to = execFileSyncQuiet(root, ["rev-parse", "HEAD"]);
+      if (ok && from && to && from !== to) applied.push({ name, from, to });
+    }
+    const after = cfg.apply ? behindOrigin(root).behind : before;
+    components.push({ name, root, behind: after ?? before, instructionChanges, reason: r.reason });
+  }
+
+  const state: UpdateState = { checkedAt: new Date().toISOString(), components, applied };
+  writeCache(sessionDir, state);
+  if (applied.length) rlog("updates.applied", { applied });
+  return state;
+}
+
+/** git, quietly: a failure here is information, not an exception to propagate. */
+function execFileSyncQuiet(cwd: string, args: string[]): string | undefined {
+  try {
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 60_000 }).trim();
+  } catch {
+    return undefined;
+  }
 }
 
 async function fleetCheck(): Promise<{ running: { jobs: number; harness: number }; pending: FleetEvent[]; blocking: boolean }> {
@@ -962,7 +1022,9 @@ server.registerTool("ledger_resume", {
     let wt = "";
     try { wt = ctx.worktrees.summary(4000); } catch { /* not git */ }
     const placement = ctx.ledger.isShadow ? `\n_This checkout is a linked worktree: ledger writes go to a local overlay (${ctx.ledger.dir}) on top of main's live ledger and are absorbed into main by ledger_resume / ledger_merge_from there — feature-branch commits never touch .break-free/._\n` : "";
-    return text(ctx.ledger.resumeBrief() + (absorbed ? `\n## Absorbed from worktrees just now\n${absorbed}\n` : "") + placement + (wt ? `\n## Worktrees (shared registry)\n${wt}\n\nUse worktree_list for details, worktree_register to claim this checkout, worktree_update / worktree_handoff to keep it current.\n` : ""));
+    // The first call of every session is where a notice is actually read.
+    const upd = updateNotice(readCache(ctx.config.sessionDir ?? "")) ;
+    return text((upd ? `## Updates\n${upd}\n\n` : "") + ctx.ledger.resumeBrief() + (absorbed ? `\n## Absorbed from worktrees just now\n${absorbed}\n` : "") + placement + (wt ? `\n## Worktrees (shared registry)\n${wt}\n\nUse worktree_list for details, worktree_register to claim this checkout, worktree_update / worktree_handoff to keep it current.\n` : ""));
   } catch (e) {
     return fail(e);
   }
@@ -1604,6 +1666,10 @@ server.registerTool("bf_invoke", {
 
 // ------------------------------------------------------------ main
 async function main() {
+  // Fire and forget: a session must not wait on a git fetch, and a network that is down is
+  // not a reason for the gateway to be.
+  void refreshUpdates().catch(() => undefined);
+
   if (argv.includes("--selftest")) {
     // Print a config/provider summary and exit non-zero if nothing is usable.
     const rows = listProviderNames(ctx.config).map(providerReport);
