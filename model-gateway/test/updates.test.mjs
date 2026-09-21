@@ -108,3 +108,47 @@ test("an applied update names the rollback, and a waiting one names the command"
   assert.match(waiting, /break-free is 3 commit\(s\) behind/);
   assert.match(waiting, /node setup\.mjs --update/);
 });
+
+// --- whose job is it ------------------------------------------------------------------
+// The job store is one directory shared by every project on the machine. Without an owner
+// on each record, a gateway reading it cannot tell its own work from anyone else's — and the
+// fleet watcher stamped another project's finished job with whichever workspace noticed it,
+// blocking an unrelated turn.
+
+test("a job record carries the workspace that started it, and listing can be scoped to it", async () => {
+  const { JobRegistry } = await import("../dist/jobs.js");
+  const sessionDir = tmp();
+  const cfg = { sessionDir, budget: { perTaskUsd: 0, perPlanUsd: 0, perDayUsd: 0 } };
+
+  const mine = new JobRegistry(cfg, false, "/repo/mine");
+  const theirs = new JobRegistry(cfg, false, "/repo/theirs");
+  mine.start("delegate", "my work", async () => ({ text: "ok" }));
+
+  // Written straight to disk: a running job lives in memory and only lands there when it
+  // finishes, and what is under test is ownership, not the job lifecycle.
+  fs.mkdirSync(path.join(sessionDir, "jobs"), { recursive: true });
+  fs.writeFileSync(
+    path.join(sessionDir, "jobs", "theirs-1.json"),
+    JSON.stringify({ id: "theirs-1", kind: "run_plan", label: "their work", workspace: "/repo/theirs", state: "done", createdAt: new Date(Date.now() - 1000).toISOString(), progress: [] }),
+  );
+
+  // Both registries read the same directory, which is the shape that caused the bug.
+  assert.equal(mine.list().length, 2, "everything on the machine is still listable");
+  assert.deepEqual(mine.list({ mine: true }).map((j) => j.label), ["my work"], "scoped to this workspace");
+  assert.deepEqual(theirs.list({ mine: true }).map((j) => j.label), ["their work"]);
+  assert.ok(theirs.list({ mine: true }).every((j) => j.label !== "my work"), "and never the other way round");
+  assert.equal(mine.list({ mine: true })[0].workspace, "/repo/mine");
+});
+
+test("a job record written before it had an owner stays visible to everyone", async () => {
+  const { JobRegistry } = await import("../dist/jobs.js");
+  const sessionDir = tmp();
+  fs.mkdirSync(path.join(sessionDir, "jobs"), { recursive: true });
+  fs.writeFileSync(
+    path.join(sessionDir, "jobs", "legacy-1.json"),
+    JSON.stringify({ id: "legacy-1", kind: "delegate", label: "from before", state: "done", createdAt: new Date().toISOString(), progress: [] }),
+  );
+  const r = new JobRegistry({ sessionDir, budget: {} }, false, "/repo/mine");
+  // An upgrade must not make work someone is relying on disappear from their listing.
+  assert.deepEqual(r.list({ mine: true }).map((j) => j.label), ["from before"]);
+});
