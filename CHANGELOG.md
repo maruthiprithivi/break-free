@@ -4,6 +4,10 @@
      branches never edit the same block here. scripts/changelog.sh release <version>
      folds them in. -->
 
+## 4.5.0 — 2026-09-21
+
+- **Every wired harness learns about firstmate, not just Claude Code and Codex (#78).** The standing rule is the whole integration for an ordinary session — a harness reads its instruction files at startup, so without it a user gets a distro nothing ever points at. It was written for two harnesses. Verified on a real machine: an omp user had the MCP server, both skills and the delegation rule, and no firstmate rule at all; the same was true for gemini, opencode, cursor, hermes, cline and the rest. The rule now goes to every agent the install wired, through the same three-case handling `installExtraAgents` uses, so an agent whose rule file the installer owns is appended to rather than overwritten and aider — whose rule is a `read:` key in a YAML config, not an instruction file — is skipped and named rather than corrupted. Uninstall now strips it everywhere it was written: a rule pointing at a distro that is gone reads as an instruction, not a suggestion.
+
 ## 4.4.1 — 2026-09-21
 
 - **Another project's finished job no longer blocks your turn (#75).** The job store is one directory shared by every project on the machine — 155 records in a single folder on the reporting install — and a record carried no owner, so a gateway reading it could not tell its own work from anyone else's. The fleet watcher then stamped whichever workspace happened to notice a finished job, and the turn-end guard blocked a session in one repository over a seven-minute review that belonged to another. A job record now carries the workspace that started it, the fleet snapshot counts only this workspace's jobs, and `job_list` can be scoped. Records written before this stay visible to everyone rather than disappearing from a listing someone relies on. This is the same observer-is-not-owner mistake fixed for the queue in #43 and for harness sessions in #51; the reasoning that job events were already correct — "the gateway owns the jobs it started" — was wrong, because the store is shared.
