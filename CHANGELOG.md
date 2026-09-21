@@ -4,6 +4,10 @@
      branches never edit the same block here. scripts/changelog.sh release <version>
      folds them in. -->
 
+## 4.3.0 — 2026-09-21
+
+- **break-free and firstmate update themselves at session start, and say so in session (#70).** Neither updated automatically before: something had to run `setup.mjs --update`, and nothing did. Now a gateway start checks both against origin and fast-forwards them, without blocking startup — a session must not wait on a git fetch, and an unreachable network is not a reason for the gateway not to run. The first call of a session reports what happened, because that is where a notice is actually read. The two are treated differently on purpose: break-free is a program, so its new bytes land at the next start; firstmate is instructions an agent reads during the session, so an update changes behaviour in flight and the notice names the instruction files that changed and the one command that rolls it back. A checkout with local edits is left alone rather than fast-forwarded over. A failed check reports that it failed rather than reporting nothing-new, and when everything is current the notice is absent entirely — a notice that appears every session stops being read. Tune with `updates.check`, `updates.apply` and `updates.intervalHours`, or turn it off.
+
 ## 4.2.1 — 2026-09-21
 
 - **A nested session no longer picks a harness by coin flip (#68).** An outer harness's environment is inherited by everything it spawns, so a Codex session started from inside Claude Code carries both marker sets — and `bf firstmate` resolved that tie by the order names happened to appear in a list. Two claimants is now treated as no answer: the choice falls through to `firstmate.harness` or what your install wired, which you actually chose, and the command says so rather than deciding quietly. A single claimant is still trusted.
