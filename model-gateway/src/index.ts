@@ -86,7 +86,7 @@ function reload(): Ctx {
     const name = worktrees.current()?.name ?? worktrees.currentBranch();
     ledger = new Ledger(workspace.root, { writeDir: shadowLedgerDir(worktrees.commonDir, name), baseDir: path.join(worktrees.mainPath() ?? workspace.root, LEDGER_DIR), origin: name });
   } else ledger = new Ledger(workspace.root);
-  jobs ??= new JobRegistry(config, stateless);
+  jobs ??= new JobRegistry(config, stateless, workspace.root);
   const spentTodayUsd = () => {
     if (!logger) return 0;
     const today = new Date().toISOString().slice(0, 10);
@@ -103,7 +103,8 @@ async function buildFleetSnapshot(prev: FleetSnapshot | undefined): Promise<Flee
   const ts = new Date().toISOString();
   const jobsMap: Record<string, string> = {};
   try {
-    for (const j of jobs!.list()) jobsMap[j.id] = j.state;
+    // Only this workspace's jobs: another project's finished run is not this turn's business.
+    for (const j of jobs!.list({ mine: true })) jobsMap[j.id] = j.state;
   } catch {
     // A job-list failure must not take down the snapshot.
   }

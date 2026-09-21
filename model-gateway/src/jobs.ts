@@ -13,6 +13,14 @@ export type JobState = "running" | "done" | "failed" | "cancelled";
 
 export interface JobRecord {
   id: string;
+  /**
+   * Workspace that started this job.
+   *
+   * The job store is one directory shared by every project on the machine, so without this a
+   * gateway reading it cannot tell its own work from anyone else's — and the fleet watcher
+   * ended up stamping another project's finished job with whichever workspace noticed it.
+   */
+  workspace?: string;
   kind: string;
   label?: string;
   state: JobState;
@@ -32,7 +40,7 @@ interface LiveJob {
 export class JobRegistry {
   private jobs = new Map<string, LiveJob>();
   private dir: string | undefined;
-  constructor(private config: GatewayConfig, stateless: boolean) {
+  constructor(private config: GatewayConfig, stateless: boolean, private workspace?: string) {
     if (!stateless && config.sessionDir) {
       this.dir = path.join(config.sessionDir, "jobs");
       fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
@@ -42,7 +50,7 @@ export class JobRegistry {
   start<T>(kind: string, label: string | undefined, fn: (signal: AbortSignal, progress: (s: string) => void) => Promise<T>): JobRecord {
     const id = `${kind}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const abort = new AbortController();
-    const rec: JobRecord = { id, kind, label, state: "running", createdAt: new Date().toISOString(), progress: [] };
+    const rec: JobRecord = { id, kind, label, workspace: this.workspace, state: "running", createdAt: new Date().toISOString(), progress: [] };
     const progress = (s: string) => {
       rec.progress.push(`${new Date().toISOString()} ${s}`);
       if (rec.progress.length > 200) rec.progress.splice(0, rec.progress.length - 200);
@@ -96,7 +104,13 @@ export class JobRegistry {
     return true;
   }
 
-  list(): Omit<JobRecord, "result" | "progress">[] {
+  /**
+   * Jobs on this machine. `mine` limits them to this workspace, which is what the fleet
+   * watcher wants: another project's running job is not a reason to hold this turn open.
+   * Records written before jobs carried a workspace have none and are included either way,
+   * so an upgrade does not make existing work invisible.
+   */
+  list(opts: { mine?: boolean } = {}): Omit<JobRecord, "result" | "progress">[] {
     const rows = new Map<string, JobRecord>();
     if (this.dir) {
       for (const f of fs.readdirSync(this.dir).filter((f) => f.endsWith(".json"))) {
@@ -109,7 +123,10 @@ export class JobRegistry {
       }
     }
     for (const j of this.jobs.values()) rows.set(j.rec.id, j.rec);
-    return [...rows.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100).map(({ result: _r, progress: _p, ...rest }) => rest);
+    // A record with no workspace predates this field; it is nobody's and stays visible rather
+    // than vanishing from a listing someone is relying on.
+    const mine = (j: JobRecord) => !opts.mine || !this.workspace || !j.workspace || j.workspace === this.workspace;
+    return [...rows.values()].filter(mine).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100).map(({ result: _r, progress: _p, ...rest }) => rest);
   }
 
   private persist(rec: JobRecord): void {
