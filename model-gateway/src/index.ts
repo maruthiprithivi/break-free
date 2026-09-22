@@ -43,7 +43,7 @@ import { DEFAULT_PRICING } from "./config.js";
 import { ghAvailable } from "./github.js";
 import { SessionStore } from "./sessions.js";
 import { HarnessController } from "./harnessctl.js";
-import { appendEvents, classify, drainTo, expireCi, pendingEvents, readSnapshot, resolveCi, writeSnapshot, type FleetEvent, type FleetSnapshot } from "./fleet.js";
+import { appendEvents, classify, drainTo, expireCi, pendingEvents, readSnapshot, resolveCi, resolveJob, writeSnapshot, type FleetEvent, type FleetSnapshot } from "./fleet.js";
 import { getBreaker } from "./breaker.js";
 import { delegate, panel, review, supervise, runPlan, type Ctx } from "./orchestrate.js";
 import { PROVIDER_CATALOG, isLocalEndpoint } from "./providers.js";
@@ -391,6 +391,12 @@ const server = new McpServer({ name: "break-free-gateway", version: VERSION }, {
 });
 
 /**
+ * Tools the turn-end guard tells the agent to call. Kept in one place because the guard's
+ * message and the advertised tool surface are written far apart and drifted apart once already.
+ */
+const HOOK_TOOLS = ["fleet_status"] as const;
+
+/**
  * Execution, its lifecycle, and the first call of a session stay typed and resident.
  *
  * Astra's rule, and it is right: keep operations with their lifecycle. Advertising `delegate`
@@ -400,6 +406,11 @@ const RESIDENT_TOOLS = new Set([
   "delegate", "run_plan", "supervise", "review",
   "job_status", "job_result", "job_cancel", "job_list",
   "ledger_resume", "list_models",
+  // The turn-end guard blocks the turn and names this tool as the way out, so hiding it behind
+  // discovery deadlocks the session: the agent is told to call something it cannot see, cannot
+  // drain, and the guard blocks again on the identical events. Anything a blocking message
+  // instructs the agent to call has to be advertised. HOOK_TOOLS keeps that honest.
+  ...HOOK_TOOLS,
   "bf_discover", "bf_invoke",
 ]);
 
@@ -950,6 +961,10 @@ server.registerTool("job_result", {
   const j = jobs!.get(job_id);
   if (!j) return fail(new Error(`unknown job ${job_id}`));
   if (j.state === "running") return json({ id: j.id, state: "running", progress: j.progress.slice(-10), hint: "not finished; use job_status with wait_ms" });
+  // Reading the outcome is collecting it, so the wake event has done its job. Leaving it
+  // pending is what piled up the stale list the guard kept re-reporting. A failure counts as
+  // read too — it is placed before the early return so job.failed drains the same way.
+  try { if (ctx.config.sessionDir) resolveJob(ctx.config.sessionDir, j.id); } catch { /* the queue is a nicety, never a reason to withhold a result */ }
   if (j.state !== "done") return json({ id: j.id, state: j.state, error: j.error });
   const r = j.result as { text?: string; report?: string; meta?: unknown; results?: unknown; usage?: unknown };
   return text(`${r.text ?? r.report ?? JSON.stringify(r)}\n\n---\nmeta: ${JSON.stringify({ job_id: j.id, state: j.state, ...(r.meta ? { ...(r.meta as object) } : {}), ...(r.results ? { results: r.results, usage: r.usage } : {}) })}`);
@@ -1718,7 +1733,10 @@ async function main() {
           // should care. Name what it is, so the answer is in the message.
           const rest = res.pending.filter((e) => e.kind !== "ci.failed" && e.kind !== "ci.pending");
           if (rest.length > 0) parts.push(rest.slice(0, 3).map((e) => `${e.kind} ${e.id}`).join(", ") + (rest.length > 3 ? ` and ${rest.length - 3} more` : ""));
-          const reason = `${parts.join(", ")} - ${ciFailed.length ? "fix it before ending the turn" : "call fleet_status to collect them"}`;
+          // Name the exact call. "call fleet_status" is not enough: without drain:true the events
+          // stay pending and the next turn blocks on the identical list, which is a loop the
+          // agent cannot escape by following the instruction it was given.
+          const reason = `${parts.join(", ")} - ${ciFailed.length ? "fix it before ending the turn" : "call fleet_status with drain:true to collect them"}`;
           console.log(JSON.stringify({ decision: "block", reason }));
         }
       } catch {

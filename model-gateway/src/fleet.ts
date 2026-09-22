@@ -204,6 +204,37 @@ function pendingEventsInDir(dir: string, workspace?: string): FleetEvent[] {
 }
 
 /**
+ * An event still waiting to be read, keyed by what it is about rather than when it was seen.
+ *
+ * `harness.idle` and a finished job are CONDITIONS, not moments: a session that has been idle
+ * for a day is still idle at the next check, and a job that finished is still finished. The
+ * classifier re-derives them from the snapshot every time, so appending unconditionally turns
+ * one standing condition into one event per check — a real queue held 287 copies of a single
+ * idle session and 15 of one finished plan, which is what made the turn-end guard look like it
+ * was re-sending stale work. It was.
+ *
+ * Deduplicating here rather than in the classifier also covers the case the classifier cannot
+ * see: several gateways share this directory, the snapshot is read-then-written, and a lost
+ * race makes a finished job look new again to whichever process wrote last.
+ */
+function pendingMatcher(dir: string): (existing: FleetEvent[], event: Omit<FleetEvent, "seq">, workspace?: string) => boolean {
+  const resolved = new Set(readResolvedSeqs(dir));
+  // Against THIS workspace's cursor, not the shared baseline. A workspace that has already
+  // collected an event has nothing outstanding, so a session going idle again — or a second
+  // run of the same plan — is news to it and must be raised. Deduplicating against the
+  // baseline instead would silence every recurrence for the rest of the queue's life.
+  const cursors = readCursors(dir);
+  const cursorFor = (ws?: string) => Math.max(cursors.baseline, cursors.byWorkspace[ws ?? ""] ?? 0);
+  return (existing, event, workspace) => {
+    const ws = event.workspace ?? workspace;
+    const cursor = cursorFor(ws);
+    return existing.some(
+      (e) => e.seq > cursor && !resolved.has(e.seq) && e.kind === event.kind && e.id === event.id && (e.workspace ?? undefined) === (ws ?? undefined),
+    );
+  };
+}
+
+/**
  * Append events and hand back the same rows with their assigned seq.
  *
  * Read-then-append, so it assumes a single writer. That is the design: one
@@ -219,10 +250,16 @@ export function appendEvents(sessionDir: string, events: Omit<FleetEvent, "seq">
 
   const out: FleetEvent[] = [];
   const lines: string[] = [];
+  const alreadyPending = pendingMatcher(dir);
   for (const event of events) {
+    // Saying the same thing twice does not make it twice as true, and the reader cannot tell
+    // the copies apart to dismiss them. `existing` grows as we go, so a batch that repeats
+    // itself is deduplicated against its own earlier rows too, not just against the file.
+    if (alreadyPending(existing, event, workspace)) continue;
     seq += 1;
     // Stamp the producer, unless the caller already set one (a CI event knows its own repo).
     const full: FleetEvent = { ...(workspace ? { workspace } : {}), ...event, seq };
+    existing.push(full);
     out.push(full);
     lines.push(JSON.stringify(full));
   }
@@ -379,4 +416,25 @@ export function drainTo(sessionDir: string, seq: number, workspace?: string): vo
   if (seq <= current) return;
   cursors.byWorkspace[key] = seq;
   fs.writeFileSync(path.join(dir, CURSOR_FILE), JSON.stringify(cursors), { mode: 0o600 });
+}
+
+/**
+ * Reading a job's result IS collecting it.
+ *
+ * The wake queue exists to stop a finished job going unnoticed, so once someone has read the
+ * result that purpose is served. Without this, `job_result` left the event pending and the
+ * turn-end guard kept naming jobs the agent had already collected — the same three ids every
+ * turn, with no call that would clear them. Resolving by id (the sidecar, not the cursor)
+ * skips exactly this job's events and leaves older, unrelated ones pending.
+ */
+export function resolveJob(sessionDir: string, jobId: string): number {
+  const dir = fleetDir(sessionDir);
+  let resolved = 0;
+  for (const event of pendingEventsInDir(dir)) {
+    if (event.id !== jobId) continue;
+    if (event.kind !== "job.done" && event.kind !== "job.failed") continue;
+    markResolved(dir, event.seq);
+    resolved += 1;
+  }
+  return resolved;
 }
