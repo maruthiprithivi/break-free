@@ -4,6 +4,31 @@
      branches never edit the same block here. scripts/changelog.sh release <version>
      folds them in. -->
 
+## 4.5.1 — 2026-09-22
+
+- **The turn-end guard no longer deadlocks the session.** It told the agent to call
+  `fleet_status`, which the compact tool profile had moved behind discovery, so the way out it
+  named could be neither seen nor called and the same events blocked every turn forever. The
+  tool is resident again, and the guard names the call that actually drains it (`drain:true`).
+- **One standing condition is one event, not one per check.** An idle harness session raised a
+  fresh `harness.idle` every few seconds for as long as it stayed idle — a real queue held 287
+  copies of a single session — and a finished job reappeared whenever two gateways raced on the
+  shared snapshot. Identical events are now suppressed while the last one is still uncollected,
+  and raised again once it has been.
+- **Reading a job's outcome collects it.** `job_result` resolves that job's wake event, for
+  failures as well as successes, so finished work stops being reported as still pending.
+- **The wake queue no longer grows forever.** Events nobody can still see are dropped once the
+  file passes a threshold, so the cost of answering "is anything pending" is bounded by what is
+  actually happening rather than by how long the install has been running. Sequence numbers are
+  never renumbered and an event any workspace has yet to collect is never dropped.
+- **Writers to the shared queue take a lock.** Several gateways run against one session
+  directory — one per workspace and worktree — and the file only ever assumed a single writer.
+- **The turn-end guard stands down instead of wedging a session.** It now honours
+  `stop_hook_active`: once the harness reports it has already blocked on the guard's account,
+  the guard allows the turn to end rather than repeating itself. Previously a condition the
+  agent could not clear — for any reason — blocked every turn until Claude Code overrode the
+  hook.
+
 ## 4.5.0 — 2026-09-21
 
 - **Every wired harness learns about firstmate, not just Claude Code and Codex (#78).** The standing rule is the whole integration for an ordinary session — a harness reads its instruction files at startup, so without it a user gets a distro nothing ever points at. It was written for two harnesses. Verified on a real machine: an omp user had the MCP server, both skills and the delegation rule, and no firstmate rule at all; the same was true for gemini, opencode, cursor, hermes, cline and the rest. The rule now goes to every agent the install wired, through the same three-case handling `installExtraAgents` uses, so an agent whose rule file the installer owns is appended to rather than overwritten and aider — whose rule is a `read:` key in a YAML config, not an instruction file — is skipped and named rather than corrupted. Uninstall now strips it everywhere it was written: a rule pointing at a distro that is gone reads as an instruction, not a suggestion.
