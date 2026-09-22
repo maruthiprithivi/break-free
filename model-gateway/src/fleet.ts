@@ -50,6 +50,11 @@ export interface FleetSnapshot {
 }
 
 const QUEUE_FILE = "wake-queue.jsonl";
+/** Events in the file before a prune is worth attempting. */
+const PRUNE_AT = 500;
+const LOCK_DIR = ".lock";
+/** A lock older than this belonged to a process that died holding it. */
+const LOCK_STALE_MS = 30_000;
 const CURSOR_FILE = "cursor";
 const SNAPSHOT_FILE = "snapshot.json";
 const RESOLVED_FILE = "resolved.json";
@@ -243,7 +248,19 @@ function pendingMatcher(dir: string): (existing: FleetEvent[], event: Omit<Fleet
 export function appendEvents(sessionDir: string, events: Omit<FleetEvent, "seq">[], workspace?: string): FleetEvent[] {
   const dir = fleetDir(sessionDir);
   const file = path.join(dir, QUEUE_FILE);
+  const write = (): { out: FleetEvent[]; total: number } => appendLocked(dir, file, events, workspace);
 
+  // The lock makes the single-writer assumption true rather than aspirational. Failing to take
+  // it is not a reason to drop a wake event, so an append that cannot get it still happens —
+  // that is exactly today's behaviour, no worse.
+  const { out, total } = withQueueLock(dir, write) ?? write();
+
+  // Outside the lock: pruneQueue takes it itself, and re-entering would deadlock.
+  if (total >= PRUNE_AT) pruneQueue(sessionDir);
+  return out;
+}
+
+function appendLocked(dir: string, file: string, events: Omit<FleetEvent, "seq">[], workspace?: string): { out: FleetEvent[]; total: number } {
   const text = readFileText(file) ?? "";
   const existing = parseEvents(text);
   let seq = existing.length > 0 ? existing[existing.length - 1].seq : 0;
@@ -270,7 +287,7 @@ export function appendEvents(sessionDir: string, events: Omit<FleetEvent, "seq">
     const prefix = text.length > 0 && !text.endsWith("\n") ? "\n" : "";
     fs.appendFileSync(file, `${prefix}${lines.join("\n")}\n`, { mode: 0o600 });
   }
-  return out;
+  return { out, total: existing.length };
 }
 
 export function readEvents(sessionDir: string): FleetEvent[] {
@@ -400,6 +417,104 @@ export function expireCi(sessionDir: string, now: number, timeoutMs: number): nu
   }
 
   return expired;
+}
+
+/** Block this thread briefly. The queue's callers are synchronous, so the wait must be too. */
+function sleepMs(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * One writer at a time, across processes.
+ *
+ * The file's own comment said it "assumes a single writer", but in practice a gateway runs per
+ * workspace and per worktree, all sharing one session directory — which is how a finished job
+ * came to be announced fifteen times. `mkdir` is atomic on every platform we run on and needs
+ * no dependency, so it is the mutex. A holder that crashes would otherwise wedge the queue
+ * forever, so a lock older than LOCK_STALE_MS is treated as abandoned rather than respected.
+ */
+function withQueueLock<T>(dir: string, fn: () => T, waitMs = 2_000): T | undefined {
+  const lock = path.join(dir, LOCK_DIR);
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      fs.mkdirSync(lock);
+      break;
+    } catch {
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
+          fs.rmSync(lock, { recursive: true, force: true });
+          continue;
+        }
+      } catch {
+        // It vanished between the two calls: the holder just released it, so try to take it.
+      }
+      if (Date.now() >= deadline) return undefined;
+      sleepMs(25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try { fs.rmSync(lock, { recursive: true, force: true }); } catch { /* releasing must not throw */ }
+  }
+}
+
+/**
+ * Drop the rows nobody can see any more.
+ *
+ * The queue is append-only and nothing ever removed a line, so the cost of answering "is
+ * anything pending" grew with the lifetime of the install rather than with how much was
+ * happening. #82 stopped the flood; this stops the slow leak underneath it.
+ *
+ * What is safe to drop follows from how `pendingEventsInDir` decides visibility, and from
+ * nothing else:
+ *
+ *   - a resolved seq is skipped for every workspace, so it is invisible to all of them;
+ *   - an event stamped with a workspace is only ever shown to that workspace, so that
+ *     workspace's own cursor retires it;
+ *   - an unstamped event is visible to everybody, including a workspace that has never drained
+ *     and therefore inherits the baseline, so only the baseline can retire it.
+ *
+ * Seq numbers are never renumbered: they are the cursor's coordinate system, and rewriting
+ * them would rewind every workspace at once and re-emit the lot.
+ */
+export function pruneQueue(sessionDir: string): { removed: number; kept: number } {
+  const dir = fleetDir(sessionDir);
+  return withQueueLock(dir, () => {
+    const file = path.join(dir, QUEUE_FILE);
+    const text = readFileText(file);
+    if (text === undefined) return { removed: 0, kept: 0 };
+    const events = parseEvents(text);
+    if (events.length === 0) return { removed: 0, kept: 0 };
+
+    const cursors = readCursors(dir);
+    const resolved = new Set(readResolvedSeqs(dir));
+    const visible = (e: FleetEvent) =>
+      !resolved.has(e.seq) && e.seq > (e.workspace ? Math.max(cursors.baseline, cursors.byWorkspace[e.workspace] ?? 0) : cursors.baseline);
+
+    // The highest seq always stays, whether or not anyone can still see it: the file is also
+    // the allocator's memory. Prune it away and the next append restarts below the cursors,
+    // handing out numbers that every reader has already skipped past.
+    const highest = events.reduce((max, e) => (e.seq > max.seq ? e : max), events[0]);
+    const keep = events.filter((e) => e.seq === highest.seq || visible(e));
+    if (keep.length === events.length) return { removed: 0, kept: events.length };
+
+    // Anyone who appended while we were deciding is not in `text`, and the rename would throw
+    // their rows away. Pruning is opportunistic; losing a wake event is not.
+    if (fs.statSync(file).size !== Buffer.byteLength(text)) return { removed: 0, kept: events.length };
+
+    const tmp = path.join(dir, `${QUEUE_FILE}.${process.pid}.tmp`);
+    fs.writeFileSync(tmp, keep.map((e) => JSON.stringify(e)).join("\n") + "\n", { mode: 0o600 });
+    // Atomic: a concurrent reader sees either the whole old file or the whole new one.
+    fs.renameSync(tmp, file);
+
+    // The sidecar only has to remember seqs that still have a row to skip.
+    const surviving = new Set(keep.map((e) => e.seq));
+    writeResolvedSeqs(dir, [...resolved].filter((seq) => surviving.has(seq)));
+
+    return { removed: events.length - keep.length, kept: keep.length };
+  }) ?? { removed: 0, kept: 0 };
 }
 
 /**
