@@ -1714,6 +1714,39 @@ async function main() {
     console.log(JSON.stringify({ file: logger?.file ?? null, enabled: !!logger, ...analyze(events) }, null, 2));
     process.exit(0);
   }
+  /**
+   * The Stop-hook payload on stdin, or nothing.
+   *
+   * Reading stdin must not become a new way to hang, so every unhappy path — no payload, a
+   * closed pipe, malformed JSON, a writer that never finishes — resolves to an empty object
+   * under a short deadline and the guard simply proceeds as it did before.
+   */
+  const hookPayload = async (timeoutMs = 250): Promise<Record<string, unknown>> => {
+    if (process.stdin.isTTY) return {};
+    return await new Promise((resolve) => {
+      let data = "";
+      let settled = false;
+      const done = (v: Record<string, unknown>) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        process.stdin.pause();
+        resolve(v);
+      };
+      const timer = setTimeout(() => done({}), timeoutMs);
+      timer.unref?.();
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (c) => { data += c; });
+      process.stdin.on("end", () => {
+        try {
+          const parsed = JSON.parse(data) as unknown;
+          done(parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {});
+        } catch { done({}); }
+      });
+      process.stdin.on("error", () => done({}));
+    });
+  };
+
   if (argv.includes("--fleet-check")) {
     if (argv.includes("--hook")) {
       // Claude Code Stop-hook contract: block -> one line of JSON on stdout;
@@ -1721,8 +1754,14 @@ async function main() {
       const stderrWrite = process.stderr.write;
       process.stderr.write = (() => true) as typeof process.stderr.write;
       try {
-        const res = await fleetCheck();
-        if (res.blocking) {
+        // A guard that has already spoken must not be able to trap the session by repeating
+        // itself. The harness sets stop_hook_active once it has blocked on our account, and a
+        // hook that ignores it blocks forever — which is how this one made a session
+        // unendable and had to be overridden. #82 made the instruction followable; this makes
+        // the guard incapable of wedging a turn even when it is not, whatever the reason.
+        const payload = await hookPayload();
+        const res = payload.stop_hook_active === true ? undefined : await fleetCheck();
+        if (res?.blocking) {
           const parts: string[] = [];
           const ciFailed = res.pending.filter((e) => e.kind === "ci.failed");
           const ciPending = res.pending.filter((e) => e.kind === "ci.pending");

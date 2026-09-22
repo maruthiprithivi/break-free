@@ -147,3 +147,35 @@ test("events are deduplicated per workspace, not across the machine", () => {
   assert.equal(pendingEvents(sessionDir, "/repo/a").length, 1);
   assert.equal(pendingEvents(sessionDir, "/repo/b").length, 1);
 });
+
+// --- a guard that cannot wedge a session ------------------------------------------------
+// #82 made the instruction followable. This is the structural guarantee underneath it: even
+// when it cannot be followed - a provider outage, a broken tool, a bug not yet found - the
+// guard must not be able to trap a session. The harness sets stop_hook_active once it has
+// blocked on our account; ignoring it is what forced Claude Code to override the hook.
+
+const hook = (ws, cfg, input) =>
+  execFileSync(process.execPath, [entry, "--workspace", ws, "--config", cfg, "--fleet-check", "--hook"], { encoding: "utf8", ...(input === undefined ? {} : { input }) });
+
+test("the guard stands down once the harness says it has already blocked", () => {
+  const { ws, cfg, sessionDir } = stuckSession();
+  appendEvents(sessionDir, [{ ts: new Date().toISOString(), kind: "job.done", id: "wedge-1", reason: "done" }], ws);
+
+  // Same pending event, the only difference being what the harness tells us.
+  assert.match(hook(ws, cfg, JSON.stringify({ hook_event_name: "Stop" })), /"decision":"block"/, "first time it has its say");
+  assert.equal(hook(ws, cfg, JSON.stringify({ hook_event_name: "Stop", stop_hook_active: true })), "", "second time it stands down rather than trapping the session");
+});
+
+test("an unreadable hook payload is not a way to hang, and not a way to silence the guard", () => {
+  const { ws, cfg, sessionDir } = stuckSession();
+  appendEvents(sessionDir, [{ ts: new Date().toISOString(), kind: "job.done", id: "wedge-2", reason: "done" }], ws);
+
+  // Every unhappy path means "no reason to suppress", never "give up" and never "hang".
+  for (const [label, input] of [["no payload", ""], ["not json", "this is not json"], ["json that is not an object", "42"], ["the flag absent", JSON.stringify({ hook_event_name: "Stop" })], ["the flag false", JSON.stringify({ stop_hook_active: false })]]) {
+    assert.match(hook(ws, cfg, input), /"decision":"block"/, `${label} must leave the guard doing its job`);
+  }
+  // A writer that opens the pipe and never closes it must not hold the turn open either.
+  const started = Date.now();
+  hook(ws, cfg, undefined);
+  assert.ok(Date.now() - started < 10_000, "the payload read is deadlined, not open-ended");
+});
