@@ -53,6 +53,19 @@ export interface FleetSnapshot {
 const QUEUE_FILE = "wake-queue.jsonl";
 /** Events in the file before a prune is worth attempting. */
 const PRUNE_AT = 500;
+/**
+ * Drop a workspace's cursor entry after this much time without a drain.
+ *
+ * #91: every workspace that ever ran a gateway left a permanent entry in
+ * <sessionDir>/fleet/cursor. One long-lived machine held 228 keys / 14.6 KB, and readCursors()
+ * parses them on every appendEvents, pendingEvents and pruneQueue. A previous fix dropped keys
+ * whose path no longer existed and was reverted: fs.existsSync() === false means "not readable
+ * right now" (unmounted volume, detached container), not "workspace deleted", and dropping a
+ * live key resets that workspace's floor to `baseline` so it re-sees everything it drained.
+ * Thirty days is comfortably longer than any working session should go between drains, and
+ * short enough to keep the file from growing without bound on machines that create worktrees.
+ */
+const CURSOR_IDLE_RETIRE_MS = 30 * 24 * 60 * 60 * 1000;
 const LOCK_DIR = ".lock";
 /** A lock older than this belonged to a process that died holding it. */
 const LOCK_STALE_MS = 30_000;
@@ -332,6 +345,12 @@ interface Cursors {
   /** What the file held before it learned about workspaces: already-drained for everybody. */
   baseline: number;
   byWorkspace: Record<string, number>;
+  /**
+   * When each workspace last actually drained. Absent for keys written before this field
+   * existed and for workspaces that have not drained since the upgrade; such a key must never
+   * be retired until it has been seen at least once.
+   */
+  lastSeen: Record<string, number>;
 }
 
 /**
@@ -343,12 +362,18 @@ interface Cursors {
 function readCursors(dir: string): Cursors {
   try {
     const raw = fs.readFileSync(path.join(dir, CURSOR_FILE), "utf8").trim();
-    if (!raw) return { baseline: 0, byWorkspace: {} };
-    if (/^\d+$/.test(raw)) return { baseline: Number.parseInt(raw, 10), byWorkspace: {} };
+    if (!raw) return { baseline: 0, byWorkspace: {}, lastSeen: {} };
+    if (/^\d+$/.test(raw)) return { baseline: Number.parseInt(raw, 10), byWorkspace: {}, lastSeen: {} };
     const j = JSON.parse(raw) as Partial<Cursors>;
-    return { baseline: Number(j.baseline) || 0, byWorkspace: j.byWorkspace ?? {} };
+    const lastSeen: Record<string, number> = {};
+    if (j.lastSeen && typeof j.lastSeen === "object") {
+      for (const [key, value] of Object.entries(j.lastSeen as Record<string, unknown>)) {
+        if (typeof value === "number" && Number.isFinite(value)) lastSeen[key] = value;
+      }
+    }
+    return { baseline: Number(j.baseline) || 0, byWorkspace: j.byWorkspace ?? {}, lastSeen };
   } catch {
-    return { baseline: 0, byWorkspace: {} };
+    return { baseline: 0, byWorkspace: {}, lastSeen: {} };
   }
 }
 
@@ -544,9 +569,33 @@ export function pruneQueue(sessionDir: string): { removed: number; kept: number 
     // The sidecar only has to remember seqs that still have a row to skip.
     const surviving = new Set(keep.map((e) => e.seq));
     writeResolvedSeqs(dir, [...resolved].filter((seq) => surviving.has(seq)));
+    retireIdleCursors(dir, cursors);
 
     return { removed: events.length - keep.length, kept: keep.length };
   }) ?? { removed: 0, kept: 0 };
+}
+
+/**
+ * Forget workspaces that stopped asking.
+ *
+ * Retirement is by last-seen time, never by whether the path is readable: a key is dropped
+ * only after CURSOR_IDLE_RETIRE_MS with no drain, so a workspace whose disk is temporarily
+ * away keeps its mark and never re-sees what it already collected. A key with no recorded
+ * last-seen is one written before the field existed; it is kept until it has been seen once,
+ * because "never seen" and "seen long ago" are different claims and only one justifies
+ * forgetting. Called from pruneQueue, which already holds the lock.
+ */
+function retireIdleCursors(dir: string, cursors: Cursors, now = Date.now()): number {
+  const retired = Object.keys(cursors.byWorkspace).filter(
+    (ws) => ws !== "" && cursors.lastSeen[ws] !== undefined && now - cursors.lastSeen[ws] > CURSOR_IDLE_RETIRE_MS,
+  );
+  if (retired.length === 0) return 0;
+  for (const ws of retired) {
+    delete cursors.byWorkspace[ws];
+    delete cursors.lastSeen[ws];
+  }
+  fs.writeFileSync(path.join(dir, CURSOR_FILE), JSON.stringify(cursors), { mode: 0o600 });
+  return retired.length;
 }
 
 /**
@@ -562,6 +611,7 @@ export function drainTo(sessionDir: string, seq: number, workspace?: string): vo
   const current = Math.max(cursors.baseline, cursors.byWorkspace[key] ?? 0);
   if (seq <= current) return;
   cursors.byWorkspace[key] = seq;
+  cursors.lastSeen[key] = Date.now();
   fs.writeFileSync(path.join(dir, CURSOR_FILE), JSON.stringify(cursors), { mode: 0o600 });
 }
 

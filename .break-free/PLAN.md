@@ -1,6 +1,6 @@
 # Plan
 
-_Generated 2026-09-20T14:27:20.232Z — 1 open, 30 done. Edit tasks in `tasks/` (or via task_update), not here._
+_Generated 2026-09-23T11:12:28.568Z — 5 open, 31 done. Edit tasks in `tasks/` (or via task_update), not here._
 
 ## In progress
 _none_
@@ -11,7 +11,12 @@ _none_
 | [[tasks/T-030\|T-030]] | Build the A/B harness that issue #22 needs. The issue says criteria 2, 3, 8 and 11 are unmeasured be | review | deepseek/deepseek-flash |  | 2026-09-19 17:20 |
 
 ## Blocked
-_none_
+| id | title | status | owner | depends on | updated |
+|---|---|---|---|---|---|
+| [[tasks/T-032\|T-032]] | Fix GitHub issue #91 in this repo: the fleet cursor file grows forever. | blocked | strong |  | 2026-09-23 11:06 |
+| [[tasks/T-033\|T-033]] | Fix GitHub issues #80 and #81 in this repo, both in model-gateway/src/client.ts. They are the same c | blocked | strong |  | 2026-09-23 11:06 |
+| [[tasks/T-035\|T-035]] | Fix GitHub issue #91 in model-gateway/src/fleet.ts. A previous attempt produced NO file writes at al | blocked | deepseek/deepseek-v4-pro |  | 2026-09-23 11:12 |
+| [[tasks/T-036\|T-036]] | Fix GitHub issues #80 and #81 in model-gateway/src/client.ts. A previous attempt produced NO file wr | blocked | deepseek/deepseek-v4-pro |  | 2026-09-23 11:12 |
 
 ## Todo
 _none_
@@ -19,7 +24,6 @@ _none_
 ## Done
 | id | title | status | owner | depends on | updated |
 |---|---|---|---|---|---|
-| [[tasks/T-001\|T-001]] | In model-gateway/src/config.ts add named project modes that derive the GitHub policy. | done | deepseek/deepseek-v4-pro |  | 2026-09-18 16:00 |
 | [[tasks/T-002\|T-002]] | Make harness sub-agent sessions visible, so a user can watch or type into one. | done | deepseek/deepseek-v4-pro | T-001 | 2026-09-18 16:00 |
 | [[tasks/T-003\|T-003]] | Add a named read-only task shape, so the safest form of delegation has an obvious name. | done | deepseek/deepseek-v4-pro | T-002 | 2026-09-18 16:00 |
 | [[tasks/T-004\|T-004]] | Add event-driven fleet supervision so the lead stops paying tokens to poll. | done | deepseek/deepseek-v4-pro | T-003 | 2026-09-18 16:00 |
@@ -49,8 +53,13 @@ _none_
 | [[tasks/T-028\|T-028]] | Design how break-free should VENDOR and UPDATE firstmate. Analysis only; change no files. | done | deepseek/deepseek-flash |  | 2026-09-19 16:24 |
 | [[tasks/T-029\|T-029]] | Design the answer to the ACTUAL PAIN: five worktrees in flight, finishing at different times, and me | done | deepseek/deepseek-flash |  | 2026-09-19 16:24 |
 | [[tasks/T-031\|T-031]] | Write the integration design for issue #31: break-free wrapping firstmate. Output ONE new file, docs | done | deepseek/deepseek-flash |  | 2026-09-19 17:16 |
+| [[tasks/T-034\|T-034]] | Work on the measurement half of GitHub issue #47 in this repo, confined to model-gateway/src/context | done | fast |  | 2026-09-23 11:06 |
 
 ```mermaid
 graph LR
   T_030["T-030 Build the A/B harness that issue #22 nee"]
+  T_032["T-032 Fix GitHub issue #91 in this repo: the f"]
+  T_033["T-033 Fix GitHub issues #80 and #81 in this re"]
+  T_035["T-035 Fix GitHub issue #91 in model-gateway/sr"]
+  T_036["T-036 Fix GitHub issues #80 and #81 in model-g"]
 ```
