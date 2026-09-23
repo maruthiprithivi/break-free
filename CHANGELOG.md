@@ -4,6 +4,25 @@
      branches never edit the same block here. scripts/changelog.sh release <version>
      folds them in. -->
 
+## 4.5.3 — 2026-09-23
+
+- **The standing context cost is measurable.** `costBreakdown()` reports what a session pays
+  before a word is typed, per surface, as data — so a regression shows up instead of being
+  discovered months later. It reuses the same estimator and the same notion of always-on that
+  the existing report uses, because a second definition would drift.
+- **A provider that starts answering and then goes quiet is caught in seconds, not minutes.**
+  The header deadline only ever caught a host that never spoke; one that sent headers and half
+  a token and then stopped was left to the full request timeout, three minutes later, having
+  produced nothing usable. The gap between body chunks now has its own deadline, reported as
+  `body_stall` so the circuit breaker can weigh it apart from a timeout. It resets on every
+  chunk, so a model that generates slowly but keeps emitting is never touched, and
+  `providers.<name>.bodyStallMs` tunes it for a host that pauses mid-answer.
+- **The fleet cursor file stops growing forever.** It kept one entry per workspace that ever
+  drained — 228 of them on a long-lived machine, parsed on every append and every read. Entries
+  are now retired after a month of silence. Retirement is by last-seen time and never by
+  checking whether the path is readable: an unmounted volume or a detached container is not a
+  deleted workspace, and forgetting a live one would make it re-see everything it had collected.
+
 ## 4.5.2 — 2026-09-23
 
 - **Finished jobs are announced once, not once per project.** The fleet snapshot held only the
