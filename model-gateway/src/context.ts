@@ -30,9 +30,32 @@ export interface ContextReport {
   lines: ContextLine[];
 }
 
+export interface SurfaceCost {
+  surface: string;
+  tokens: number;
+  /** Fraction of the always-on total, 0..1 — a share, not a percentage, so the renderer decides. */
+  share: number;
+}
+
+export interface CostBreakdown {
+  /** Exactly what ContextReport.alwaysOnTokens sums, so the two cannot report different totals. */
+  totalTokens: number;
+  /** Most expensive first — the head of this list is the surface report() already calls `largest`. */
+  surfaces: SurfaceCost[];
+}
+
 /** Conservative, portable, stable. Never an underestimate in practice for English + code. */
 export function estimateTokens(text: string): number {
   return Math.ceil(Buffer.byteLength(text, "utf8") / 3);
+}
+
+/**
+ * The surfaces a session pays for whether or not it uses them. One definition, used here and by
+ * report(), because a second one would drift — and the smaller of two answers to "unavoidable" is
+ * the one that gets quoted.
+ */
+function alwaysOn(lines: ContextLine[]): ContextLine[] {
+  return lines.filter((l) => l.always);
 }
 
 export function line(surface: string, text: string, always: boolean, detail?: string): ContextLine {
@@ -40,7 +63,7 @@ export function line(surface: string, text: string, always: boolean, detail?: st
 }
 
 export function report(lines: ContextLine[], budgetTokens: number): ContextReport {
-  const always = lines.filter((l) => l.always);
+  const always = alwaysOn(lines);
   const alwaysOnTokens = always.reduce((n, l) => n + l.tokens, 0);
   return {
     budgetTokens,
@@ -51,6 +74,36 @@ export function report(lines: ContextLine[], budgetTokens: number): ContextRepor
     overBudget: alwaysOnTokens > budgetTokens,
     largest: always.slice().sort((a, b) => b.tokens - a.tokens)[0],
     lines: lines.slice().sort((a, b) => b.tokens - a.tokens),
+  };
+}
+
+/**
+ * Where the standing cost actually goes, as data.
+ *
+ * report() answers "are we over budget"; deciding what to cut needs the split and the order, so it
+ * is a separate call rather than a second rendering. Nothing here re-invents a number: the tokens
+ * are the ones estimateTokens put on the lines, and the always-on set is the same filter report()
+ * holds to the budget — a breakdown that estimated differently would argue with the report instead
+ * of with the code.
+ */
+export function costBreakdown(lines: ContextLine[]): CostBreakdown {
+  const standing = alwaysOn(lines);
+  const totalTokens = standing.reduce((n, l) => n + l.tokens, 0);
+
+  // By surface, not by line. Two always-on lines can carry the same surface name — standing
+  // rules read from two files are still "standing rules" to whoever reads the report — and
+  // listing that name twice with a partial share each would understate whichever entry the
+  // reader looked at. Aggregating is what makes the name in the report mean what it says.
+  const bySurface = new Map<string, number>();
+  for (const l of standing) bySurface.set(l.surface, (bySurface.get(l.surface) ?? 0) + l.tokens);
+
+  return {
+    totalTokens,
+    // An empty (or free) breakdown has no denominator: a share is 0, never NaN, because a caller
+    // summing shares to sanity-check the report should not inherit an arithmetic error.
+    surfaces: [...bySurface]
+      .map(([surface, tokens]) => ({ surface, tokens, share: totalTokens === 0 ? 0 : tokens / totalTokens }))
+      .sort((a, b) => b.tokens - a.tokens),
   };
 }
 
