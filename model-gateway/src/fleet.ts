@@ -242,19 +242,32 @@ function pendingEventsInDir(dir: string, workspace?: string): FleetEvent[] {
  * see: several gateways share this directory, the snapshot is read-then-written, and a lost
  * race makes a finished job look new again to whichever process wrote last.
  */
+/**
+ * The seq at or below which an event is invisible to everyone who could receive it.
+ *
+ * A STAMPED event is only ever shown to its own workspace, so that workspace's cursor retires
+ * it — and a workspace that has collected one must be told again when the condition recurs.
+ * An UNSTAMPED event is shown to every workspace, including one that has never drained and so
+ * inherits the baseline; only the baseline can retire it. `""` is not "everybody", it is just
+ * the key belonging to callers that name no workspace.
+ *
+ * This rule lived in two places and the copies disagreed: the deduplicator used
+ * `byWorkspace[""]` for unstamped events, which on a machine with a busy no-workspace cursor
+ * sat far above them, so every unstamped event looked already-collected and duplicates were
+ * waved through. Two identical `provider.circuit_open deepseek` rows blocked a real turn.
+ */
+function visibilityFloor(cursors: Cursors, workspace?: string): number {
+  return workspace ? Math.max(cursors.baseline, cursors.byWorkspace[workspace] ?? 0) : cursors.baseline;
+}
+
 function pendingMatcher(dir: string): (existing: FleetEvent[], event: Omit<FleetEvent, "seq">, workspace?: string) => boolean {
   const resolved = new Set(readResolvedSeqs(dir));
-  // Against THIS workspace's cursor, not the shared baseline. A workspace that has already
-  // collected an event has nothing outstanding, so a session going idle again — or a second
-  // run of the same plan — is news to it and must be raised. Deduplicating against the
-  // baseline instead would silence every recurrence for the rest of the queue's life.
   const cursors = readCursors(dir);
-  const cursorFor = (ws?: string) => Math.max(cursors.baseline, cursors.byWorkspace[ws ?? ""] ?? 0);
   return (existing, event, workspace) => {
     const ws = event.workspace ?? workspace;
-    const cursor = cursorFor(ws);
+    const floor = visibilityFloor(cursors, ws);
     return existing.some(
-      (e) => e.seq > cursor && !resolved.has(e.seq) && e.kind === event.kind && e.id === event.id && (e.workspace ?? undefined) === (ws ?? undefined),
+      (e) => e.seq > floor && !resolved.has(e.seq) && e.kind === event.kind && e.id === event.id && (e.workspace ?? undefined) === (ws ?? undefined),
     );
   };
 }
@@ -510,8 +523,7 @@ export function pruneQueue(sessionDir: string): { removed: number; kept: number 
 
     const cursors = readCursors(dir);
     const resolved = new Set(readResolvedSeqs(dir));
-    const visible = (e: FleetEvent) =>
-      !resolved.has(e.seq) && e.seq > (e.workspace ? Math.max(cursors.baseline, cursors.byWorkspace[e.workspace] ?? 0) : cursors.baseline);
+    const visible = (e: FleetEvent) => !resolved.has(e.seq) && e.seq > visibilityFloor(cursors, e.workspace);
 
     // The highest seq always stays, whether or not anyone can still see it: the file is also
     // the allocator's memory. Prune it away and the next append restarts below the cursors,

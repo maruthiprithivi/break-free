@@ -118,3 +118,4 @@ test("the queue stops growing without bound", () => {
   appendEvents(sd, [ev("job.done", "after")], "/repo/one");
   assert.deepEqual(pendingEvents(sd, "/repo/one").map((e) => e.id), ["after"]);
 });
+
