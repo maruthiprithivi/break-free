@@ -165,3 +165,38 @@ test("the stall deadline is off when it is zero, and the total budget still appl
     assert.equal(err.reason, "timeout", "with no stall deadline a wedged body is an ordinary timeout again");
   } finally { srv.close(); }
 });
+
+// --- why the header deadline is off by default ----------------------------------------------
+// Every request goes out with stream:false, and a non-streaming server sends its headers only
+// when the whole answer is ready (ollama measured ttfb=19.50s total=19.50s). A 20s default
+// therefore measured GENERATION time, not liveness: healthy answers past 20s were killed as
+// no_response, retried identically, and struck the breaker for every gateway on the machine.
+
+test("the header deadline is off unless a provider opts in, because requests do not stream", async () => {
+  const { loadConfig } = await import("../dist/config.js");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "fb-default-"));
+  const cfg = loadConfig({ workspaceRoot: tmp, configPath: path.join(tmp, "none.json") }).config;
+  assert.equal(cfg.defaults.firstByteMs, 0, "restoring a non-zero default reintroduces machine-wide circuit trips on slow answers");
+  assert.ok(cfg.defaults.timeoutMs > 0, "a host that never answers is still caught, by the total budget");
+});
+
+test("a healthy answer that takes longer than the old 20s deadline is not killed by default", async () => {
+  // Headers withheld until the body is ready - exactly what a non-streaming server does.
+  const s = http.createServer((_req, res) => {
+    setTimeout(() => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: "c", choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "worth the wait" } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+    }, 1_200);
+  });
+  s.on("connection", (c) => sockets.add(c));
+  const port = await listen(s);
+  try {
+    // firstByteMs omitted, as the router now passes 0 when nothing is configured. Scaled down:
+    // 1.2s of "generation" stands in for the 20s+ answers the old default killed.
+    const r = await chatCompletion(provider(port), req, { timeoutMs: 60_000, firstByteMs: 0 });
+    assert.equal(r.message.content, "worth the wait");
+  } finally { s.close(); }
+});

@@ -76,12 +76,23 @@ const ConfigSchema = z.object({
       maxTokens: z.number().int().positive().default(8192),
       timeoutMs: z.number().int().positive().default(180_000),
       /**
-       * Default wait for response headers. Generous — fifty times the 366ms measured against a
-       * real provider — so it only fires for a host that has genuinely stopped answering, not
-       * for a model taking its time. A provider that buffers headers until its body is ready
-       * can raise or disable it with providers.<name>.firstByteMs.
+       * Default wait for response headers: OFF.
+       *
+       * It was 20s, justified as "fifty times the 366ms measured against a real provider, so it
+       * only fires for a host that has stopped answering, not a model taking its time". That
+       * premise does not hold for how this gateway calls models. Every request is sent with
+       * stream:false, and a non-streaming server sends its headers when the WHOLE answer is
+       * ready - ollama was measured at ttfb=19.50s total=19.50s. So the deadline measured
+       * generation time, not liveness: healthy answers longer than 20s were killed as
+       * no_response, retried identically, and counted as breaker strikes that opened the
+       * circuit for every gateway on the machine. The deepseek circuit trips in the live wake
+       * queue ("sent no response headers within 20000ms") were exactly that.
+       *
+       * With it off, a host that accepts the connection and never answers is still caught, by
+       * timeoutMs. A provider known to send headers early can still opt in per provider with
+       * providers.<name>.firstByteMs.
        */
-      firstByteMs: z.number().int().min(0).default(20_000),
+      firstByteMs: z.number().int().min(0).default(0),
       /**
        * Longest gap allowed BETWEEN body chunks once headers have arrived.
        *
