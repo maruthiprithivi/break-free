@@ -179,3 +179,44 @@ test("an unreadable hook payload is not a way to hang, and not a way to silence 
   hook(ws, cfg, undefined);
   assert.ok(Date.now() - started < 10_000, "the payload read is deadlined, not open-ended");
 });
+
+// --- unstamped events belong to everybody ------------------------------------------------
+// The deduplicator judged an unstamped event against `byWorkspace[""]`, treating that key as
+// "everybody". It is not: it is the cursor of callers that name no workspace, and on a busy
+// machine it sits far above older events — so every unstamped event looked already-collected
+// and duplicates were waved straight through. Two identical provider.circuit_open rows
+// blocked a real turn.
+
+test("an unstamped event is deduplicated against the baseline, not the no-workspace cursor", () => {
+  const { ws, sessionDir } = stuckSession();
+  const circuit = () => ({ ts: new Date().toISOString(), kind: "provider.circuit_open", id: "deepseek", reason: "2 consecutive timeouts" });
+
+  // Something else on the machine drains without naming a workspace, pushing byWorkspace[""]
+  // well past the events we are about to raise. This is the ordinary state of a busy install.
+  appendEvents(sessionDir, [{ ts: new Date().toISOString(), kind: "job.done", id: "filler", reason: "done" }]);
+  drainTo(sessionDir, 500);
+
+  assert.equal(appendEvents(sessionDir, [circuit()], ws).length, 1, "first one is news");
+  assert.equal(appendEvents(sessionDir, [circuit()], ws).length, 0, "the second must not get through");
+  assert.equal(appendEvents(sessionDir, [circuit()], ws).length, 0);
+
+  // And the workspace that has to act on it sees exactly one.
+  const pending = pendingEvents(sessionDir, ws).filter((e) => e.id === "deepseek");
+  assert.equal(pending.length, 1, `one circuit is one notice, got ${pending.length}`);
+});
+
+test("an unstamped event still recurs once the baseline has passed it", () => {
+  const { ws, sessionDir } = stuckSession();
+  const circuit = () => ({ ts: new Date().toISOString(), kind: "provider.circuit_open", id: "deepseek", reason: "open" });
+  const [first] = appendEvents(sessionDir, [circuit()], ws);
+  assert.equal(appendEvents(sessionDir, [circuit()], ws).length, 0);
+
+  // Suppressing forever would be the opposite bug. The baseline is what everybody inherits,
+  // so raising it past the event is what makes the condition news again for all of them.
+  drainTo(sessionDir, first.seq);
+  const cursors = JSON.parse(fs.readFileSync(path.join(sessionDir, "fleet", "cursor"), "utf8"));
+  cursors.baseline = first.seq;
+  fs.writeFileSync(path.join(sessionDir, "fleet", "cursor"), JSON.stringify(cursors));
+
+  assert.equal(appendEvents(sessionDir, [circuit()], ws).length, 1, "a circuit that opens again is news again");
+});

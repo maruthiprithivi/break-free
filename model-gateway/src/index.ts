@@ -261,7 +261,9 @@ function execFileSyncQuiet(cwd: string, args: string[]): string | undefined {
 
 async function fleetCheck(): Promise<{ running: { jobs: number; harness: number }; pending: FleetEvent[]; blocking: boolean }> {
   const sessionDir = ctx.config.sessionDir!;
-  const prev = readSnapshot(sessionDir);
+  // Per workspace: the snapshot holds only this workspace's jobs, so sharing one file made
+  // every gateway's `prev` somebody else's job list, and its own finished jobs look new again.
+  const prev = readSnapshot(sessionDir, ctx.workspace.root);
   const next = await buildFleetSnapshot(prev);
   // The gateway owns the jobs it started, so those carry its workspace. A harness session owns
   // itself and carries its own cwd from classify(); defaulting it here would re-create the bug
@@ -270,7 +272,7 @@ async function fleetCheck(): Promise<{ running: { jobs: number; harness: number 
     e.kind.startsWith("job.") ? { ...e, workspace: ctx.workspace.root } : e,
   );
   appendEvents(sessionDir, events);
-  writeSnapshot(sessionDir, next);
+  writeSnapshot(sessionDir, next, ctx.workspace.root);
   await reconcileCi(sessionDir);
   const pending = pendingEvents(sessionDir, ctx.workspace.root);
   const running = {

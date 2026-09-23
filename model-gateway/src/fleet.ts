@@ -8,6 +8,7 @@
  * feeds it snapshots (job states + harness digests) and it turns the diff into
  * a durable event queue.
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -65,18 +66,33 @@ export function fleetDir(sessionDir: string): string {
   return dir;
 }
 
-export function readSnapshot(sessionDir: string): FleetSnapshot | undefined {
+/**
+ * Where a workspace's own last view of the fleet lives.
+ *
+ * One shared snapshot.json was the bug. Every gateway writes only ITS OWN workspace's jobs
+ * into the snapshot (`list({ mine: true })`), but they all wrote to the same file, so each
+ * one's `prev` was whichever other project happened to check last. Its own finished jobs were
+ * missing from that prev, looked new again, and were re-announced — 93 duplicated notices in
+ * one live queue, some jobs announced four times, hours apart, in batches.
+ *
+ * A snapshot is a private memory of "what I saw last time". It cannot be shared by definition.
+ */
+function snapshotFile(dir: string, workspace?: string): string {
+  if (!workspace) return path.join(dir, SNAPSHOT_FILE);
+  return path.join(dir, `snapshot-${createHash("sha1").update(workspace).digest("hex").slice(0, 12)}.json`);
+}
+
+export function readSnapshot(sessionDir: string, workspace?: string): FleetSnapshot | undefined {
   try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(fleetDir(sessionDir), SNAPSHOT_FILE), "utf8")) as FleetSnapshot;
-    if (!parsed || typeof parsed !== "object" || typeof parsed.ts !== "string") return undefined;
-    return parsed;
+    const parsed = JSON.parse(fs.readFileSync(snapshotFile(fleetDir(sessionDir), workspace), "utf8")) as FleetSnapshot;
+    return parsed && typeof parsed === "object" ? parsed : undefined;
   } catch {
     return undefined;
   }
 }
 
-export function writeSnapshot(sessionDir: string, snap: FleetSnapshot): void {
-  fs.writeFileSync(path.join(fleetDir(sessionDir), SNAPSHOT_FILE), JSON.stringify(snap), { mode: 0o600 });
+export function writeSnapshot(sessionDir: string, snap: FleetSnapshot, workspace?: string): void {
+  fs.writeFileSync(snapshotFile(fleetDir(sessionDir), workspace), JSON.stringify(snap), { mode: 0o600 });
 }
 
 function parseTs(s: string): number | undefined {
@@ -98,13 +114,17 @@ function elapsedMs(a: string, b: string): number | undefined {
 export function classify(prev: FleetSnapshot | undefined, next: FleetSnapshot, idleMs: number): Omit<FleetEvent, "seq">[] {
   const events: Omit<FleetEvent, "seq">[] = [];
 
-  // Job transitions. On the very first snapshot there is no previous state to
-  // compare against, but terminal jobs still matter to the watcher.
-  for (const [id, state] of Object.entries(next.jobs ?? {})) {
-    if (state !== "done" && state !== "failed") continue;
-    const prevState = prev?.jobs?.[id];
-    if (prev === undefined || prevState !== state) {
-      events.push({ ts: next.ts, kind: state === "done" ? "job.done" : "job.failed", id, reason: state });
+  // Job transitions. A gateway that has never looked before cannot tell what is new from what
+  // has always been there, so its first snapshot is a baseline and announces nothing: every
+  // job the workspace has ever finished is not news, it is a flood that blocks the next turn.
+  // Once there is a previous view, a job that was not in it and is already terminal is
+  // genuinely new — it started and finished between two checks — and is announced.
+  if (prev !== undefined) {
+    for (const [id, state] of Object.entries(next.jobs ?? {})) {
+      if (state !== "done" && state !== "failed") continue;
+      if (prev.jobs?.[id] !== state) {
+        events.push({ ts: next.ts, kind: state === "done" ? "job.done" : "job.failed", id, reason: state });
+      }
     }
   }
 
@@ -222,19 +242,32 @@ function pendingEventsInDir(dir: string, workspace?: string): FleetEvent[] {
  * see: several gateways share this directory, the snapshot is read-then-written, and a lost
  * race makes a finished job look new again to whichever process wrote last.
  */
+/**
+ * The seq at or below which an event is invisible to everyone who could receive it.
+ *
+ * A STAMPED event is only ever shown to its own workspace, so that workspace's cursor retires
+ * it — and a workspace that has collected one must be told again when the condition recurs.
+ * An UNSTAMPED event is shown to every workspace, including one that has never drained and so
+ * inherits the baseline; only the baseline can retire it. `""` is not "everybody", it is just
+ * the key belonging to callers that name no workspace.
+ *
+ * This rule lived in two places and the copies disagreed: the deduplicator used
+ * `byWorkspace[""]` for unstamped events, which on a machine with a busy no-workspace cursor
+ * sat far above them, so every unstamped event looked already-collected and duplicates were
+ * waved through. Two identical `provider.circuit_open deepseek` rows blocked a real turn.
+ */
+function visibilityFloor(cursors: Cursors, workspace?: string): number {
+  return workspace ? Math.max(cursors.baseline, cursors.byWorkspace[workspace] ?? 0) : cursors.baseline;
+}
+
 function pendingMatcher(dir: string): (existing: FleetEvent[], event: Omit<FleetEvent, "seq">, workspace?: string) => boolean {
   const resolved = new Set(readResolvedSeqs(dir));
-  // Against THIS workspace's cursor, not the shared baseline. A workspace that has already
-  // collected an event has nothing outstanding, so a session going idle again — or a second
-  // run of the same plan — is news to it and must be raised. Deduplicating against the
-  // baseline instead would silence every recurrence for the rest of the queue's life.
   const cursors = readCursors(dir);
-  const cursorFor = (ws?: string) => Math.max(cursors.baseline, cursors.byWorkspace[ws ?? ""] ?? 0);
   return (existing, event, workspace) => {
     const ws = event.workspace ?? workspace;
-    const cursor = cursorFor(ws);
+    const floor = visibilityFloor(cursors, ws);
     return existing.some(
-      (e) => e.seq > cursor && !resolved.has(e.seq) && e.kind === event.kind && e.id === event.id && (e.workspace ?? undefined) === (ws ?? undefined),
+      (e) => e.seq > floor && !resolved.has(e.seq) && e.kind === event.kind && e.id === event.id && (e.workspace ?? undefined) === (ws ?? undefined),
     );
   };
 }
@@ -490,8 +523,7 @@ export function pruneQueue(sessionDir: string): { removed: number; kept: number 
 
     const cursors = readCursors(dir);
     const resolved = new Set(readResolvedSeqs(dir));
-    const visible = (e: FleetEvent) =>
-      !resolved.has(e.seq) && e.seq > (e.workspace ? Math.max(cursors.baseline, cursors.byWorkspace[e.workspace] ?? 0) : cursors.baseline);
+    const visible = (e: FleetEvent) => !resolved.has(e.seq) && e.seq > visibilityFloor(cursors, e.workspace);
 
     // The highest seq always stays, whether or not anyone can still see it: the file is also
     // the allocator's memory. Prune it away and the next append restarts below the cursors,
