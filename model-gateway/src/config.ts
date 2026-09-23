@@ -39,6 +39,7 @@ const ProviderConfigSchema = z.object({
    * wedged host used to cost the full timeout on every call. 0 disables it.
    */
   firstByteMs: z.number().int().min(0).optional(),
+  bodyStallMs: z.number().int().min(0).optional(),
   /** Context window in tokens. A handover brief handed to this provider is capped to it. */
   contextTokens: z.number().int().positive().optional(),
   label: z.string().optional(),
@@ -54,7 +55,7 @@ const AliasSchema = z.union([
   }),
 ]);
 
-export const FALLBACK_REASONS = ["rate_limit", "server_error", "timeout", "network", "auth", "not_found", "bad_request", "no_key", "circuit_open", "no_response"] as const;
+export const FALLBACK_REASONS = ["rate_limit", "server_error", "timeout", "network", "auth", "not_found", "bad_request", "no_key", "circuit_open", "no_response", "body_stall"] as const;
 export type FallbackReason = (typeof FALLBACK_REASONS)[number];
 
 const ConfigSchema = z.object({
@@ -81,6 +82,16 @@ const ConfigSchema = z.object({
        * can raise or disable it with providers.<name>.firstByteMs.
        */
       firstByteMs: z.number().int().min(0).default(20_000),
+      /**
+       * Longest gap allowed BETWEEN body chunks once headers have arrived.
+       *
+       * firstByteMs catches a host that never speaks. It cannot catch one that speaks and then
+       * stops: a provider that sends headers and half a token and then goes silent was only
+       * ever caught by timeoutMs, three minutes later, having produced nothing usable. The
+       * deadline is per gap and resets on every chunk, so a slow generator that keeps emitting
+       * is never touched however long the whole answer takes.
+       */
+      bodyStallMs: z.number().int().min(0).default(45_000),
       maxToolIterations: z.number().int().positive().default(25),
       maxSessionMessages: z.number().int().positive().default(40),
       maxHistoryChars: z.number().int().positive().default(200_000),
@@ -793,6 +804,7 @@ export interface ResolvedProvider {
   timeoutMs?: number;
   /** Header deadline for this provider, separate from the total budget. */
   firstByteMs?: number;
+  bodyStallMs?: number;
   docs: string;
   notes?: string;
   /** Why it's unusable, if it is */
@@ -823,6 +835,7 @@ export function resolveProvider(config: GatewayConfig, name: string): ResolvedPr
     extraBody: catalog?.extraBody || pc?.extraBody ? { ...(catalog?.extraBody ?? {}), ...(pc?.extraBody ?? {}) } : undefined,
     timeoutMs: pc?.timeoutMs,
     firstByteMs: pc?.firstByteMs,
+    bodyStallMs: pc?.bodyStallMs,
     docs: catalog?.docs ?? "",
     notes: catalog?.notes,
   };

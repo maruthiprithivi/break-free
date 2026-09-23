@@ -92,3 +92,76 @@ test("a per-provider setting overrides the default", async () => {
   const r = await chatCompletion(provider(slow.port, { firstByteMs: 50 }), req, { timeoutMs: 60_000, firstByteMs: 50 });
   assert.equal(r.message.content, "took my time", "headers were immediate, so even 50ms is survivable here");
 });
+
+// --- silence after it started talking ----------------------------------------------------
+// firstByteMs catches a host that never speaks. It cannot catch one that speaks and then
+// stops: headers, half a token, then nothing. That was only ever caught by the total timeout,
+// three minutes later, having produced nothing usable. What must NOT be caught is a model that
+// is merely slow, so the deadline measures the gap between chunks and resets on each one.
+
+/** Headers, one chunk, then silence forever. A host that stopped mid-answer. */
+function stallMidBodyServer() {
+  const s = http.createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.flushHeaders();
+    res.write('{"id":"c","choices":[{"index":0,');
+    // and never another byte
+  });
+  s.on("connection", (c) => sockets.add(c));
+  return s;
+}
+
+/** A whole answer, dribbled out in pieces with gaps under the deadline. Slow, not stalled. */
+function dribbleServer() {
+  const s = http.createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.flushHeaders();
+    const payload = JSON.stringify({ id: "c", choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "one piece at a time" } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+    const pieces = payload.match(/[\s\S]{1,20}/g);
+    let i = 0;
+    const tick = () => {
+      if (i < pieces.length) { res.write(pieces[i++]); setTimeout(tick, 120); } else res.end();
+    };
+    tick();
+  });
+  s.on("connection", (c) => sockets.add(c));
+  return s;
+}
+
+test("a host that stops mid-body is caught by its own deadline, not the total timeout", async () => {
+  const srv = stallMidBodyServer();
+  const port = await listen(srv);
+  try {
+    const started = Date.now();
+    const err = await chatCompletion(provider(port), req, { timeoutMs: 60_000, firstByteMs: 2_000, bodyStallMs: 500 }).then(() => undefined, (e) => e);
+    const ms = Date.now() - started;
+
+    assert.ok(err, "it has to fail");
+    // Named apart from both: headers DID arrive, so it is not no_response, and it must not wait
+    // out the total budget, so it is not timeout. The breaker weighs the three differently.
+    assert.equal(err.reason, "body_stall", `expected body_stall, got ${err.reason}: ${err.message}`);
+    assert.match(err.message, /started answering, then sent nothing for 500ms/);
+    assert.match(err.message, /bodyStallMs/, "the message names the setting, so anyone bitten can fix it in one step");
+    assert.ok(ms < 10_000, `should give up on the stall deadline, not the 60s budget: ${ms}ms`);
+  } finally { srv.close(); }
+});
+
+test("a body that keeps arriving in pieces is never killed, however long it takes", async () => {
+  const srv = dribbleServer();
+  const port = await listen(srv);
+  try {
+    // Gaps of ~120ms under a 500ms deadline, over a total far longer than the deadline itself.
+    // Only silence is punished, not slowness — otherwise every long answer dies.
+    const r = await chatCompletion(provider(port), req, { timeoutMs: 60_000, firstByteMs: 2_000, bodyStallMs: 500 });
+    assert.equal(r.message.content, "one piece at a time");
+  } finally { srv.close(); }
+});
+
+test("the stall deadline is off when it is zero, and the total budget still applies", async () => {
+  const srv = stallMidBodyServer();
+  const port = await listen(srv);
+  try {
+    const err = await chatCompletion(provider(port), req, { timeoutMs: 700, firstByteMs: 0, bodyStallMs: 0 }).then(() => undefined, (e) => e);
+    assert.equal(err.reason, "timeout", "with no stall deadline a wedged body is an ordinary timeout again");
+  } finally { srv.close(); }
+});

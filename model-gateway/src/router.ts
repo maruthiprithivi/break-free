@@ -212,7 +212,7 @@ export async function routeChat(
       const started = Date.now();
       try {
         const req = buildRequest(cand);
-        const response = await chatCompletion(cand.provider, req, { timeoutMs: cand.provider.timeoutMs ?? opts.timeoutMs ?? config.defaults.timeoutMs, firstByteMs: cand.provider.firstByteMs ?? config.defaults.firstByteMs, signal: opts.signal });
+        const response = await chatCompletion(cand.provider, req, { timeoutMs: cand.provider.timeoutMs ?? opts.timeoutMs ?? config.defaults.timeoutMs, firstByteMs: cand.provider.firstByteMs ?? config.defaults.firstByteMs, bodyStallMs: cand.provider.bodyStallMs ?? config.defaults.bodyStallMs, signal: opts.signal });
         attempts.push({ spec: cand.spec, ok: true, ms: Date.now() - started });
         breaker.clear(cand.provider.name);
         const cost = costUsd(config, cand.provider.name, cand.model, response.usage);

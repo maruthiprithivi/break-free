@@ -74,7 +74,7 @@ export function classifyStatus(status: number, body: string): FallbackReason {
 export async function chatCompletion(
   provider: ResolvedProvider,
   req: ChatRequest,
-  opts: { timeoutMs: number; firstByteMs?: number; signal?: AbortSignal; extraBody?: Record<string, unknown> } ,
+  opts: { timeoutMs: number; firstByteMs?: number; bodyStallMs?: number; signal?: AbortSignal; extraBody?: Record<string, unknown> } ,
 ): Promise<ChatResponse> {
   if (provider.unusableReason) {
     throw new ProviderError(provider.requiresKey && !provider.apiKey ? "no_key" : "bad_request", `${provider.name}: ${provider.unusableReason}`, undefined, provider.name, req.model);
@@ -121,18 +121,24 @@ export async function chatCompletion(
     res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: ctrl.signal });
     headersSeen = true;
     if (fbTimer) clearTimeout(fbTimer);
-    text = await res.text(); // timer still armed: covers a hanging body, not just headers
+    // The total timer stays armed throughout; this adds the per-gap one. res.text() would read
+    // to completion with no way to notice a host that stops halfway, so the body is drained a
+    // chunk at a time instead and the stall deadline is rearmed on each one.
+    text = await readBody(res, ctrl, opts.bodyStallMs ?? 0);
   } catch (e) {
     const err = e as Error & { cause?: { code?: string } };
     const why = String(ctrl.signal.reason?.message ?? ctrl.signal.reason);
     const noResponse = ctrl.signal.aborted && why.includes("no_response");
+    const bodyStall = ctrl.signal.aborted && why.includes("body_stall");
     const isTimeout = ctrl.signal.aborted && why.includes("timeout");
     // Named separately so the difference survives into the report and the circuit breaker: a
     // host that sent nothing at all is stronger evidence than one that was merely slow.
     const message = noResponse
       ? `sent no response headers within ${firstByteMs}ms — the host accepted the connection and then said nothing. Raise providers.${provider.name}.firstByteMs if it buffers headers until the body is ready.`
-      : isTimeout ? `timed out after ${opts.timeoutMs}ms` : `${err.message}${err.cause?.code ? ` (${err.cause.code})` : ""}`;
-    throw new ProviderError(noResponse ? "no_response" : isTimeout ? "timeout" : "network", `${provider.name}/${req.model}: ${message}`, undefined, provider.name, req.model);
+      : bodyStall
+        ? `started answering, then sent nothing for ${opts.bodyStallMs}ms — the host is still connected but has stopped producing. Raise providers.${provider.name}.bodyStallMs if it pauses mid-answer.`
+        : isTimeout ? `timed out after ${opts.timeoutMs}ms` : `${err.message}${err.cause?.code ? ` (${err.cause.code})` : ""}`;
+    throw new ProviderError(noResponse ? "no_response" : bodyStall ? "body_stall" : isTimeout ? "timeout" : "network", `${provider.name}/${req.model}: ${message}`, undefined, provider.name, req.model);
   } finally {
     clearTimeout(timer);
     if (fbTimer) clearTimeout(fbTimer);
@@ -164,6 +170,42 @@ export async function chatCompletion(
     tool_calls: Array.isArray(m.tool_calls) && m.tool_calls.length ? m.tool_calls : undefined,
   };
   return { message, finishReason: choice.finish_reason ?? "stop", usage: json.usage, raw: json };
+}
+
+/**
+ * Drain a response body, watching the gap between chunks rather than the total.
+ *
+ * A host that sends headers and half a token and then goes quiet used to be caught only by the
+ * total timeout, minutes later, having produced nothing usable. The deadline here is per gap
+ * and rearmed on every chunk, so a model that generates slowly but keeps emitting is never
+ * touched however long its whole answer takes — only silence is punished, not slowness.
+ *
+ * With no body to stream (a mocked or already-buffered response) or no deadline set, this is
+ * res.text() and nothing changes.
+ */
+async function readBody(res: Response, ctrl: AbortController, stallMs: number): Promise<string> {
+  if (stallMs <= 0 || !res.body) return await res.text();
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => ctrl.abort(new Error("body_stall")), stallMs);
+  };
+  try {
+    arm();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+      arm(); // progress, whatever its size, is the thing being measured
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
 }
 
 /** GET /models — used by list_models(live) and probes. */
