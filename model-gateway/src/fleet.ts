@@ -8,6 +8,7 @@
  * feeds it snapshots (job states + harness digests) and it turns the diff into
  * a durable event queue.
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -65,18 +66,33 @@ export function fleetDir(sessionDir: string): string {
   return dir;
 }
 
-export function readSnapshot(sessionDir: string): FleetSnapshot | undefined {
+/**
+ * Where a workspace's own last view of the fleet lives.
+ *
+ * One shared snapshot.json was the bug. Every gateway writes only ITS OWN workspace's jobs
+ * into the snapshot (`list({ mine: true })`), but they all wrote to the same file, so each
+ * one's `prev` was whichever other project happened to check last. Its own finished jobs were
+ * missing from that prev, looked new again, and were re-announced — 93 duplicated notices in
+ * one live queue, some jobs announced four times, hours apart, in batches.
+ *
+ * A snapshot is a private memory of "what I saw last time". It cannot be shared by definition.
+ */
+function snapshotFile(dir: string, workspace?: string): string {
+  if (!workspace) return path.join(dir, SNAPSHOT_FILE);
+  return path.join(dir, `snapshot-${createHash("sha1").update(workspace).digest("hex").slice(0, 12)}.json`);
+}
+
+export function readSnapshot(sessionDir: string, workspace?: string): FleetSnapshot | undefined {
   try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(fleetDir(sessionDir), SNAPSHOT_FILE), "utf8")) as FleetSnapshot;
-    if (!parsed || typeof parsed !== "object" || typeof parsed.ts !== "string") return undefined;
-    return parsed;
+    const parsed = JSON.parse(fs.readFileSync(snapshotFile(fleetDir(sessionDir), workspace), "utf8")) as FleetSnapshot;
+    return parsed && typeof parsed === "object" ? parsed : undefined;
   } catch {
     return undefined;
   }
 }
 
-export function writeSnapshot(sessionDir: string, snap: FleetSnapshot): void {
-  fs.writeFileSync(path.join(fleetDir(sessionDir), SNAPSHOT_FILE), JSON.stringify(snap), { mode: 0o600 });
+export function writeSnapshot(sessionDir: string, snap: FleetSnapshot, workspace?: string): void {
+  fs.writeFileSync(snapshotFile(fleetDir(sessionDir), workspace), JSON.stringify(snap), { mode: 0o600 });
 }
 
 function parseTs(s: string): number | undefined {
@@ -98,13 +114,17 @@ function elapsedMs(a: string, b: string): number | undefined {
 export function classify(prev: FleetSnapshot | undefined, next: FleetSnapshot, idleMs: number): Omit<FleetEvent, "seq">[] {
   const events: Omit<FleetEvent, "seq">[] = [];
 
-  // Job transitions. On the very first snapshot there is no previous state to
-  // compare against, but terminal jobs still matter to the watcher.
-  for (const [id, state] of Object.entries(next.jobs ?? {})) {
-    if (state !== "done" && state !== "failed") continue;
-    const prevState = prev?.jobs?.[id];
-    if (prev === undefined || prevState !== state) {
-      events.push({ ts: next.ts, kind: state === "done" ? "job.done" : "job.failed", id, reason: state });
+  // Job transitions. A gateway that has never looked before cannot tell what is new from what
+  // has always been there, so its first snapshot is a baseline and announces nothing: every
+  // job the workspace has ever finished is not news, it is a flood that blocks the next turn.
+  // Once there is a previous view, a job that was not in it and is already terminal is
+  // genuinely new — it started and finished between two checks — and is announced.
+  if (prev !== undefined) {
+    for (const [id, state] of Object.entries(next.jobs ?? {})) {
+      if (state !== "done" && state !== "failed") continue;
+      if (prev.jobs?.[id] !== state) {
+        events.push({ ts: next.ts, kind: state === "done" ? "job.done" : "job.failed", id, reason: state });
+      }
     }
   }
 
