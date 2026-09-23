@@ -28,6 +28,27 @@ import { Report, Prompter, color, which, run, versionGte, home, expandHome, read
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 const GW = path.join(HERE, "model-gateway");
 const ENTRY = path.join(GW, "dist", "index.js");
+
+/**
+ * The node binary to write into anything that outlives this run.
+ *
+ * process.execPath is the RESOLVED path of this exact version - on Homebrew,
+ * /opt/homebrew/Cellar/node/26.7.0/bin/node. Written into the MCP registration, the Stop hook
+ * and the Codex TOML, it breaks every session and every turn end the day `brew upgrade node`
+ * and its cleanup delete that version. A stable name that currently resolves to the same binary
+ * (/opt/homebrew/bin/node, or whatever `node` is on PATH) keeps working across upgrades. When
+ * none resolves to this binary - a version manager's shim, say - the resolved path is still the
+ * only thing known to be this node, so it is kept rather than guessing.
+ */
+const NODE = (() => {
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return undefined; } };
+  const self = real(process.execPath) ?? process.execPath;
+  const onPath = which("node");
+  for (const c of [onPath, "/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]) {
+    if (c && c !== self && real(c) === self) return c;
+  }
+  return process.execPath;
+})();
 const AGENT_CFG = path.join(HERE, "agent-config");
 const CFG_DIR = path.join(home(), ".config", "model-gateway");
 const CFG_FILE = process.env.MODEL_GATEWAY_CONFIG ? expandHome(process.env.MODEL_GATEWAY_CONFIG) : path.join(CFG_DIR, "config.json");
@@ -133,7 +154,7 @@ async function build() {
     report.info("running the gateway's own test-suite (mock provider, ~5-15 s)…");
     // Explicit file list: a bare `node --test` would also execute test/mock-provider.mjs as a script and hang forever.
     const files = fs.readdirSync(path.join(GW, "test")).filter((f) => f.endsWith(".test.mjs")).map((f) => path.join("test", f));
-    const t = await run(process.execPath, ["--test", "--test-reporter=tap", "--test-timeout=60000", ...files], { cwd: GW, timeoutMs: 180_000 });
+    const t = await run(NODE, ["--test", "--test-reporter=tap", "--test-timeout=60000", ...files], { cwd: GW, timeoutMs: 180_000 });
     const m = (t.stdout + t.stderr).match(/# pass (\d+)[\s\S]*# fail (\d+)/);
     if (t.ok && m) report.pass("self-tests", `${m[1]} passed`);
     else if (t.error?.killed) { report.warn("self-tests timed out after 180 s", "", "run `cd model-gateway && npm test` manually to see where it hangs; not fatal"); report.log(t.stdout + t.stderr); }
@@ -844,11 +865,11 @@ async function installClaude() {
   // MCP registration (user scope)
   await run("claude", ["mcp", "remove", "--scope", "user", CLAUDE_SERVER], { timeoutMs: 30_000 });
   // add-json is unambiguous; `claude mcp add --env` is variadic and swallows the server name.
-  const spec = JSON.stringify({ type: "stdio", command: process.execPath, args: [ENTRY], env: { MODEL_GATEWAY_CONFIG: CFG_FILE } });
+  const spec = JSON.stringify({ type: "stdio", command: NODE, args: [ENTRY], env: { MODEL_GATEWAY_CONFIG: CFG_FILE } });
   let add = await run("claude", ["mcp", "add-json", "--scope", "user", CLAUDE_SERVER, spec], { timeoutMs: 60_000 });
   if (!add.ok) {
     report.log(`add-json failed: ${add.stderr || add.stdout}`);
-    add = await run("claude", ["mcp", "add", "--scope", "user", "--transport", "stdio", CLAUDE_SERVER, "--", process.execPath, ENTRY], { timeoutMs: 60_000 });
+    add = await run("claude", ["mcp", "add", "--scope", "user", "--transport", "stdio", CLAUDE_SERVER, "--", NODE, ENTRY], { timeoutMs: 60_000 });
   }
   if (!add.ok) { report.fail("claude mcp add failed", lastLines(add.stderr || add.stdout), `run manually: claude mcp add-json --scope user ${CLAUDE_SERVER} '${spec}'`); return; }
   const get = await run("claude", ["mcp", "get", CLAUDE_SERVER], { timeoutMs: 30_000 });
@@ -867,7 +888,7 @@ async function installClaude() {
 function codexTomlBody(envVars) {
   return [
     `[mcp_servers.${CODEX_SERVER}]`,
-    `command = ${tomlStr(process.execPath)}`,
+    `command = ${tomlStr(NODE)}`,
     `args = [${tomlStr(ENTRY)}]`,
     `startup_timeout_sec = 20`,
     `tool_timeout_sec = 900`,
@@ -919,7 +940,7 @@ async function installProject() {
     else {
       backup(mcpJsonPath);
       existing.mcpServers ??= {};
-      existing.mcpServers[CLAUDE_SERVER] = { type: "stdio", command: process.execPath, args: [ENTRY], env: { MODEL_GATEWAY_CONFIG: CFG_FILE, MODEL_GATEWAY_WORKSPACE: "${CLAUDE_PROJECT_DIR}" }, timeout: 900000 };
+      existing.mcpServers[CLAUDE_SERVER] = { type: "stdio", command: NODE, args: [ENTRY], env: { MODEL_GATEWAY_CONFIG: CFG_FILE, MODEL_GATEWAY_WORKSPACE: "${CLAUDE_PROJECT_DIR}" }, timeout: 900000 };
       delete existing.$comment;
       fs.writeFileSync(mcpJsonPath, JSON.stringify(existing, null, 2) + "\n");
       report.pass("Claude: wrote .mcp.json", "Claude Code asks once to approve project servers (claude mcp reset-project-choices to re-ask)");
@@ -947,7 +968,7 @@ async function installProject() {
   }
 
   if (fs.existsSync(path.join(pd, ".git"))) {
-    const r = await run(process.execPath, [ENTRY, "--workspace", pd, "--ledger-guard"], { timeoutMs: 30_000, env: { ...process.env, MODEL_GATEWAY_CONFIG: CFG_FILE } });
+    const r = await run(NODE, [ENTRY, "--workspace", pd, "--ledger-guard"], { timeoutMs: 30_000, env: { ...process.env, MODEL_GATEWAY_CONFIG: CFG_FILE } });
     if (r.ok) { const j = safeJson(r.stdout) ?? {}; report.pass("ledger guard installed", `pre-commit hook ${j.hook}${j.chained ? " (existing hook chained)" : ""} + .github/workflows/break-free-ledger-guard.yml — feature-branch PRs can never change .break-free/`); }
     else report.warn("ledger guard not installed", lastLines(r.stderr || r.stdout), "run ledger_guard {action:'install'} from the gateway later");
   }
@@ -1047,8 +1068,8 @@ function genericRule(kind) {
 }
 function mcpEntry(shape) {
   const env = Object.fromEntries(KEY_ENVS.filter((k) => process.env[k]).map((k) => [k, `\${${k}}`]));
-  if (shape === "opencode") return { type: "local", command: [process.execPath, ENTRY], enabled: true, ...(Object.keys(env).length ? { environment: env } : {}) };
-  return { command: process.execPath, args: [ENTRY], ...(Object.keys(env).length ? { env } : {}) };
+  if (shape === "opencode") return { type: "local", command: [NODE, ENTRY], enabled: true, ...(Object.keys(env).length ? { environment: env } : {}) };
+  return { command: NODE, args: [ENTRY], ...(Object.keys(env).length ? { env } : {}) };
 }
 function upsertJsonMcp(file, shape, remove = false) {
   const abs = expandHome(file);
@@ -1249,7 +1270,7 @@ const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 // setup.mjs owns exactly one Stop hook in the Claude Code settings file the installer
 // manages for the chosen scope. The command is the marker: `--fleet-check --hook`.
 const STOP_HOOK_MARKER = "--fleet-check --hook";
-const stopHookCommand = () => `${shq(process.execPath)} ${shq(ENTRY)} ${STOP_HOOK_MARKER}`;
+const stopHookCommand = () => `${shq(NODE)} ${shq(ENTRY)} ${STOP_HOOK_MARKER}`;
 const isStopHook = (h) => !!h && h.type === "command" && typeof h.command === "string" && h.command.includes(STOP_HOOK_MARKER);
 const hasStopHook = (groups) => Array.isArray(groups) && groups.some((g) => !!g && Array.isArray(g.hooks) && g.hooks.some(isStopHook));
 /** Remove our hook object(s) from every Stop group, preserving unrelated hooks and groups. */
@@ -1280,6 +1301,12 @@ function upsertStopHook(file, remove = false) {
   if (remove && !Object.keys(j).length) { fs.rmSync(file, { force: true }); return; }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(j, null, 2) + "\n");
+}
+/** The executable our Stop hook would run: the first single-quoted token of the command we wrote. */
+function stopHookBinary(file) {
+  const j = readJsonSafe(file);
+  const h = (Array.isArray(j?.hooks?.Stop) ? j.hooks.Stop : []).flatMap((g) => (Array.isArray(g?.hooks) ? g.hooks : [])).find(isStopHook);
+  return h?.command.match(/^'([^']+)'/)?.[1];
 }
 function stopHookInstalled(file) {
   if (!fs.existsSync(file)) return false;
@@ -1313,7 +1340,7 @@ async function ensureShim() {
   if (await shimHealthy()) return true;
   fs.mkdirSync(CFG_DIR, { recursive: true, mode: 0o700 });
   const out = fs.openSync(path.join(CFG_DIR, "serve.log"), "a");
-  const child = spawn(process.execPath, [ENTRY, "--serve", String(SERVE_PORT)], { detached: true, stdio: ["ignore", out, out], env: { ...process.env, MODEL_GATEWAY_CONFIG: CFG_FILE } });
+  const child = spawn(NODE, [ENTRY, "--serve", String(SERVE_PORT)], { detached: true, stdio: ["ignore", out, out], env: { ...process.env, MODEL_GATEWAY_CONFIG: CFG_FILE } });
   child.unref();
   fs.writeFileSync(SERVE_PID, String(child.pid));
   for (let i = 0; i < 30; i++) { await new Promise((r) => setTimeout(r, 200)); if (await shimHealthy()) return true; }
@@ -1401,8 +1428,8 @@ async function installHarnessProfiles(cfg, gw) {
     else report.warn(`${name}: no Anthropic-compatible endpoint`, probe.detail, `Codex profile still created (break-free-codex-${name}); Claude Code cannot use this provider directly`);
   }
   fns.push(
-    `break-free-serve() { if curl -sf --max-time 2 http://127.0.0.1:${SERVE_PORT}/healthz >/dev/null 2>&1; then echo "break-free shim already running on http://127.0.0.1:${SERVE_PORT}"; return 0; fi; mkdir -p ${shq(CFG_DIR)}; nohup ${shq(process.execPath)} ${shq(ENTRY)} --serve ${SERVE_PORT} >> ${shq(path.join(CFG_DIR, "serve.log"))} 2>&1 & echo $! > ${shq(SERVE_PID)}; for i in 1 2 3 4 5 6 7 8 9 10; do sleep 0.3; curl -sf --max-time 2 http://127.0.0.1:${SERVE_PORT}/healthz >/dev/null 2>&1 && { echo "break-free shim started on http://127.0.0.1:${SERVE_PORT} (pid $(cat ${shq(SERVE_PID)}))"; return 0; }; done; echo "break-free shim failed to start; see ${path.join(CFG_DIR, "serve.log")}" >&2; return 1; }`,
-    `break-free-steward() { ${shq(process.execPath)} ${shq(ENTRY)} --workspace "\${1:-.}" --steward "\${@:2}"; }`,
+    `break-free-serve() { if curl -sf --max-time 2 http://127.0.0.1:${SERVE_PORT}/healthz >/dev/null 2>&1; then echo "break-free shim already running on http://127.0.0.1:${SERVE_PORT}"; return 0; fi; mkdir -p ${shq(CFG_DIR)}; nohup ${shq(NODE)} ${shq(ENTRY)} --serve ${SERVE_PORT} >> ${shq(path.join(CFG_DIR, "serve.log"))} 2>&1 & echo $! > ${shq(SERVE_PID)}; for i in 1 2 3 4 5 6 7 8 9 10; do sleep 0.3; curl -sf --max-time 2 http://127.0.0.1:${SERVE_PORT}/healthz >/dev/null 2>&1 && { echo "break-free shim started on http://127.0.0.1:${SERVE_PORT} (pid $(cat ${shq(SERVE_PID)}))"; return 0; }; done; echo "break-free shim failed to start; see ${path.join(CFG_DIR, "serve.log")}" >&2; return 1; }`,
+    `break-free-steward() { ${shq(NODE)} ${shq(ENTRY)} --workspace "\${1:-.}" --steward "\${@:2}"; }`,
     `break-free-serve-stop() { [ -f ${shq(SERVE_PID)} ] && kill "$(cat ${shq(SERVE_PID)})" 2>/dev/null && rm -f ${shq(SERVE_PID)} && echo "break-free shim stopped" || echo "break-free shim not running"; }`,
   );
   fns.push(`break-free-harness() { echo "Break Free harness profiles (model per provider):"; ${table.map((t) => `echo "  ${t.claude ? "break-free-claude-" + t.name + "  " : "                            "}break-free-codex-${t.name}   -> ${t.model}"`).join("; ")}; }`);
@@ -1504,7 +1531,7 @@ async function installGithubFlow() {
 async function verify() {
   report.section("Postflight (real MCP handshake + live provider calls)");
   if (!fs.existsSync(ENTRY)) { report.fail("dist/index.js missing", "", "build failed earlier"); return; }
-  const st = await run(process.execPath, [ENTRY, "--selftest"], { env: { MODEL_GATEWAY_CONFIG: CFG_FILE }, timeoutMs: 30_000 });
+  const st = await run(NODE, [ENTRY, "--selftest"], { env: { MODEL_GATEWAY_CONFIG: CFG_FILE }, timeoutMs: 30_000 });
   let self;
   try { self = JSON.parse(st.stdout); } catch { report.fail("--selftest produced no JSON", lastLines(st.stderr || st.stdout)); return; }
   if (self.usable_providers?.length) report.pass("usable providers", self.usable_providers.join(", "));
@@ -1516,7 +1543,7 @@ async function verify() {
     ({ Client } = await import(pathToFileURL(path.join(GW, "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm", "client", "index.js")).href));
     ({ StdioClientTransport } = await import(pathToFileURL(path.join(GW, "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm", "client", "stdio.js")).href));
   } catch (e) { report.warn("MCP SDK client not importable; skipping handshake", e.message); return; }
-  const transport = new StdioClientTransport({ command: process.execPath, args: [ENTRY, "--stateless"], env: { ...process.env, MODEL_GATEWAY_CONFIG: CFG_FILE }, stderr: "pipe" });
+  const transport = new StdioClientTransport({ command: NODE, args: [ENTRY, "--stateless"], env: { ...process.env, MODEL_GATEWAY_CONFIG: CFG_FILE }, stderr: "pipe" });
   const client = new Client({ name: "setup", version: "0" });
   const t0 = Date.now();
   try {
@@ -1602,9 +1629,16 @@ async function doctor() {
     const get = await run("claude", ["mcp", "get", CLAUDE_SERVER], { timeoutMs: 30_000 });
     get.ok && get.stdout.includes(ENTRY) ? report.pass("Claude MCP registration") : report.fail("Claude MCP registration missing or points elsewhere", lastLines(get.stdout || get.stderr), "node setup.mjs");
     const userHook = path.join(home(), ".claude", "settings.json");
-    stopHookInstalled(userHook)
-      ? report.pass("Claude turn-end guard (Stop hook) installed", userHook)
-      : report.fail("Claude turn-end guard (Stop hook) not installed", "", "node setup.mjs");
+    if (!stopHookInstalled(userHook)) report.fail("Claude turn-end guard (Stop hook) not installed", "", "node setup.mjs");
+    else {
+      // "Installed" is not the same as "runs". A hook written with a versioned Homebrew path
+      // keeps reading as installed after `brew upgrade node` deletes that binary, while every
+      // turn end fails to start it.
+      const bin = stopHookBinary(userHook);
+      bin && !fs.existsSync(bin)
+        ? report.fail("Claude turn-end guard points at a node that no longer exists", bin, "node setup.mjs --update")
+        : report.pass("Claude turn-end guard (Stop hook) installed", userHook);
+    }
   }
   {
     const c = fs.existsSync(path.join(home(), ".claude", "skills", GF_SKILL, "SKILL.md"));
@@ -1710,7 +1744,7 @@ async function checkModelDrift(cfg) {
 async function analyzeRuntimeLog(cfg) {
   report.section("Runtime log (what actually happened in past sessions)");
   const n = Number(val("--last")) || 500;
-  const r = await run(process.execPath, [ENTRY, "--logs", String(n)], { env: { MODEL_GATEWAY_CONFIG: CFG_FILE }, timeoutMs: 30_000 });
+  const r = await run(NODE, [ENTRY, "--logs", String(n)], { env: { MODEL_GATEWAY_CONFIG: CFG_FILE }, timeoutMs: 30_000 });
   let a;
   try { a = JSON.parse(r.stdout); } catch { report.warn("could not read runtime log", lastLines(r.stderr || r.stdout)); return; }
   if (!a.enabled) { report.skip("runtime logging disabled", "config.logFile=false"); return; }
@@ -1923,7 +1957,7 @@ async function update() {
   if (fs.existsSync(INSTALL_STATE)) args.push("--answers", INSTALL_STATE);
   report.info(`re-running the installer with the new code: node setup.mjs --yes${fs.existsSync(INSTALL_STATE) ? " --answers " + path.basename(INSTALL_STATE) : ""}`);
   const code = await new Promise((res, rej) => {
-    const child = spawn(process.execPath, args, { stdio: "inherit", env: process.env });
+    const child = spawn(NODE, args, { stdio: "inherit", env: process.env });
     child.on("error", rej);
     child.on("exit", (c) => res(c ?? 1));
   });
