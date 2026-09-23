@@ -4,6 +4,22 @@
      branches never edit the same block here. scripts/changelog.sh release <version>
      folds them in. -->
 
+## 4.5.2 — 2026-09-23
+
+- **Finished jobs are announced once, not once per project.** The fleet snapshot held only the
+  current workspace's jobs but was stored in a single file every gateway shared, so each one's
+  record of "what I saw last time" was another project's job list — and its own finished work
+  looked new again every time. One live queue carried 93 notices that had been announced more
+  than once, several of them four times. Each workspace now keeps its own snapshot.
+- **A gateway's first look is a baseline.** It cannot tell what is new from what has always been
+  there, so it records what it sees and announces nothing. A job that finishes between two
+  checks is still reported.
+- **A provider circuit opening is reported once, not twice.** Events that belong to no single
+  workspace were deduplicated against the cursor of callers that name no workspace, as if that
+  were everybody's. On a busy machine it sits far ahead, so those events always looked already
+  collected and duplicates went through — two identical `provider.circuit_open` rows blocked a
+  real turn. They are now judged against the baseline, which is what every workspace inherits.
+
 ## 4.5.1 — 2026-09-22
 
 - **The turn-end guard no longer deadlocks the session.** It told the agent to call
