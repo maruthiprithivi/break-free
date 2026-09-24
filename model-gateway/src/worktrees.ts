@@ -20,6 +20,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { atomicWrite, locked, sleepMs } from "./atomic.js";
+import { globToRegex } from "./policy.js";
 import { execFileSync } from "node:child_process";
 
 export const WORKTREE_STATUSES = ["active", "inactive", "blocked", "merged", "abandoned", "deleted"] as const;
@@ -328,7 +329,9 @@ export class WorktreeRegistry {
   conflicts(): { a: string; b: string; files: string[]; claims: string[] }[] {
     const rows = Object.values(this.reconcile().worktrees).filter((w) => !w.isMain && ["active", "inactive", "blocked"].includes(w.status));
     const changed = new Map(rows.map((w) => [w.name, this.changedFiles(w)]));
-    const glob = (g: string) => new RegExp("^" + g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*\//g, "(.*/)?").replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*") + "$", "i");
+    // The shared matcher: the local copy here had the same broken `**`, so a claim on
+    // `src/**/*.ts` missed every file below the first directory and overlaps went unflagged.
+    const glob = globToRegex;
     const out: { a: string; b: string; files: string[]; claims: string[] }[] = [];
     for (let i = 0; i < rows.length; i++) for (let j = i + 1; j < rows.length; j++) {
       const A = rows[i], B = rows[j];

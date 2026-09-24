@@ -257,11 +257,12 @@ function markResolved(dir: string, seq: number): void {
 }
 
 function pendingEventsInDir(dir: string, workspace?: string): FleetEvent[] {
+  workspace = workspaceKey(workspace);
   const cursor = readCursor(dir, workspace);
   const resolved = new Set(readResolvedSeqs(dir));
   // An event belonging to another workspace is not this session's business: blocking a turn on
   // it is a false positive, and the only way to clear it is to discard a result nobody read.
-  const mine = (e: FleetEvent) => !workspace || !e.workspace || e.workspace === workspace;
+  const mine = (e: FleetEvent) => !workspace || !e.workspace || workspaceKey(e.workspace) === workspace;
   const now = Date.now();
   // Every row, duplicates included: resolveJob and the CI resolvers have to reach each copy.
   return readEventsFile(path.join(dir, QUEUE_FILE)).filter((e) => outstanding(e, cursor, resolved, now) && mine(e));
@@ -313,6 +314,30 @@ function collapse(events: FleetEvent[]): FleetEvent[] {
  * sat far above them, so every unstamped event looked already-collected and duplicates were
  * waved through. Two identical `provider.circuit_open deepseek` rows blocked a real turn.
  */
+/**
+ * A workspace's identity: its real path.
+ *
+ * The same directory reaches this file under two spellings. Workspace resolves the gateway's root
+ * with realpath, while harness sessions were stamped with path.resolve and tests stamp whatever
+ * they were handed - and on macOS /var and /tmp are symlinks, so the two never compared equal.
+ * An event stamped through a symlink was invisible to the session that owned it, and, since its
+ * owner's cursor never matched its stamp, it could not be retired either. Every stamp and every
+ * lookup goes through this, so the two spellings are one workspace. Memoised: a gateway compares
+ * a handful of distinct paths many times.
+ */
+const keys = new Map<string, string>();
+export function workspaceKey(p: string): string;
+export function workspaceKey(p: string | undefined): string | undefined;
+export function workspaceKey(p: string | undefined): string | undefined {
+  if (!p) return p;
+  let k = keys.get(p);
+  if (k === undefined) {
+    try { k = fs.realpathSync(p); } catch { k = path.resolve(p); }
+    keys.set(p, k);
+  }
+  return k;
+}
+
 function expired(e: FleetEvent, now: number): boolean {
   if (e.workspace) return false;
   const ts = parseTs(e.ts);
@@ -331,7 +356,7 @@ function outstanding(e: FleetEvent, floor: number, resolved: Set<number>, now: n
 }
 
 function visibilityFloor(cursors: Cursors, workspace?: string): number {
-  return workspace ? Math.max(cursors.baseline, cursors.byWorkspace[workspace] ?? 0) : cursors.baseline;
+  return workspace ? Math.max(cursors.baseline, cursors.byWorkspace[workspaceKey(workspace)] ?? 0) : cursors.baseline;
 }
 
 function pendingMatcher(dir: string): (existing: FleetEvent[], event: Omit<FleetEvent, "seq">, workspace?: string) => boolean {
@@ -342,7 +367,7 @@ function pendingMatcher(dir: string): (existing: FleetEvent[], event: Omit<Fleet
     const floor = visibilityFloor(cursors, ws);
     const now = Date.now();
     return existing.some(
-      (e) => outstanding(e, floor, resolved, now) && e.kind === event.kind && e.id === event.id && (e.workspace ?? undefined) === (ws ?? undefined),
+      (e) => outstanding(e, floor, resolved, now) && e.kind === event.kind && e.id === event.id && workspaceKey(e.workspace) === workspaceKey(ws),
     );
   };
 }
@@ -354,6 +379,8 @@ function pendingMatcher(dir: string): (existing: FleetEvent[], event: Omit<Fleet
  * watcher owns the queue. Two concurrent writers could hand out the same seq.
  */
 export function appendEvents(sessionDir: string, events: Omit<FleetEvent, "seq">[], workspace?: string): FleetEvent[] {
+  workspace = workspaceKey(workspace);
+  events = events.map((e) => (e.workspace ? { ...e, workspace: workspaceKey(e.workspace) } : e));
   const dir = fleetDir(sessionDir);
   const file = path.join(dir, QUEUE_FILE);
   const write = (): { out: FleetEvent[]; total: number } => appendLocked(dir, file, events, workspace);
@@ -473,8 +500,9 @@ export function pendingEvents(sessionDir: string, workspace?: string): FleetEven
  */
 function unresolvedCi(dir: string, workspace: string | undefined, kind: "ci.pending" | "ci.failed" = "ci.pending"): FleetEvent[] {
   const resolved = new Set(readResolvedSeqs(dir));
+  const ws = workspaceKey(workspace);
   return readEventsFile(path.join(dir, QUEUE_FILE)).filter(
-    (e) => e.kind === kind && !resolved.has(e.seq) && (e.workspace ?? undefined) === (workspace ?? undefined),
+    (e) => e.kind === kind && !resolved.has(e.seq) && workspaceKey(e.workspace) === ws,
   );
 }
 
@@ -649,6 +677,7 @@ function retireIdleCursors(dir: string, cursors: Cursors, now = Date.now()): num
  * exists to prevent.
  */
 export function drainTo(sessionDir: string, seq: number, workspace?: string): void {
+  workspace = workspaceKey(workspace);
   const dir = fleetDir(sessionDir);
   // Two sessions blocked by the same row drain it at the same moment. Unlocked, the second
   // write replaced the first with a copy read before it, and one workspace's drain was lost.

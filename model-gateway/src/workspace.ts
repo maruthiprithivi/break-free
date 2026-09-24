@@ -15,6 +15,7 @@
 import { enqueueCi } from "./fleet.js";
 import fs from "node:fs";
 import path from "node:path";
+import { globToRegex as policyGlob } from "./policy.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { GatewayConfig } from "./config.js";
@@ -87,6 +88,10 @@ export class Workspace {
     this.root = fs.realpathSync(path.resolve(root ?? config.workspaceRoot ?? process.cwd()));
     this.deny = [
       ...DEFAULT_DENY,
+      // Deliberately NOT the shared matcher. This is the jail, and it is unanchored, so it errs
+      // toward denying: `.env` also blocks `.env.local`, and `**` reaches any depth by accident of
+      // matching a substring. The anchored matcher would loosen both. Over-denying costs a worker
+      // a file it may not read; under-denying hands it a secret.
       ...[...config.workspace.denyPatterns, ...extraDeny].map((p) => new RegExp(p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*\//g, "(.*/)?").replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*"), "i")),
     ];
   }
@@ -371,8 +376,17 @@ function walk(dir: string, root: string, limit: number): string[] {
   return out;
 }
 
+/**
+ * The pattern a worker passes to search and list_files.
+ *
+ * A bare word is a substring filter - what a worker means by "config" - and stays one. A glob goes
+ * through the one matcher that handles `**`. This file had its own copy, built by chained
+ * replacements, and the last pass rewrote the star inside the group the first pass had produced -
+ * so a double star followed by a slash meant "at most one directory", and a worker listing every
+ * .ts file under the tree got only the ones at the top level. The worker jail's deny list is deliberately NOT routed through this: see the
+ * constructor.
+ */
 function globToRegex(g: string): RegExp {
   if (!/[*?[]/.test(g)) return new RegExp(g.replace(/[.+^${}()|[\]\\]/g, "\\$&"), "i");
-  const re = g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*\//g, "(.*/)?").replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*").replace(/\?/g, ".");
-  return new RegExp(g.includes("/") ? `^${re}$` : `(^|/)${re}$`, "i");
+  return policyGlob(g);
 }

@@ -110,3 +110,29 @@ test("duplicates written by an old gateway are reported once, and one drain clea
   drainTo(sd, Math.max(...shown.map((e) => e.seq)), "/repo/a");
   assert.deepEqual(pendingEvents(sd, "/repo/a"), [], "nothing hidden survives the drain");
 });
+
+// --- one workspace, two spellings ------------------------------------------------------------
+// Workspace resolves the gateway's root with realpath; harness sessions were stamped with
+// path.resolve. On macOS /var and /tmp are symlinks, so the two never compared equal: an event
+// stamped through a symlink was invisible to the session that owned it, and could not be retired.
+// It is also why the guard tests passed in CI and failed on a Mac.
+
+test("an event stamped through a symlink is seen by the workspace's real path", () => {
+  const sd = tmp();
+  const real = fs.mkdtempSync(path.join(os.tmpdir(), "real-"));
+  const link = `${real}-link`;
+  fs.symlinkSync(real, link);
+  appendEvents(sd, [{ ts: ago(0), kind: "job.done", id: "via-link", reason: "done" }], link);
+  assert.equal(pendingEvents(sd, fs.realpathSync(link)).length, 1, "the real path sees it");
+  assert.equal(pendingEvents(sd, link).length, 1, "and so does the symlink");
+});
+
+test("draining through either spelling clears it for both", () => {
+  const sd = tmp();
+  const real = fs.mkdtempSync(path.join(os.tmpdir(), "real-"));
+  const link = `${real}-link`;
+  fs.symlinkSync(real, link);
+  const [e] = appendEvents(sd, [{ ts: ago(0), kind: "job.done", id: "j", reason: "done" }], link);
+  drainTo(sd, e.seq, fs.realpathSync(link));
+  assert.deepEqual(pendingEvents(sd, link), [], "one workspace, one cursor");
+});

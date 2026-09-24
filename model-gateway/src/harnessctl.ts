@@ -11,6 +11,16 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs";
 import path from "node:path";
+import { atomicWrite } from "./atomic.js";
+
+/**
+ * Keys a lead may send to a sub-agent by name. An allow-list rather than anything tmux accepts:
+ * send-keys treats an unrecognised name as text to type, so a typo would be typed into the agent.
+ */
+export const HARNESS_KEY = /^(Escape|Enter|Tab|BTab|BSpace|Space|Up|Down|Left|Right|Home|End|PageUp|PageDown|C-[a-z])$/;
+
+/** An exited session's record is dropped once tmux has confirmed it gone for this long. */
+const EXITED_RETENTION_MS = 24 * 60 * 60 * 1000;
 import { randomBytes } from "node:crypto";
 import type { GatewayConfig } from "./config.js";
 
@@ -62,7 +72,11 @@ export class HarnessController {
   }
   private save(s: HarnessSession): void {
     if (this.stateless) this.mem.set(s.id, s);
-    else fs.writeFileSync(this.file(s.id), JSON.stringify(s, null, 2) + "\n");
+    else atomicWrite(this.file(s.id), JSON.stringify(s, null, 2) + "\n", 0o600);
+  }
+  private remove(id: string): void {
+    if (this.stateless) this.mem.delete(id);
+    else fs.rmSync(this.file(id), { force: true });
   }
   private must(id: string): HarnessSession {
     const s = this.load(id);
@@ -70,13 +84,37 @@ export class HarnessController {
     return s;
   }
 
-  private async tmuxRun(args: string[]): Promise<{ ok: boolean; out: string }> {
+  /**
+   * Run tmux against the server the harness sessions actually live on, and say which of three
+   * things happened.
+   *
+   * A gateway started inside a Claude swarm teammate pane inherits TMUX pointing at that swarm's
+   * own tmux server. A bare `tmux has-session` then asked the wrong server, which truthfully said
+   * "can't find session" - so live crewmates were recorded as exited and a false harness.exited
+   * woke their sessions, then the next observer with the right server flipped them back. TMUX is
+   * removed for every call here, so they all reach the default server the sessions were made on.
+   *
+   * And "tmux said no" is not the same as "tmux could not be asked". `absent` means tmux ran and
+   * the session is not there. `unavailable` - not installed, timed out, anything else - means no
+   * answer at all, and a caller must keep what it knew rather than record an exit.
+   */
+  private async tmuxRun(args: string[]): Promise<{ ok: boolean; absent?: boolean; unavailable?: boolean; out: string }> {
+    const env = { ...process.env };
+    delete env.TMUX;
+    delete env.TMUX_PANE;
     try {
-      const { stdout } = await exec(this.tmux(), args, { timeout: 30_000, maxBuffer: 8 * 1024 * 1024 });
+      const { stdout } = await exec(this.tmux(), args, { timeout: 30_000, maxBuffer: 8 * 1024 * 1024, env });
       return { ok: true, out: stdout ?? "" };
     } catch (e) {
-      const err = e as { stderr?: string; message?: string };
-      return { ok: false, out: err.stderr ?? err.message ?? String(e) };
+      const err = e as { stderr?: string; message?: string; code?: string | number; killed?: boolean };
+      const out = err.stderr ?? err.message ?? String(e);
+      // tmux ran and said no - quietly, or with one of the ways it says "not there" - is absent.
+      // It could not run (not installed, timed out), or ran and said something else (a client and
+      // server from different tmux versions report a protocol mismatch), is no answer at all.
+      const ran = !err.killed && err.code !== "ENOENT" && typeof err.code === "number";
+      const said = (err.stderr ?? "").trim();
+      const absent = ran && (said === "" || /can't find session|session not found|no such session|no server running|error connecting to/i.test(said));
+      return { ok: false, out, ...(absent ? { absent: true } : { unavailable: true }) };
     }
   }
 
@@ -94,10 +132,22 @@ export class HarnessController {
   }
 
   /** Write literal keystrokes into the session (optionally followed by Enter). */
-  async send(id: string, text: string, enter = true): Promise<void> {
+  /**
+   * Named keys first - Escape to interrupt a sub-agent, C-c to stop one - then literal text, then
+   * Enter. There was no way to send a key at all: a lead that passed `keys` had them silently
+   * dropped, sent an empty line instead, and reported the sub-agent interrupted when it was not.
+   */
+  async send(id: string, text: string, enter = true, keys: string[] = []): Promise<void> {
     const s = this.must(id);
-    const r = await this.tmuxRun(["send-keys", "-t", s.tmux, "-l", text]);
-    if (!r.ok) throw new Error(`tmux send-keys failed: ${r.out.trim()}`);
+    for (const k of keys) {
+      if (!HARNESS_KEY.test(k)) throw new Error(`not a key tmux can send: "${k}"`);
+      const r = await this.tmuxRun(["send-keys", "-t", s.tmux, k]);
+      if (!r.ok) throw new Error(`tmux send-keys ${k} failed: ${r.out.trim()}`);
+    }
+    if (text) {
+      const r = await this.tmuxRun(["send-keys", "-t", s.tmux, "-l", text]);
+      if (!r.ok) throw new Error(`tmux send-keys failed: ${r.out.trim()}`);
+    }
     if (enter) await this.tmuxRun(["send-keys", "-t", s.tmux, "Enter"]);
     s.updatedAt = new Date().toISOString();
     this.save(s);
@@ -114,8 +164,9 @@ export class HarnessController {
   async status(id: string): Promise<"running" | "exited" | "unknown"> {
     const s = this.load(id);
     if (!s) return "unknown";
-    const running = (await this.tmuxRun(["has-session", "-t", s.tmux])).ok;
-    const next: HarnessSession["state"] = running ? "running" : "exited";
+    const r = await this.tmuxRun(["has-session", "-t", s.tmux]);
+    if (r.unavailable) return "unknown"; // could not ask: say so, and record nothing
+    const next: HarnessSession["state"] = r.ok ? "running" : "exited";
     if (s.state !== next) { s.state = next; s.updatedAt = new Date().toISOString(); this.save(s); }
     return next;
   }
@@ -139,11 +190,25 @@ export class HarnessController {
         try { out.push(JSON.parse(fs.readFileSync(path.join(this.dir, f), "utf8")) as HarnessSession); } catch { /* skip corrupt */ }
       }
     }
+    const retired = new Set<string>();
     for (const s of out) {
-      const running = (await this.tmuxRun(["has-session", "-t", s.tmux])).ok;
-      const next: HarnessSession["state"] = running ? "running" : "exited";
-      if (s.state !== next) { s.state = next; this.save(s); }
+      const r = await this.tmuxRun(["has-session", "-t", s.tmux]);
+      // No answer is not an exit. Recording one here is what woke sessions with a false
+      // harness.exited whenever an observer could not reach tmux.
+      if (r.unavailable) continue;
+      const next: HarnessSession["state"] = r.ok ? "running" : "exited";
+      if (s.state !== next) {
+        s.state = next;
+        s.updatedAt = new Date().toISOString();
+        this.save(s);
+      } else if (next === "exited" && Date.now() - Date.parse(s.updatedAt || s.createdAt) > EXITED_RETENTION_MS) {
+        // Every record used to be probed at every turn end, forever. An exited one is kept - and
+        // re-probed, which heals any that the wrong-server bug marked exited while still alive -
+        // until the right server has confirmed it gone for a day. Then it goes.
+        this.remove(s.id);
+        retired.add(s.id);
+      }
     }
-    return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    return out.filter((s) => !retired.has(s.id)).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   }
 }

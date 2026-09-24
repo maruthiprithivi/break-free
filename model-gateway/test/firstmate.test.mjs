@@ -318,16 +318,20 @@ test("an explicit choice wins, even when it is not installed", () => {
 });
 
 test("configuration, then what the install wired, then the shipped order", () => {
-  assert.equal(preferredHarness({ configured: "codex", wired: ["claude"], available: all }), "codex");
-  assert.equal(preferredHarness({ wired: ["omp", "claude"], available: all }), "omp", "what the user wired beats list order");
-  assert.equal(preferredHarness({ available: all }), "claude", "the shipped order is the last resort");
+  // `env: {}` says "no harness is running here". Omitted, preferredHarness reads process.env, and a
+  // running harness deliberately outranks configuration (see the test above) - so run from inside
+  // Claude Code, as the installer's self-test is, these read the real CLAUDECODE and fail.
+  const none = {};
+  assert.equal(preferredHarness({ env: none, configured: "codex", wired: ["claude"], available: all }), "codex");
+  assert.equal(preferredHarness({ env: none, wired: ["omp", "claude"], available: all }), "omp", "what the user wired beats list order");
+  assert.equal(preferredHarness({ env: none, available: all }), "claude", "the shipped order is the last resort");
 
   // A signal pointing at something not installed must not win, or the fallback never runs.
   assert.equal(preferredHarness({ env: { CODEX_SESSION_ID: "x" }, available: (b) => b === "claude" }), "claude");
-  assert.equal(preferredHarness({ configured: "grok", available: (b) => b === "pi" }), "pi");
+  assert.equal(preferredHarness({ env: none, configured: "grok", available: (b) => b === "pi" }), "pi");
   // An unverified name in config or install state is ignored rather than launched.
-  assert.equal(preferredHarness({ configured: "not-a-harness", wired: ["codex"], available: all }), "codex");
-  assert.equal(preferredHarness({ available: () => false }), undefined, "nothing installed is an honest nothing");
+  assert.equal(preferredHarness({ env: none, configured: "not-a-harness", wired: ["codex"], available: all }), "codex");
+  assert.equal(preferredHarness({ env: none, available: () => false }), undefined, "nothing installed is an honest nothing");
 });
 
 test("a launch plan follows the running session", () => {

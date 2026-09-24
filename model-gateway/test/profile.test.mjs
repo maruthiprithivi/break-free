@@ -113,3 +113,29 @@ test("dispatch validates arguments the same way an advertised tool would", async
     assert.match(missing.content.map((x) => x.text).join(""), /no operation/);
   } finally { await c.close(); }
 });
+
+test("an argument the operation does not have is refused by name, never dropped", async () => {
+  // The call from a live session: interrupt a sub-agent with harness_send {id, keys:[...]} through
+  // bf_invoke. `keys` did not exist, was stripped without a word, an empty line was sent instead,
+  // and sent:true came back - so the lead reported an interrupt that never happened.
+  const c = await gateway("compact");
+  try {
+    const r = await c.callTool({ name: "bf_invoke", arguments: { operation: "worktree_list", arguments: { markdown: false, colour: "blue" } } });
+    assert.equal(r.isError, true, "an unknown argument must fail");
+    const msg = r.content.map((x) => x.text).join("");
+    assert.match(msg, /worktree_list has no argument "colour"/, "and say which one");
+    assert.match(msg, /accepts: markdown/, "and what it does accept");
+    assert.doesNotMatch(msg, /"code":\s*"/, "in words, not a raw validation dump");
+  } finally { await c.close(); }
+});
+
+test("a wrong type is explained by field, not dumped", async () => {
+  const c = await gateway("compact");
+  try {
+    const r = await c.callTool({ name: "bf_invoke", arguments: { operation: "worktree_list", arguments: { markdown: "yes" } } });
+    assert.equal(r.isError, true);
+    const msg = r.content.map((x) => x.text).join("");
+    assert.match(msg, /^ERROR: markdown: /, "the field comes first");
+    assert.doesNotMatch(msg, /"code":\s*"/);
+  } finally { await c.close(); }
+});

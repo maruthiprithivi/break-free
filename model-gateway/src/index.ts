@@ -42,8 +42,8 @@ import { runSteward, hygiene } from "./steward.js";
 import { DEFAULT_PRICING } from "./config.js";
 import { ghAvailable } from "./github.js";
 import { SessionStore } from "./sessions.js";
-import { HarnessController } from "./harnessctl.js";
-import { appendEvents, classify, drainTo, expireCi, pendingEvents, readSnapshot, resolveCi, resolveJob, writeSnapshot, type FleetEvent, type FleetSnapshot } from "./fleet.js";
+import { HarnessController, HARNESS_KEY } from "./harnessctl.js";
+import { appendEvents, workspaceKey, classify, drainTo, expireCi, pendingEvents, readSnapshot, resolveCi, resolveJob, writeSnapshot, type FleetEvent, type FleetSnapshot } from "./fleet.js";
 import { getBreaker } from "./breaker.js";
 import { delegate, panel, review, supervise, runPlan, type Ctx } from "./orchestrate.js";
 import { PROVIDER_CATALOG, isLocalEndpoint } from "./providers.js";
@@ -300,7 +300,8 @@ async function fleetCheck(): Promise<{ running: { jobs: number; harness: number 
   const pending = pendingEvents(sessionDir, ctx.workspace.root);
   const running = {
     jobs: Object.values(next.jobs).filter((s) => s === "running").length,
-    harness: Object.values(next.harness).filter((h) => h.state === "running" && (!h.cwd || h.cwd.startsWith(ctx.workspace.root))).length,
+    // Identity, then a separator: a bare prefix counted /repo-other as inside /repo.
+    harness: Object.values(next.harness).filter((h) => { if (h.state !== "running") return false; if (!h.cwd) return true; const c = workspaceKey(h.cwd); return c === ctx.workspace.root || c.startsWith(ctx.workspace.root + path.sep); }).length,
   };
   return { running, pending, blocking: running.jobs > 0 || pending.length > 0 };
 }
@@ -1641,9 +1642,20 @@ server.registerTool("harness_spawn", {
 
 server.registerTool("harness_send", {
   title: "Send input to a harness session",
-  description: "Write literal keystrokes into a tmux harness session (plus Enter by default). Use for prompts, follow-ups, or approvals.",
-  inputSchema: { id: z.string(), text: z.string(), enter: z.boolean().default(true) },
-}, async (a) => { await ctx.harnessctl.send(a.id, a.text, a.enter); return json({ id: a.id, sent: true }); });
+  description: "Type into a tmux harness session: named keys first (Escape to interrupt, C-c to stop), then literal text, then Enter. Enter defaults to on when there is text and off when there is only keys.",
+  inputSchema: {
+    id: z.string(),
+    text: z.string().optional().describe("Literal text to type"),
+    keys: z.array(z.string().regex(HARNESS_KEY, "a tmux key name: Escape, Enter, Tab, BTab, BSpace, Space, arrows, Home, End, PageUp, PageDown, or C-<letter>")).optional().describe("Named keys sent before the text, e.g. [\"Escape\"] to interrupt"),
+    enter: z.boolean().optional().describe("Press Enter after the text (default: when text is given)"),
+  },
+}, async (a) => {
+  const text = a.text ?? "";
+  const keys = a.keys ?? [];
+  if (!text && !keys.length) return fail(new Error("nothing to send: give text, keys, or both"));
+  await ctx.harnessctl.send(a.id, text, a.enter ?? text.length > 0, keys);
+  return json({ id: a.id, sent: true, ...(keys.length ? { keys } : {}), ...(text ? { chars: text.length } : {}) });
+});
 
 server.registerTool("harness_read", {
   title: "Read a harness session",
@@ -1710,7 +1722,21 @@ server.registerTool("bf_invoke", {
   try {
     // Same validation the tool would have had. Dispatching around it would make the compact
     // profile a hole rather than a saving.
-    const parsed = z.object((op.def.inputSchema ?? {}) as z.ZodRawShape).parse(a.arguments ?? {});
+    // Strict: an argument the operation does not have is an error, not something to drop. Stripped
+    // silently, `harness_send {keys: ["Escape"]}` sent an empty line, returned sent:true, and the
+    // lead reported a sub-agent interrupted that was still working.
+    const shape = (op.def.inputSchema ?? {}) as z.ZodRawShape;
+    const checked = z.object(shape).strict().safeParse(a.arguments ?? {});
+    if (!checked.success) {
+      const accepts = Object.keys(shape);
+      const problems = checked.error.issues.map((i) =>
+        i.code === "unrecognized_keys"
+          ? `${a.operation} has no argument ${i.keys.map((k) => `"${k}"`).join(", ")}`
+          : `${i.path.join(".") || "arguments"}: ${i.message}`,
+      );
+      return fail(new Error(`${problems.join("; ")}. ${a.operation} accepts: ${accepts.join(", ") || "no arguments"}. bf_discover {operation:"${a.operation}"} shows the schema.`));
+    }
+    const parsed = checked.data;
     return (await op.handler(parsed as Record<string, unknown>)) as ReturnType<typeof json>;
   } catch (e) {
     return fail(e);
