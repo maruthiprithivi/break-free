@@ -43,7 +43,7 @@ import { DEFAULT_PRICING } from "./config.js";
 import { ghAvailable } from "./github.js";
 import { SessionStore } from "./sessions.js";
 import { HarnessController } from "./harnessctl.js";
-import { appendEvents, classify, drainTo, expireCi, pendingEvents, readSnapshot, resolveCi, resolveJob, writeSnapshot, type FleetEvent, type FleetSnapshot } from "./fleet.js";
+import { appendEvents, workspaceKey, classify, drainTo, expireCi, pendingEvents, readSnapshot, resolveCi, resolveJob, writeSnapshot, type FleetEvent, type FleetSnapshot } from "./fleet.js";
 import { getBreaker } from "./breaker.js";
 import { delegate, panel, review, supervise, runPlan, type Ctx } from "./orchestrate.js";
 import { PROVIDER_CATALOG, isLocalEndpoint } from "./providers.js";
@@ -300,7 +300,8 @@ async function fleetCheck(): Promise<{ running: { jobs: number; harness: number 
   const pending = pendingEvents(sessionDir, ctx.workspace.root);
   const running = {
     jobs: Object.values(next.jobs).filter((s) => s === "running").length,
-    harness: Object.values(next.harness).filter((h) => h.state === "running" && (!h.cwd || h.cwd.startsWith(ctx.workspace.root))).length,
+    // Identity, then a separator: a bare prefix counted /repo-other as inside /repo.
+    harness: Object.values(next.harness).filter((h) => { if (h.state !== "running") return false; if (!h.cwd) return true; const c = workspaceKey(h.cwd); return c === ctx.workspace.root || c.startsWith(ctx.workspace.root + path.sep); }).length,
   };
   return { running, pending, blocking: running.jobs > 0 || pending.length > 0 };
 }
