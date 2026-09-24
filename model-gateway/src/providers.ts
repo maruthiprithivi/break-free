@@ -21,6 +21,13 @@ export interface ProviderDefaults {
    * routing — they have their own client (jev.ts) and their own lane in run_plan.
    */
   kind?: "chat" | "decision";
+  /**
+   * The header deadline this provider needs, when it differs from defaults.firstByteMs. Set only
+   * from evidence: ollama sends no headers until the whole answer is ready (measured ttfb=19.50s
+   * total=19.50s), so a header deadline there measures generation time and kills healthy answers.
+   * DeepSeek, by contrast, answered 426 calls past 20s under that same deadline, so it keeps it.
+   */
+  firstByteMs?: number;
   /** Extra headers to send on every request */
   headers?: Record<string, string>;
   /** Default model used when a bare provider name is requested */
@@ -56,6 +63,7 @@ export const PROVIDER_CATALOG: Record<string, ProviderDefaults> = {
     defaultModel: "qwen3-coder:30b",
     knownModels: ["qwen3-coder:30b", "qwen3:8b", "gpt-oss:20b", "deepseek-r1:14b", "devstral:24b"],
     supportsTools: true,
+    firstByteMs: 0,
     docs: "https://docs.ollama.com/api/openai-compatibility",
     notes: "Key is optional locally. Use model names exactly as `ollama list` prints them. Cloud-backed models pulled locally end in `-cloud`.",
   },

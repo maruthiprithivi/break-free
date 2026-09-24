@@ -19,6 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { appendEvents } from "./fleet.js";
+import { atomicWrite } from "./atomic.js";
 import { log as rlog } from "./logger.js";
 
 export interface CircuitState {
@@ -44,6 +45,8 @@ export interface BreakerConfig {
 
 export class Breaker {
   private state: Record<string, CircuitState> | undefined;
+  /** mtime and size of the file this process last read, so a change by another gateway is seen. */
+  private version = "";
 
   constructor(
     private readonly sessionDir: string | undefined,
@@ -54,24 +57,47 @@ export class Breaker {
     return this.sessionDir ? path.join(this.sessionDir, "breaker.json") : undefined;
   }
 
-  private load(): Record<string, CircuitState> {
-    if (this.state) return this.state;
-    this.state = {};
-    // A breaker that throws on a corrupt file would be worse than one that forgets:
-    // forgetting costs one timeout, throwing costs every call.
+  /**
+   * The circuits as they are on disk now, re-read whenever another process has changed them.
+   *
+   * This used to read breaker.json once per process and trust that copy for the life of the
+   * session. With a gateway per session and per worktree - 28 on one machine - a trip recorded
+   * by one was invisible to the rest, and each of them paid the failed calls again to learn it.
+   */
+  private read(): Record<string, CircuitState> {
+    if (!this.file) return (this.state ??= {});
     try {
-      if (this.file && fs.existsSync(this.file)) this.state = JSON.parse(fs.readFileSync(this.file, "utf8")) as Record<string, CircuitState>;
+      const st = fs.statSync(this.file);
+      const version = `${st.mtimeMs}:${st.size}`;
+      if (this.state && version === this.version) return this.state;
+      this.state = JSON.parse(fs.readFileSync(this.file, "utf8")) as Record<string, CircuitState>;
+      this.version = version;
     } catch {
-      this.state = {};
+      // Missing means nothing recorded yet. Unreadable means keep what we had: a breaker that
+      // throws would be worse than one that forgets, which costs one timeout.
+      this.state ??= {};
     }
     return this.state;
   }
 
-  private save(): void {
+  /**
+   * Change one provider's circuit, starting from the file as it is now.
+   *
+   * The old save() wrote this process's whole in-memory map back, so a gateway that had loaded
+   * the file hours earlier erased every circuit another gateway had opened since, the moment it
+   * recorded one strike against anything. Re-reading first and writing through a rename means a
+   * change touches only its own provider, and no reader ever sees a half-written file.
+   */
+  private mutate(change: (st: Record<string, CircuitState>) => void): void {
+    this.version = "";
+    const st = this.read();
+    change(st);
     if (!this.file) return;
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(this.file, JSON.stringify(this.load(), null, 2), { mode: 0o600 });
+      atomicWrite(this.file, JSON.stringify(st, null, 2));
+      const after = fs.statSync(this.file);
+      this.version = `${after.mtimeMs}:${after.size}`;
     } catch {
       // Persistence is an optimisation; in-memory state still protects this process.
     }
@@ -80,7 +106,7 @@ export class Breaker {
   /** Epoch ms at which the circuit reopens, or undefined when the provider is usable. */
   openUntil(provider: string, now = Date.now()): number | undefined {
     if (!this.cfg.enabled) return undefined;
-    const s = this.load()[provider];
+    const s = this.read()[provider];
     if (!s?.openedAt) return undefined;
     const until = Date.parse(s.openedAt) + this.cfg.cooldownMs;
     return until > now ? until : undefined;
@@ -89,13 +115,18 @@ export class Breaker {
   /** Record a host-level failure. Returns true when this call opened the circuit. */
   record(provider: string, error: string, now = Date.now()): boolean {
     if (!this.cfg.enabled) return false;
-    const st = this.load();
-    const s = (st[provider] ??= { failures: 0 });
-    s.failures += 1;
-    s.lastError = error.slice(0, 300);
-    const tripped = s.failures >= this.cfg.failures && !this.openUntil(provider, now);
-    if (tripped) s.openedAt = new Date(now).toISOString();
-    this.save();
+    let tripped = false;
+    let s: CircuitState = { failures: 0 };
+    this.mutate((st) => {
+      s = st[provider] ??= { failures: 0 };
+      s.failures += 1;
+      s.lastError = error.slice(0, 300);
+      // Already open - perhaps by another gateway - is not a new trip, and must not append a
+      // second circuit_open row for every process that happens to notice the same outage.
+      const open = !!s.openedAt && Date.parse(s.openedAt) + this.cfg.cooldownMs > now;
+      tripped = s.failures >= this.cfg.failures && !open;
+      if (tripped) s.openedAt = new Date(now).toISOString();
+    });
     if (tripped) {
       rlog("breaker.open", { provider, failures: s.failures, cooldown_ms: this.cfg.cooldownMs, error: s.lastError });
       if (this.sessionDir) {
@@ -116,16 +147,19 @@ export class Breaker {
 
   /** A provider that answered is healthy: strikes and any open circuit are dropped. */
   clear(provider: string): void {
-    const st = this.load();
-    if (!st[provider]) return;
-    const wasOpen = !!st[provider].openedAt;
-    delete st[provider];
-    this.save();
+    // Called on every success, so the common case - nothing recorded - must not write.
+    if (!this.read()[provider]) return;
+    let wasOpen = false;
+    this.mutate((st) => {
+      if (!st[provider]) return;
+      wasOpen = !!st[provider].openedAt;
+      delete st[provider];
+    });
     if (wasOpen) rlog("breaker.close", { provider });
   }
 
   list(now = Date.now()): OpenCircuit[] {
-    const st = this.load();
+    const st = this.read();
     return Object.entries(st)
       .filter(([p]) => this.openUntil(p, now) !== undefined)
       .map(([provider, s]) => ({

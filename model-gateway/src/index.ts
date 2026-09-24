@@ -35,7 +35,7 @@ import { startServe } from "./serve.js";
 import { WorktreeRegistry, WORKTREE_STATUSES, isLinkedWorktree, shadowLedgerDir, installGuardHook, guardHookStatus, removeGuardHook, LEDGER_GUARD_WORKFLOW } from "./worktrees.js";
 import { LEDGER_DIR } from "./ledger.js";
 import { resolveVault, linkLedger, resolveGraph, type GraphProbe } from "./knowledge.js";
-import { status as firstmateStatus, planUpdate, updateCommand, parseUpdateSummary, updateAvailable, sessionLabel, FIRSTMATE_REPO, FIRSTMATE_LABEL } from "./firstmate.js";
+import { status as firstmateStatus, planUpdate, updateCommand, parseUpdateSummary, updateAvailable, sessionLabel, FIRSTMATE_REPO, FIRSTMATE_LABEL, followablePin } from "./firstmate.js";
 import { behindOrigin, isCheckout, readCache, writeCache, cacheIsWarm, notice as updateNotice, type UpdateState, type ComponentUpdate } from "./updates.js";
 import { estimateTokens, line as ctxLine, report as ctxReport, renderReport, type ContextLine } from "./context.js";
 import { runSteward, hygiene } from "./steward.js";
@@ -152,14 +152,14 @@ async function reconcileCi(sessionDir: string): Promise<void> {
   const shas = [...new Set(pendingEvents(sessionDir, ctx.workspace.root).filter((e) => e.kind === "ci.pending").map((e) => e.ci?.sha).filter((x): x is string => !!x))];
   if (!shas.length) return;
 
-  expireCi(sessionDir, Date.now(), ctx.config.fleet.ciTimeoutMs);
+  expireCi(sessionDir, Date.now(), ctx.config.fleet.ciTimeoutMs, ctx.workspace.root);
 
   const runs = (await ghJson(["run", "list", "--json", "databaseId,status,conclusion,url,headSha,name", "--limit", "30"])) as
     | { databaseId: number; status: string; conclusion: string | null; url: string; headSha: string; name: string }[]
     | undefined;
   if (!runs) {
     // No gh, no auth, or no repo: we cannot verify, so stop blocking on it.
-    expireCi(sessionDir, Date.now(), 0);
+    expireCi(sessionDir, Date.now(), 0, ctx.workspace.root);
     return;
   }
 
@@ -167,7 +167,7 @@ async function reconcileCi(sessionDir: string): Promise<void> {
     const run = runs.find((r) => r.headSha === sha);
     if (!run || run.status !== "completed") continue; // still pending: keep blocking
     if (run.conclusion !== "success") {
-      resolveCi(sessionDir, sha, { state: "failed", runId: run.databaseId, url: run.url, job: run.name });
+      resolveCi(sessionDir, sha, { state: "failed", runId: run.databaseId, url: run.url, job: run.name }, ctx.workspace.root);
       continue;
     }
     const deps = (await ghJson(["api", `repos/{owner}/{repo}/deployments?sha=${sha}`])) as { id: number }[] | undefined;
@@ -175,12 +175,12 @@ async function reconcileCi(sessionDir: string): Promise<void> {
       const states = await Promise.all(deps.map((d) => ghJson(["api", `repos/{owner}/{repo}/deployments/${d.id}/statuses?per_page=1`]) as Promise<{ state: string }[] | undefined>));
       const latest = states.map((x) => Array.isArray(x) && x[0] ? x[0].state : undefined);
       if (latest.some((st) => st === "failure" || st === "error")) {
-        resolveCi(sessionDir, sha, { state: "failed", runId: run.databaseId, url: run.url, job: "deployment" });
+        resolveCi(sessionDir, sha, { state: "failed", runId: run.databaseId, url: run.url, job: "deployment" }, ctx.workspace.root);
         continue;
       }
       if (!latest.every((st) => st === "success")) continue; // deployment still in flight: keep blocking
     }
-    resolveCi(sessionDir, sha, { state: "success", runId: run.databaseId, url: run.url });
+    resolveCi(sessionDir, sha, { state: "success", runId: run.databaseId, url: run.url }, ctx.workspace.root);
   }
 }
 
@@ -208,6 +208,18 @@ function graphResolution() {
  * a cache that ledger_resume reads, so the notice reaches the session whether or not this
  * finished first.
  */
+/** Record the pin the auto-update already approved; the decision is followablePin()'s. */
+function followPin(root: string, target: string): void {
+  const next = followablePin(root, ctx.config.firstmate.pin, target);
+  if (!next) return;
+  try {
+    saveConfigPatch(loaded.writePath, { firstmate: { pin: next } });
+    rlog("firstmate.pin", { from: ctx.config.firstmate.pin, to: next });
+  } catch {
+    // Unwritable config: the pin check keeps reporting drift, which is the honest answer.
+  }
+}
+
 async function refreshUpdates(): Promise<UpdateState | undefined> {
   const cfg = ctx.config.updates;
   const sessionDir = ctx.config.sessionDir;
@@ -226,12 +238,17 @@ async function refreshUpdates(): Promise<UpdateState | undefined> {
 
   for (const { name, root } of roots) {
     if (!isCheckout(root)) { components.push({ name, root, instructionChanges: [], reason: "not a git checkout" }); continue; }
-    const r = behindOrigin(root, { fetch: true });
+    const r = await behindOrigin(root, { fetch: true });
     // Only firstmate's changes steer an agent; break-free's are a program's.
     const instructionChanges = name === "firstmate" && r.target ? planUpdate(root, r.target).instructionChanges : [];
     const before = r.behind;
 
-    if (cfg.apply && (r.behind ?? 0) > 0) {
+    // Only firstmate is fast-forwarded here. It is instructions and scripts, live the moment they
+    // change. break-free is a program: its source does nothing until the installer rebuilds it,
+    // so merging source alone left every session running the old build while the notice said
+    // "updated". It is reported, with the one command that actually updates it.
+    let applyFailed = false;
+    if (cfg.apply && name === "firstmate" && (r.behind ?? 0) > 0) {
       const from = execFileSyncQuiet(root, ["rev-parse", "HEAD"]);
       // Fast-forward only: a checkout someone has edited is left exactly as it is, because
       // discarding their work to install a version they did not ask for would be far worse
@@ -239,9 +256,15 @@ async function refreshUpdates(): Promise<UpdateState | undefined> {
       const ok = execFileSyncQuiet(root, ["merge", "--ff-only", r.target ?? "origin/HEAD"]) !== undefined;
       const to = execFileSyncQuiet(root, ["rev-parse", "HEAD"]);
       if (ok && from && to && from !== to) applied.push({ name, from, to });
+      else applyFailed = true;
     }
-    const after = cfg.apply ? behindOrigin(root).behind : before;
-    components.push({ name, root, behind: after ?? before, instructionChanges, reason: r.reason });
+    // The update IS the approval - the user asked for both to update themselves - so the pin
+    // moves with it. It never did: the pin check then read the gateway's own fast-forward as
+    // "instructions nobody approved" and refused to launch `bf firstmate`. Runs even when nothing
+    // was behind, because machines already stuck that way are sitting at origin with a stale pin.
+    if (name === "firstmate" && cfg.apply && r.target) followPin(root, r.target);
+    const after = cfg.apply ? (await behindOrigin(root)).behind : before;
+    components.push({ name, root, behind: after ?? before, instructionChanges, reason: r.reason, ...(applyFailed ? { applyFailed } : {}) });
   }
 
   const state: UpdateState = { checkedAt: new Date().toISOString(), components, applied };
@@ -303,6 +326,18 @@ const StallWarnMsSchema = z.number().int().min(0).optional().describe(
 const ShapeSchema = z.enum(["ship", "scout"]).optional().describe(
   "Task shape: 'ship' uses the requested capabilities (default); 'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
 );
+
+/**
+ * The same field, described once.
+ *
+ * delegate, supervise and run_plan's per-task schema share six fields, and zod-to-json-schema
+ * inlines a field's description everywhere it is used - so the same six paragraphs were sent
+ * three times, 2,094 bytes every turn of every session, for nothing: the model reads all three
+ * schemas side by side. delegate carries the full text and is always advertised; the others
+ * point at it. The enum values and types stay in every schema, so nothing a caller needs in order
+ * to call correctly is hidden - only the repeated prose.
+ */
+const asDelegate = (field: string) => `As delegate.${field}.`;
 
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
 const json = (o: unknown) => text(JSON.stringify(o, null, 2));
@@ -809,12 +844,12 @@ server.registerTool("supervise", {
     worker: z.string().optional().describe("Default: config.defaults.model"),
     supervisor: z.string().optional().describe("Default: config.defaults.supervisor"),
     max_rounds: z.number().int().min(1).max(10).optional().describe("Default 3"),
-    capabilities: CapabilitySchema.optional(),
-    shape: ShapeSchema,
-    min_tier: MinTierSchema,
-    allow_downgrade: AllowDowngradeSchema,
-    stall_abort_ms: StallAbortMsSchema,
-    stall_warn_ms: StallWarnMsSchema,
+    capabilities: CapabilitySchema.optional().describe(asDelegate("capabilities")),
+    shape: ShapeSchema.describe(asDelegate("shape")),
+    min_tier: MinTierSchema.describe(asDelegate("min_tier")),
+    allow_downgrade: AllowDowngradeSchema.describe(asDelegate("allow_downgrade")),
+    stall_abort_ms: StallAbortMsSchema.describe(asDelegate("stall_abort_ms")),
+    stall_warn_ms: StallWarnMsSchema.describe(asDelegate("stall_warn_ms")),
     acceptance_criteria: z.string().optional(),
     context: z.string().optional(),
     session_id: z.string().optional(),
@@ -894,10 +929,10 @@ const PlanTaskSchema = z.object({
   id: z.string().describe("Short unique id, e.g. 'api', 'tests', 'docs' — or an existing ledger task id (T-007) to run that task"),
   task: z.string().describe("Self-contained instructions for this worker: scope, files, constraints, expected output"),
   model: z.string().optional().describe("Alias/provider/model for this task (default config.defaults.model). Mix vendors freely."),
-  capabilities: CapabilitySchema.optional(),
-  shape: ShapeSchema,
-  min_tier: MinTierSchema,
-  allow_downgrade: AllowDowngradeSchema,
+  capabilities: CapabilitySchema.optional().describe(asDelegate("capabilities")),
+  shape: ShapeSchema.describe(asDelegate("shape")),
+  min_tier: MinTierSchema.describe(asDelegate("min_tier")),
+  allow_downgrade: AllowDowngradeSchema.describe(asDelegate("allow_downgrade")),
   depends_on: z.array(z.string()).optional().describe("Task ids that must finish first; their reports are given to this worker as context"),
   context: z.string().optional(),
   role: z.string().optional(),
@@ -911,13 +946,13 @@ const PlanTaskSchema = z.object({
   review: z.boolean().optional().describe("Independent review of this task's result (overrides plan-level review)"),
   session_id: z.string().optional(),
   max_iterations: z.number().int().positive().optional(),
-  stall_abort_ms: StallAbortMsSchema,
-  stall_warn_ms: StallWarnMsSchema,
+  stall_abort_ms: StallAbortMsSchema.describe(asDelegate("stall_abort_ms")),
+  stall_warn_ms: StallWarnMsSchema.describe(asDelegate("stall_warn_ms")),
 });
 
 server.registerTool("run_plan", {
   title: "Run a plan: many workers in parallel with dependencies",
-  description: "Run delegated tasks as a dependency graph: independent ones in parallel, each with its own model, capabilities, acceptance criteria and verify command. A task whose prerequisite failed is skipped, and a dependant is given its prerequisites' reports. Use async for long plans. Per task, shape:'ship' uses the requested capabilities (default); shape:'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
+  description: "Run delegated tasks as a dependency graph: independent ones in parallel, each with its own model, capabilities, acceptance criteria and verify command. A task whose prerequisite failed is skipped, and a dependant is given its prerequisites' reports. Use async for long plans.",
   inputSchema: {
     goal: z.string().optional().describe("One line describing what the whole plan achieves (recorded in the ledger)"),
     tasks: z.array(PlanTaskSchema).min(1).max(40),
@@ -937,7 +972,7 @@ server.registerTool("run_plan", {
       return json({ job_id: job.id, state: job.state, tasks: a.tasks.map((t) => t.id), hint: "poll job_status for progress; job_result for the consolidated report" });
     }
     const r = await runPlan(ctx, a);
-    return text(`${r.report}\n\n---\nmeta: ${JSON.stringify({ ok: r.ok, order: r.order, usage: r.usage, cost_usd: r.costUsd, ms: r.ms, results: r.results.map(({ report: _r, meta: _m, ...rest }) => rest) })}`);
+    return text(`${r.report}\n\n---\nmeta: ${JSON.stringify({ ok: r.ok, order: r.order, usage: r.usage, cost_usd: r.costUsd, ms: r.ms, results: r.results.map(({ report: _r, meta: m, ...rest }) => ({ ...rest, ...((m as { truncated_by?: string } | undefined)?.truncated_by ? { unfinished: (m as { truncated_by: string }).truncated_by } : {}) })) })}`);
   } catch (e) {
     return fail(e);
   }
@@ -1684,10 +1719,6 @@ server.registerTool("bf_invoke", {
 
 // ------------------------------------------------------------ main
 async function main() {
-  // Fire and forget: a session must not wait on a git fetch, and a network that is down is
-  // not a reason for the gateway to be.
-  void refreshUpdates().catch(() => undefined);
-
   if (argv.includes("--selftest")) {
     // Print a config/provider summary and exit non-zero if nothing is usable.
     const rows = listProviderNames(ctx.config).map(providerReport);
@@ -1777,7 +1808,7 @@ async function main() {
           // Name the exact call. "call fleet_status" is not enough: without drain:true the events
           // stay pending and the next turn blocks on the identical list, which is a loop the
           // agent cannot escape by following the instruction it was given.
-          const reason = `${parts.join(", ")} - ${ciFailed.length ? "fix it before ending the turn" : "call fleet_status with drain:true to collect them"}`;
+          const reason = `${parts.join(", ")} - ${ciFailed.length ? "fix it, then call fleet_status with drain:true to clear it" : "call fleet_status with drain:true to collect them"}`;
           console.log(JSON.stringify({ decision: "block", reason }));
         }
       } catch {
@@ -1825,6 +1856,12 @@ async function main() {
   rlog("server", { event: "start", workspace: ctx.workspace.root, config: loaded.sources, stateless, pid: process.pid, version: VERSION });
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  // Only a long-lived server checks for updates, and only once it is answering. This used to
+  // run at the very top of main(), so every Stop hook - a fresh process at every turn end - and
+  // every one-shot CLI mode paid for it too, and the fetch inside was synchronous despite the
+  // "fire and forget" comment above it. A network that is down is not a reason for a session
+  // to wait, so nothing here is awaited.
+  setImmediate(() => void refreshUpdates().catch(() => undefined));
 }
 
 main().catch((e) => {

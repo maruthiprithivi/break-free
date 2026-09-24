@@ -4,6 +4,8 @@ description: Break Free — work-tracking discipline on GitHub for every piece o
 allowed-tools: Bash(gh *), Bash(git *)
 ---
 
+> Operations named below that are not in your tool list (the compact profile advertises only the execution tools) are called with `bf_invoke` - `{operation, arguments}` - and `bf_discover` lists every one with its schema.
+
 # break-free-github-flow: every unit of work is tracked, verified, and closed out on GitHub
 
 You never do engineering work in this repository without a GitHub issue that says what is being done, why, how it will be tested, and — when finished — what actually changed and how it was verified. This is not bureaucracy: the issue is the audit trail that lets a solo founder or a small team see, weeks later, what happened and why. Do it quietly and consistently; don't ask the user whether to track, just tell them the issue number.

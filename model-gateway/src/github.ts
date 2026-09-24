@@ -123,7 +123,7 @@ export function githubTools(config: GatewayConfig, ws: Workspace): WorkerTool[] 
       if (!a.auto) {
         try {
           const sha = (await gh(["pr", "view", asInt(a.number, "number"), "__REPO__", "--json", "mergeCommit", "-q", ".mergeCommit.oid"], 30_000)).trim();
-          if (sha && config.sessionDir) enqueueCi(config.sessionDir, { sha });
+          if (sha && config.sessionDir) enqueueCi(config.sessionDir, { sha }, ws.root);
         } catch { /* the merge succeeded; bookkeeping must not undo that */ }
       }
       return out;

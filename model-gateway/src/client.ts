@@ -109,8 +109,26 @@ export async function chatCompletion(
   // identical and both cost the full timeout.
   let headersSeen = false;
   const firstByteMs = opts.firstByteMs ?? 0;
-  const fbTimer = firstByteMs > 0
-    ? setTimeout(() => { if (!headersSeen) ctrl.abort(new Error("no_response")); }, firstByteMs)
+  // A timer that fires late is evidence about THIS process, not about the host. When the event
+  // loop is blocked - a synchronous git call, a lock wait, a laptop waking - the request may not
+  // even have left yet, and every overdue timer runs the moment the process wakes. That is what
+  // the deepseek circuit trips were: a 20000ms deadline logged at 23-84s, three of them inside
+  // 300ms, while another gateway got deepseek answers in two seconds. So a deadline that fired
+  // more than a second late was not measured, and is started again in full, once; and even an
+  // on-time abort waits one pass of the loop for I/O that has already arrived.
+  const armedAt = Date.now();
+  let restarted = false;
+  const check = () => {
+    if (headersSeen) return;
+    if (!restarted && Date.now() - armedAt - firstByteMs > 1_000) {
+      restarted = true;
+      fbTimer = setTimeout(() => setImmediate(check), firstByteMs);
+      return;
+    }
+    ctrl.abort(new Error("no_response"));
+  };
+  let fbTimer: ReturnType<typeof setTimeout> | undefined = firstByteMs > 0
+    ? setTimeout(() => setImmediate(check), firstByteMs)
     : undefined;
   const onOuterAbort = () => ctrl.abort(opts.signal?.reason);
   opts.signal?.addEventListener("abort", onOuterAbort, { once: true });

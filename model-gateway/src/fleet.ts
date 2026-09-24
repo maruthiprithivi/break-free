@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { atomicWrite, locked, sleepMs, withDirLock } from "./atomic.js";
 
 export type FleetEventKind = "job.done" | "job.failed" | "harness.exited" | "harness.output" | "harness.idle" | "ci.pending" | "ci.failed" | "provider.circuit_open";
 
@@ -47,7 +48,7 @@ export interface FleetSnapshot {
    * event is attributed to whichever gateway happened to observe it, so a crew session running
    * in one project blocks the turn-end guard of every other project on the machine.
    */
-  harness: Record<string, { state: string; digest: string; since: string; cwd?: string }>;
+  harness: Record<string, { state: string; digest: string; since: string; cwd?: string; idleReported?: string }>;
 }
 
 const QUEUE_FILE = "wake-queue.jsonl";
@@ -66,9 +67,18 @@ const PRUNE_AT = 500;
  * short enough to keep the file from growing without bound on machines that create worktrees.
  */
 const CURSOR_IDLE_RETIRE_MS = 30 * 24 * 60 * 60 * 1000;
-const LOCK_DIR = ".lock";
-/** A lock older than this belonged to a process that died holding it. */
-const LOCK_STALE_MS = 30_000;
+/**
+ * How long an event that belongs to no workspace can ask for attention.
+ *
+ * Unstamped events - a provider's circuit opening, a harness session with no known cwd - are
+ * shown to every workspace, including one that has never drained and inherits `baseline`, and
+ * nothing advances `baseline`. Without an expiry such a row was immortal: it blocked the first
+ * turn of every new worktree for ever, and because the deduplicator saw it as still pending, no
+ * new event with the same id could ever be raised again - one stale circuit-open row muted every
+ * later outage of that provider. A circuit's cooldown is minutes; an hour-old notice about it is
+ * history, not news.
+ */
+const UNSTAMPED_TTL_MS = 60 * 60 * 1000;
 const CURSOR_FILE = "cursor";
 const SNAPSHOT_FILE = "snapshot.json";
 const RESOLVED_FILE = "resolved.json";
@@ -105,7 +115,7 @@ export function readSnapshot(sessionDir: string, workspace?: string): FleetSnaps
 }
 
 export function writeSnapshot(sessionDir: string, snap: FleetSnapshot, workspace?: string): void {
-  fs.writeFileSync(snapshotFile(fleetDir(sessionDir), workspace), JSON.stringify(snap), { mode: 0o600 });
+  atomicWrite(snapshotFile(fleetDir(sessionDir), workspace), JSON.stringify(snap));
 }
 
 function parseTs(s: string): number | undefined {
@@ -166,9 +176,19 @@ export function classify(prev: FleetSnapshot | undefined, next: FleetSnapshot, i
 
       if (digestUnchanged) {
         const since = prevH!.since;
+        // One idle period is one event. `since` only moves when the pane changes, so it names the
+        // period. This used to be derived afresh on every check, so once the owning session drained
+        // it the next check raised it again: a harness waiting at a permission prompt blocked that
+        // session at every turn end until someone killed it. The period is marked on the snapshot
+        // being built - `next` is what gets persisted - and carried until the pane changes.
+        if (prevH!.idleReported === since) {
+          h.idleReported = since;
+          continue;
+        }
         const idle = elapsedMs(next.ts, since);
         if (idle !== undefined && idle > idleMs) {
           events.push({ ts: next.ts, kind: "harness.idle", id, reason: `idle for ${idle}ms`, ...(h.cwd ? { workspace: h.cwd } : {}) });
+          h.idleReported = since;
         }
       }
     }
@@ -222,14 +242,18 @@ function readResolvedSeqs(dir: string): number[] {
 
 function writeResolvedSeqs(dir: string, seqs: number[]): void {
   const unique = Array.from(new Set(seqs)).sort((a, b) => a - b);
-  fs.writeFileSync(path.join(dir, RESOLVED_FILE), JSON.stringify(unique), { mode: 0o600 });
+  atomicWrite(path.join(dir, RESOLVED_FILE), JSON.stringify(unique));
 }
 
 function markResolved(dir: string, seq: number): void {
-  const seqs = readResolvedSeqs(dir);
-  if (seqs.includes(seq)) return;
-  seqs.push(seq);
-  writeResolvedSeqs(dir, seqs);
+  // Read-modify-write of a file every gateway shares: unlocked, two resolutions at once lose one,
+  // and the event it resolved comes back.
+  locked(dir, () => {
+    const seqs = readResolvedSeqs(dir);
+    if (seqs.includes(seq)) return;
+    seqs.push(seq);
+    writeResolvedSeqs(dir, seqs);
+  });
 }
 
 function pendingEventsInDir(dir: string, workspace?: string): FleetEvent[] {
@@ -238,7 +262,27 @@ function pendingEventsInDir(dir: string, workspace?: string): FleetEvent[] {
   // An event belonging to another workspace is not this session's business: blocking a turn on
   // it is a false positive, and the only way to clear it is to discard a result nobody read.
   const mine = (e: FleetEvent) => !workspace || !e.workspace || e.workspace === workspace;
-  return readEventsFile(path.join(dir, QUEUE_FILE)).filter((e) => e.seq > cursor && !resolved.has(e.seq) && mine(e));
+  const now = Date.now();
+  // Every row, duplicates included: resolveJob and the CI resolvers have to reach each copy.
+  return readEventsFile(path.join(dir, QUEUE_FILE)).filter((e) => outstanding(e, cursor, resolved, now) && mine(e));
+}
+
+/**
+ * Collapse identical rows for reporting, keeping the LAST of each.
+ *
+ * The write side deduplicates only for code that has the deduplicator. A gateway started before
+ * it shipped keeps running the old appendEvents until its session restarts, and the Stop hook -
+ * a fresh process each turn - must not present its duplicates as four pieces of work.
+ *
+ * Keeping the last copy is what makes this safe to drain from: the highest seq overall is always
+ * the last copy of its own kind, so `max(seq)` over the collapsed list equals `max(seq)` over
+ * all of it, and draining to it clears every hidden duplicate too. Keeping the first would leave
+ * later copies above the cursor, to block again at the very next turn end.
+ */
+function collapse(events: FleetEvent[]): FleetEvent[] {
+  const last = new Map<string, FleetEvent>();
+  for (const e of events) last.set(`${e.kind}\u0000${e.id}\u0000${e.workspace ?? ""}`, e);
+  return [...last.values()].sort((a, b) => a.seq - b.seq);
 }
 
 /**
@@ -269,6 +313,23 @@ function pendingEventsInDir(dir: string, workspace?: string): FleetEvent[] {
  * sat far above them, so every unstamped event looked already-collected and duplicates were
  * waved through. Two identical `provider.circuit_open deepseek` rows blocked a real turn.
  */
+function expired(e: FleetEvent, now: number): boolean {
+  if (e.workspace) return false;
+  const ts = parseTs(e.ts);
+  return ts !== undefined && now - ts > UNSTAMPED_TTL_MS;
+}
+
+/**
+ * Whether an event still asks for attention, given the floor its reader or owner has reached.
+ *
+ * The one rule reads, deduplication and pruning all go through. It lived in pieces before and
+ * the pieces drifted: #90 fixed the floor for deduplication and left expiry out of all three,
+ * which is how a stale row came to mute every later alert with its id.
+ */
+function outstanding(e: FleetEvent, floor: number, resolved: Set<number>, now: number): boolean {
+  return e.seq > floor && !resolved.has(e.seq) && !expired(e, now);
+}
+
 function visibilityFloor(cursors: Cursors, workspace?: string): number {
   return workspace ? Math.max(cursors.baseline, cursors.byWorkspace[workspace] ?? 0) : cursors.baseline;
 }
@@ -279,8 +340,9 @@ function pendingMatcher(dir: string): (existing: FleetEvent[], event: Omit<Fleet
   return (existing, event, workspace) => {
     const ws = event.workspace ?? workspace;
     const floor = visibilityFloor(cursors, ws);
+    const now = Date.now();
     return existing.some(
-      (e) => e.seq > floor && !resolved.has(e.seq) && e.kind === event.kind && e.id === event.id && (e.workspace ?? undefined) === (ws ?? undefined),
+      (e) => outstanding(e, floor, resolved, now) && e.kind === event.kind && e.id === event.id && (e.workspace ?? undefined) === (ws ?? undefined),
     );
   };
 }
@@ -299,7 +361,7 @@ export function appendEvents(sessionDir: string, events: Omit<FleetEvent, "seq">
   // The lock makes the single-writer assumption true rather than aspirational. Failing to take
   // it is not a reason to drop a wake event, so an append that cannot get it still happens —
   // that is exactly today's behaviour, no worse.
-  const { out, total } = withQueueLock(dir, write) ?? write();
+  const { out, total } = withDirLock(dir, write) ?? write();
 
   // Outside the lock: pruneQueue takes it itself, and re-entering would deadlock.
   if (total >= PRUNE_AT) pruneQueue(sessionDir);
@@ -359,9 +421,22 @@ interface Cursors {
  * file still holding a bare integer is read as a baseline that applies to every workspace, so
  * upgrading does not re-emit everything already drained.
  */
+function isJsonish(raw: string): boolean {
+  if (/^\d+$/.test(raw)) return true; // the pre-workspace format: a bare baseline
+  try { JSON.parse(raw); return true; } catch { return false; }
+}
+
 function readCursors(dir: string): Cursors {
   try {
-    const raw = fs.readFileSync(path.join(dir, CURSOR_FILE), "utf8").trim();
+    const file = path.join(dir, CURSOR_FILE);
+    let raw = fs.readFileSync(file, "utf8").trim();
+    // A gateway from before atomic writes truncates, then writes. Caught in that gap the file is
+    // empty or half a document, and treating it as a fresh install would have the next drain
+    // write back {baseline: 0} and erase every workspace's position. Look once more first.
+    if (!raw || !isJsonish(raw)) {
+      sleepMs(20);
+      raw = fs.readFileSync(file, "utf8").trim();
+    }
     if (!raw) return { baseline: 0, byWorkspace: {}, lastSeen: {} };
     if (/^\d+$/.test(raw)) return { baseline: Number.parseInt(raw, 10), byWorkspace: {}, lastSeen: {} };
     const j = JSON.parse(raw) as Partial<Cursors>;
@@ -386,54 +461,64 @@ function readCursor(dir: string, workspace?: string): number {
 
 export function pendingEvents(sessionDir: string, workspace?: string): FleetEvent[] {
   const dir = fleetDir(sessionDir);
-  return pendingEventsInDir(dir, workspace);
+  return collapse(pendingEventsInDir(dir, workspace));
 }
 
-function findNonDrainedCiPending(dir: string, sha: string): FleetEvent | undefined {
-  const cursor = readCursor(dir);
-  return readEventsFile(path.join(dir, QUEUE_FILE)).find(
-    (e) => e.kind === "ci.pending" && e.seq > cursor && e.ci?.sha === sha,
+/**
+ * Unresolved CI rows belonging to one workspace, independent of any cursor.
+ *
+ * Whether a run has finished is a fact about the run, not about who has read the event, so this
+ * never consults a cursor. The previous version read the "" key, which no named workspace ever
+ * advances, and could miss the owner's own row or match another project's.
+ */
+function unresolvedCi(dir: string, workspace: string | undefined, kind: "ci.pending" | "ci.failed" = "ci.pending"): FleetEvent[] {
+  const resolved = new Set(readResolvedSeqs(dir));
+  return readEventsFile(path.join(dir, QUEUE_FILE)).filter(
+    (e) => e.kind === kind && !resolved.has(e.seq) && (e.workspace ?? undefined) === (workspace ?? undefined),
   );
 }
 
-function resolveCiPending(sessionDir: string, dir: string, event: FleetEvent): void {
-  // The queue is append-only. If this pending event is the oldest thing still
-  // waiting, advancing the cursor naturally drains it. Otherwise we can only
-  // mark its seq in the sidecar so pendingEvents skips it without rewriting
-  // wake-queue.jsonl and without draining unrelated, older pending events.
-  const pending = pendingEventsInDir(dir);
-  const oldest = pending.length > 0 ? pending[0] : undefined;
-  if (oldest !== undefined && oldest.seq === event.seq) {
-    drainTo(sessionDir, event.seq);
-  } else {
-    markResolved(dir, event.seq);
-  }
+function resolveCiPending(_sessionDir: string, dir: string, event: FleetEvent): void {
+  // Resolution is a fact about the CI run, not about who has read the event, so it goes in the
+  // global sidecar. The old fast path "if this is the oldest pending row, advance the cursor"
+  // called drainTo without a workspace, which only moved the "" key - a cursor no named
+  // workspace reads - so the owner kept seeing a run that had already finished.
+  markResolved(dir, event.seq);
 }
 
 /**
  * Record that a CI run for `sha` is underway. One pending event per sha is
  * enough: a duplicate would make the same push block twice.
  */
-export function enqueueCi(sessionDir: string, ci: { repo?: string; branch?: string; sha: string }): FleetEvent {
+/**
+ * Record that a push or merge started a run somebody has to look at.
+ *
+ * Stamped with the workspace that pushed. Unstamped, the row was pending for every session on
+ * the machine: each one's Stop hook blocked on another project's push, reconciled it with `gh`
+ * in a repo that had never heard of that sha, and - where `gh` could not answer at all - expired
+ * it, silently cancelling the owner's watch.
+ */
+export function enqueueCi(sessionDir: string, ci: { repo?: string; branch?: string; sha: string }, workspace?: string): FleetEvent {
   const dir = fleetDir(sessionDir);
-  const existing = findNonDrainedCiPending(dir, ci.sha);
+  const existing = unresolvedCi(dir, workspace).find((e) => e.ci?.sha === ci.sha);
   if (existing) return existing;
 
   const [event] = appendEvents(sessionDir, [
     { ts: new Date().toISOString(), kind: "ci.pending", id: ci.sha, reason: "ci.pending", ci },
-  ]);
-  return event;
+  ], workspace);
+  return event ?? unresolvedCi(dir, workspace).find((e) => e.ci?.sha === ci.sha)!;
 }
 
 export function resolveCi(
   sessionDir: string,
   sha: string,
   outcome: { state: "pending" | "success" | "failed"; runId?: number; url?: string; job?: string },
+  workspace?: string,
 ): void {
   if (outcome.state === "pending") return;
 
   const dir = fleetDir(sessionDir);
-  const pending = pendingEventsInDir(dir).find((e) => e.kind === "ci.pending" && e.ci?.sha === sha);
+  const pending = unresolvedCi(dir, workspace).find((e) => e.ci?.sha === sha);
 
   if (pending) resolveCiPending(sessionDir, dir, pending);
 
@@ -457,16 +542,17 @@ export function resolveCi(
           deployment: pending?.ci?.deployment,
         },
       },
-    ]);
+    ], workspace);
   }
 }
 
-export function expireCi(sessionDir: string, now: number, timeoutMs: number): number {
+export function expireCi(sessionDir: string, now: number, timeoutMs: number, workspace?: string): number {
   const dir = fleetDir(sessionDir);
   let expired = 0;
 
-  for (const event of pendingEventsInDir(dir)) {
-    if (event.kind !== "ci.pending") continue;
+  // Only this workspace's runs. A session whose `gh` cannot answer - no auth, not a GitHub
+  // repo - used to expire every project's CI watch on the machine.
+  for (const event of unresolvedCi(dir, workspace)) {
     const ts = parseTs(event.ts);
     if (ts === undefined || now - ts <= timeoutMs) continue;
 
@@ -475,47 +561,6 @@ export function expireCi(sessionDir: string, now: number, timeoutMs: number): nu
   }
 
   return expired;
-}
-
-/** Block this thread briefly. The queue's callers are synchronous, so the wait must be too. */
-function sleepMs(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * One writer at a time, across processes.
- *
- * The file's own comment said it "assumes a single writer", but in practice a gateway runs per
- * workspace and per worktree, all sharing one session directory — which is how a finished job
- * came to be announced fifteen times. `mkdir` is atomic on every platform we run on and needs
- * no dependency, so it is the mutex. A holder that crashes would otherwise wedge the queue
- * forever, so a lock older than LOCK_STALE_MS is treated as abandoned rather than respected.
- */
-function withQueueLock<T>(dir: string, fn: () => T, waitMs = 2_000): T | undefined {
-  const lock = path.join(dir, LOCK_DIR);
-  const deadline = Date.now() + waitMs;
-  for (;;) {
-    try {
-      fs.mkdirSync(lock);
-      break;
-    } catch {
-      try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
-          fs.rmSync(lock, { recursive: true, force: true });
-          continue;
-        }
-      } catch {
-        // It vanished between the two calls: the holder just released it, so try to take it.
-      }
-      if (Date.now() >= deadline) return undefined;
-      sleepMs(25);
-    }
-  }
-  try {
-    return fn();
-  } finally {
-    try { fs.rmSync(lock, { recursive: true, force: true }); } catch { /* releasing must not throw */ }
-  }
 }
 
 /**
@@ -539,7 +584,7 @@ function withQueueLock<T>(dir: string, fn: () => T, waitMs = 2_000): T | undefin
  */
 export function pruneQueue(sessionDir: string): { removed: number; kept: number } {
   const dir = fleetDir(sessionDir);
-  return withQueueLock(dir, () => {
+  return withDirLock(dir, () => {
     const file = path.join(dir, QUEUE_FILE);
     const text = readFileText(file);
     if (text === undefined) return { removed: 0, kept: 0 };
@@ -548,7 +593,8 @@ export function pruneQueue(sessionDir: string): { removed: number; kept: number 
 
     const cursors = readCursors(dir);
     const resolved = new Set(readResolvedSeqs(dir));
-    const visible = (e: FleetEvent) => !resolved.has(e.seq) && e.seq > visibilityFloor(cursors, e.workspace);
+    const now = Date.now();
+    const visible = (e: FleetEvent) => outstanding(e, visibilityFloor(cursors, e.workspace), resolved, now);
 
     // The highest seq always stays, whether or not anyone can still see it: the file is also
     // the allocator's memory. Prune it away and the next append restarts below the cursors,
@@ -561,10 +607,8 @@ export function pruneQueue(sessionDir: string): { removed: number; kept: number 
     // their rows away. Pruning is opportunistic; losing a wake event is not.
     if (fs.statSync(file).size !== Buffer.byteLength(text)) return { removed: 0, kept: events.length };
 
-    const tmp = path.join(dir, `${QUEUE_FILE}.${process.pid}.tmp`);
-    fs.writeFileSync(tmp, keep.map((e) => JSON.stringify(e)).join("\n") + "\n", { mode: 0o600 });
     // Atomic: a concurrent reader sees either the whole old file or the whole new one.
-    fs.renameSync(tmp, file);
+    atomicWrite(file, keep.map((e) => JSON.stringify(e)).join("\n") + "\n");
 
     // The sidecar only has to remember seqs that still have a row to skip.
     const surviving = new Set(keep.map((e) => e.seq));
@@ -594,7 +638,7 @@ function retireIdleCursors(dir: string, cursors: Cursors, now = Date.now()): num
     delete cursors.byWorkspace[ws];
     delete cursors.lastSeen[ws];
   }
-  fs.writeFileSync(path.join(dir, CURSOR_FILE), JSON.stringify(cursors), { mode: 0o600 });
+  atomicWrite(path.join(dir, CURSOR_FILE), JSON.stringify(cursors));
   return retired.length;
 }
 
@@ -606,13 +650,17 @@ function retireIdleCursors(dir: string, cursors: Cursors, now = Date.now()): num
  */
 export function drainTo(sessionDir: string, seq: number, workspace?: string): void {
   const dir = fleetDir(sessionDir);
-  const cursors = readCursors(dir);
-  const key = workspace ?? "";
-  const current = Math.max(cursors.baseline, cursors.byWorkspace[key] ?? 0);
-  if (seq <= current) return;
-  cursors.byWorkspace[key] = seq;
-  cursors.lastSeen[key] = Date.now();
-  fs.writeFileSync(path.join(dir, CURSOR_FILE), JSON.stringify(cursors), { mode: 0o600 });
+  // Two sessions blocked by the same row drain it at the same moment. Unlocked, the second
+  // write replaced the first with a copy read before it, and one workspace's drain was lost.
+  locked(dir, () => {
+    const cursors = readCursors(dir);
+    const key = workspace ?? "";
+    const current = Math.max(cursors.baseline, cursors.byWorkspace[key] ?? 0);
+    if (seq <= current) return;
+    cursors.byWorkspace[key] = seq;
+    cursors.lastSeen[key] = Date.now();
+    atomicWrite(path.join(dir, CURSOR_FILE), JSON.stringify(cursors));
+  });
 }
 
 /**
@@ -626,12 +674,17 @@ export function drainTo(sessionDir: string, seq: number, workspace?: string): vo
  */
 export function resolveJob(sessionDir: string, jobId: string): number {
   const dir = fleetDir(sessionDir);
-  let resolved = 0;
-  for (const event of pendingEventsInDir(dir)) {
-    if (event.id !== jobId) continue;
-    if (event.kind !== "job.done" && event.kind !== "job.failed") continue;
-    markResolved(dir, event.seq);
-    resolved += 1;
-  }
-  return resolved;
+  // Every unresolved row for the job, whatever any cursor says. This walked pendingEventsInDir
+  // with no workspace, i.e. through the "" cursor - which on a live machine had run to 1368,
+  // past nearly every row - so reading a job's result often left its wake event behind.
+  let count = 0;
+  locked(dir, () => {
+    const done = new Set(readResolvedSeqs(dir));
+    const seqs = readEventsFile(path.join(dir, QUEUE_FILE))
+      .filter((e) => e.id === jobId && (e.kind === "job.done" || e.kind === "job.failed") && !done.has(e.seq))
+      .map((e) => e.seq);
+    if (seqs.length) writeResolvedSeqs(dir, [...done, ...seqs]);
+    count = seqs.length;
+  });
+  return count;
 }

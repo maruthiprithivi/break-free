@@ -25,7 +25,10 @@ afterEach(() => {
   fs.rmSync(sessionDir, { recursive: true, force: true });
 });
 
-const t = (ms) => new Date(ms).toISOString();
+// Offsets from now, not from 1970: an event that belongs to no workspace expires after an hour
+// (fleet.ts UNSTAMPED_TTL_MS), and a 1970 timestamp is fifty-six years past it.
+const BASE = Date.now();
+const t = (ms) => new Date(BASE + ms).toISOString();
 
 test("seq increments across separate appendEvents calls", () => {
   const first = appendEvents(sessionDir, [{ ts: t(0), kind: "job.done", id: "j1", reason: "done" }]);

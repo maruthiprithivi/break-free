@@ -133,6 +133,29 @@ export function verifyMeta(v: CommandResult | undefined): VerifyMeta | null {
 
 const stamp = () => new Date().toISOString();
 
+/**
+ * A worker that was stopped by a limit did not finish, and the report has to say so first.
+ *
+ * It used to be one meta flag after the answer, which the lead rarely reads - and in run_plan the
+ * task was marked DONE and the flag never reached the lead at all. 17 of 23 empty delegate reports
+ * on one machine were a model that spent all 8192 output tokens reasoning and returned nothing.
+ */
+export function unfinishedNote(r: Pick<RunResult, "truncatedBy" | "maxTokens" | "maxIterations" | "text">): string {
+  if (r.truncatedBy === "max_tokens") {
+    const empty = !r.text?.trim() ? " It spent the whole budget reasoning and returned nothing." : " What follows is cut off.";
+    return `> **Unfinished: the answer hit the output limit${r.maxTokens ? ` (max_tokens ${r.maxTokens})` : ""}.**${empty} Raise max_tokens for this task, or split it.\n\n`;
+  }
+  if (r.truncatedBy === "tool_budget") {
+    return `> **Unfinished: the worker used all ${r.maxIterations ?? "its"} tool iterations** and was told to answer with what it had. Check the work, then raise max_iterations or split the task.\n\n`;
+  }
+  return "";
+}
+
+/** The one-line form, for a plan's summary row. */
+export function unfinishedTag(r: Pick<RunResult, "truncatedBy">): string {
+  return r.truncatedBy === "max_tokens" ? "UNFINISHED: hit max_tokens" : r.truncatedBy === "tool_budget" ? "UNFINISHED: ran out of tool iterations" : "";
+}
+
 export function summarize(r: RunResult): Record<string, unknown> {
   return {
     model: r.usedModel,
@@ -147,6 +170,7 @@ export function summarize(r: RunResult): Record<string, unknown> {
     cost_usd: r.costUsd,
     ...(r.unpriced ? { unpriced: true } : {}),
     truncated: r.truncated,
+    ...(r.truncatedBy ? { truncated_by: r.truncatedBy } : {}),
   };
 }
 
@@ -308,7 +332,7 @@ export async function delegate(ctx: Ctx, a: DelegateArgs, progress?: (s: string)
   const tripMeta = trip
     ? { ran: trip.ran, verdict: trip.verdict, flagged: trip.flagged, blocked: trip.blocked, hunks: trip.hunks.length, ms: trip.ms, cost_usd: trip.cost_usd, clean: trip.clean, skip_plan_review: tripSkipReview, ...(trip.skipped ? { skipped: trip.skipped } : {}), flags: trip.hunks.filter((h) => h.verdict !== "allow").map((h) => ({ file: h.file, verdict: h.verdict, reasons: h.reasons, test_weakened: h.flags.test_weakened, security_touch: h.flags.security_touch, destructive_data: h.flags.destructive_data, scope_creep: h.flags.scope_creep, risk: h.flags.risk })) }
     : undefined;
-  return { text: run.text + scoutNote + verifyText(v) + tripText + polText, meta: { ...summarize(run), requested_model: requested, tier: usedTier ?? null, downgraded, shape: a.shape ?? "ship", session_id: a.session_id ?? null, harness_context: harness.sources, mcp_servers: a.mcp_servers ?? [], verify: verifyMeta(v), ...(handovers.length ? { handovers } : {}), ...(route ? { route } : {}), ...(tripMeta ? { tripwire: tripMeta } : {}), policy: pol ? { changed: pol.changed, review_required: pol.hits, verdict: pol.review?.verdict ?? null, reviewer: pol.review?.model ?? null } : null, at: stamp() }, run };
+  return { text: unfinishedNote(run) + run.text + scoutNote + verifyText(v) + tripText + polText, meta: { ...summarize(run), requested_model: requested, tier: usedTier ?? null, downgraded, shape: a.shape ?? "ship", session_id: a.session_id ?? null, harness_context: harness.sources, mcp_servers: a.mcp_servers ?? [], verify: verifyMeta(v), ...(handovers.length ? { handovers } : {}), ...(route ? { route } : {}), ...(tripMeta ? { tripwire: tripMeta } : {}), policy: pol ? { changed: pol.changed, review_required: pol.hits, verdict: pol.review?.verdict ?? null, reviewer: pol.review?.model ?? null } : null, at: stamp() }, run };
 }
 
 // -------------------------------------------------------------------- review
@@ -963,7 +987,8 @@ export async function runPlan(ctx: Ctx, a: RunPlanArgs): Promise<RunPlanResult> 
   // A task a reviewer sent back is not a completed plan, whatever else finished around it.
   const ok = rows.every((r) => r.status === "done" || r.status === "escalated");
   const escalated = rows.filter((r) => r.status === "escalated");
-  const line = (r: PlanTaskResult) => `- **${r.id}** — ${r.status.toUpperCase()}${r.route ? ` · lane ${r.route.lane}${r.route.confidence !== null ? ` (${r.route.confidence.toFixed(2)})` : ""}` : ""}${r.model ? ` (${r.model}, ${Math.round(r.ms / 1000)}s)` : ""}${r.verify ? ` · verify ${r.verify.ok ? "ok" : "FAILED"}` : ""}${r.review ? ` · review ${r.review.verdict}` : ""}${r.tripwire && r.tripwire.verdict !== "allow" ? ` · tripwire ${String(r.tripwire.verdict).toUpperCase()}` : ""}${r.error ? ` — ${r.error.slice(0, 200)}` : ""}`;
+  const unfinished = (r: PlanTaskResult) => unfinishedTag({ truncatedBy: (r.meta as { truncated_by?: RunResult["truncatedBy"] } | undefined)?.truncated_by });
+  const line = (r: PlanTaskResult) => `- **${r.id}** — ${r.status.toUpperCase()}${r.route ? ` · lane ${r.route.lane}${r.route.confidence !== null ? ` (${r.route.confidence.toFixed(2)})` : ""}` : ""}${r.model ? ` (${r.model}, ${Math.round(r.ms / 1000)}s)` : ""}${r.verify ? ` · verify ${r.verify.ok ? "ok" : "FAILED"}` : ""}${r.review ? ` · review ${r.review.verdict}` : ""}${r.tripwire && r.tripwire.verdict !== "allow" ? ` · tripwire ${String(r.tripwire.verdict).toUpperCase()}` : ""}${unfinished(r) ? ` · **${unfinished(r)}**` : ""}${r.error ? ` — ${r.error.slice(0, 200)}` : ""}`;
   const routeTable = routeResult.decisions.length
     ? [
         "## Routing",
@@ -987,7 +1012,9 @@ export async function runPlan(ctx: Ctx, a: RunPlanArgs): Promise<RunPlanResult> 
     "",
     ...rows.filter((r) => r.report).flatMap((r) => [`## ${r.id} — ${r.model}`, r.report!.slice(0, 8000), ...(r.review ? [`### Review (${r.review.verdict}${r.review.confidence !== undefined ? `, confidence ${r.review.confidence}` : ""})`, r.review.summary ?? "", ...(r.review.issues ?? []).slice(0, 8).map((i) => `- [${i.severity}] ${i.title ?? ""}${i.file ? ` (${i.file}${i.line ? `:${i.line}` : ""})` : ""}: ${i.detail}`)] : []), ""]),
     ...(escalated.length ? ["## Escalated to you (routing would not guess)", "", ...escalated.map((r) => `- **${r.id}** — ${r.route?.reason ?? "escalated"}${r.error ? `: ${r.error}` : ""}`), ""] : []),
-    ...(rows.some((r) => r.status !== "done" && r.status !== "escalated") ? ["## Needs your decision", ...rows.filter((r) => r.status !== "done" && r.status !== "escalated").map((r) => `- ${r.id}: ${r.status} — ${r.error ?? ""}`), ""] : []),
+    // A task a limit stopped stays DONE - its verify may well have passed, and dependants should not
+    // be held - but it is listed here, because "done" was hiding that the worker never finished.
+    ...(rows.some((r) => (r.status !== "done" && r.status !== "escalated") || unfinished(r)) ? ["## Needs your decision", ...rows.filter((r) => r.status !== "done" && r.status !== "escalated").map((r) => `- ${r.id}: ${r.status} — ${r.error ?? ""}`), ...rows.filter((r) => r.status === "done" && unfinished(r)).map((r) => `- ${r.id}: done, but ${unfinished(r).replace(/^UNFINISHED: /, "the worker ")} - check it before relying on it`), ""] : []),
   ].join("\n");
   if (track) ctx.ledger.journal(`run_plan ${ok ? "completed" : "INCOMPLETE"}: ${rows.filter((r) => r.status === "done").length}/${rows.length} done${escalated.length ? `, ${escalated.length} escalated to the lead` : ""}`);
   return { goal: a.goal, ok, results: rows, order, report, usage, costUsd: Math.round(planCost * 1e6) / 1e6, ms: Date.now() - started, routing: routeResult.decisions.length ? routeResult : undefined };

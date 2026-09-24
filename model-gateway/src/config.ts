@@ -14,6 +14,7 @@
 import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
+import { atomicWrite, locked } from "./atomic.js";
 import os from "node:os";
 import { PROVIDER_CATALOG } from "./providers.js";
 
@@ -76,10 +77,13 @@ const ConfigSchema = z.object({
       maxTokens: z.number().int().positive().default(8192),
       timeoutMs: z.number().int().positive().default(180_000),
       /**
-       * Default wait for response headers. Generous — fifty times the 366ms measured against a
-       * real provider — so it only fires for a host that has genuinely stopped answering, not
-       * for a model taking its time. A provider that buffers headers until its body is ready
-       * can raise or disable it with providers.<name>.firstByteMs.
+       * Default wait for response headers. Generous - fifty times the 366ms measured against a
+       * real provider - so it fires for a host that has stopped answering, not for a model taking
+       * its time: DeepSeek answered 426 calls past 20s under it, because it sends headers first.
+       *
+       * Not every host does. Ollama sends nothing until the whole answer is ready, so for it this
+       * would measure generation time; the provider catalog turns it off there (#81). A provider
+       * that behaves the same way can set providers.<name>.firstByteMs to 0.
        */
       firstByteMs: z.number().int().min(0).default(20_000),
       /**
@@ -767,16 +771,28 @@ export function loadConfig(opts: { workspaceRoot?: string; configPath?: string }
 }
 
 /** Save a partial config into the user config file (merging with what is there). */
+/**
+ * Merge a patch into a config file that every gateway on the machine reads.
+ *
+ * It was read, merged and rewritten in place with nothing stopping another gateway doing the
+ * same: two configure_* calls at once lost one patch, and a gateway starting in the gap between
+ * truncate and write failed to parse the file and did not start at all. Now under the directory
+ * lock, re-read inside it, and replaced through a rename. A file that cannot be parsed is never
+ * written over - readJson throws, and that is the right answer for the only copy of someone's
+ * provider settings.
+ */
 export function saveConfigPatch(writePath: string, patch: Record<string, unknown>): void {
-  const existing = (readJson(writePath) as Record<string, unknown> | undefined) ?? {};
-  const merged = deepMerge(existing, patch);
-  fs.mkdirSync(path.dirname(writePath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(writePath, JSON.stringify(merged, null, 2) + "\n", { mode: 0o600 });
-  try {
-    fs.chmodSync(writePath, 0o600);
-  } catch {
-    /* windows */
-  }
+  const dir = path.dirname(writePath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const write = () => {
+    const existing = (readJson(writePath) as Record<string, unknown> | undefined) ?? {};
+    atomicWrite(writePath, JSON.stringify(deepMerge(existing, patch), null, 2) + "\n", 0o600);
+  };
+  // The lock is for the machine-wide file every gateway shares. A project's .model-gateway.json
+  // sits in the repository root, where a lock directory would show up in the user's working tree
+  // (and stay there if a process died holding it); it is written rarely, and atomically.
+  if (path.basename(writePath) === ".model-gateway.json") write();
+  else locked(dir, write);
 }
 
 /** Resolve "${VAR}" / "$VAR" references. */
@@ -834,7 +850,7 @@ export function resolveProvider(config: GatewayConfig, name: string): ResolvedPr
     kind: catalog?.kind ?? "chat",
     extraBody: catalog?.extraBody || pc?.extraBody ? { ...(catalog?.extraBody ?? {}), ...(pc?.extraBody ?? {}) } : undefined,
     timeoutMs: pc?.timeoutMs,
-    firstByteMs: pc?.firstByteMs,
+    firstByteMs: pc?.firstByteMs ?? catalog?.firstByteMs,
     bodyStallMs: pc?.bodyStallMs,
     docs: catalog?.docs ?? "",
     notes: catalog?.notes,

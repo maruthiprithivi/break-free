@@ -231,6 +231,17 @@ export interface RunResult {
   costUsd: number;
   unpriced: boolean;
   truncated: boolean;
+  /**
+   * Which limit stopped the worker, when one did. Two different failures shared one flag, and
+   * reading it as one gave the wrong fix: of 150 truncated job results on one machine, about 110
+   * ran out of tool iterations and about 40 hit max_tokens - most of those having spent the whole
+   * budget reasoning and returned nothing at all.
+   */
+  truncatedBy?: "max_tokens" | "tool_budget";
+  /** The output limit in force, so a report can say what to raise. */
+  maxTokens?: number;
+  /** The tool-iteration limit in force. */
+  maxIterations?: number;
 }
 
 export function selectTools(config: GatewayConfig, ws: Workspace | undefined, caps: Capability[]): WorkerTool[] {
@@ -270,6 +281,7 @@ export async function runWorker(config: GatewayConfig, opts: RunOptions): Promis
   let used: Candidate | undefined;
   let text = "";
   let truncated = false;
+  let truncatedBy: RunResult["truncatedBy"];
   let iterations = 0;
   let writesWarned = false;
 
@@ -430,7 +442,7 @@ export async function runWorker(config: GatewayConfig, opts: RunOptions): Promis
       pushMsg({ role: "assistant", content: msg.content ?? "", tool_calls: msg.tool_calls });
       if (!msg.tool_calls?.length) {
         text = msg.content ?? "";
-        if (r.response.finishReason === "length") truncated = true;
+        if (r.response.finishReason === "length") { truncated = true; truncatedBy = "max_tokens"; }
         break;
       }
       // Normalise tool calls: some providers send arguments as an object, omit ids, etc.
@@ -485,6 +497,7 @@ export async function runWorker(config: GatewayConfig, opts: RunOptions): Promis
       }
       if (iterations === maxIter) {
         truncated = true;
+        truncatedBy = "tool_budget";
         // Ask for a final answer without tools.
         const final = await routeChat(config, pinned, (c) => ({ ...build(c), tools: undefined, messages: [{ role: "system", content: opts.system }, ...history, { role: "user", content: "Tool budget exhausted. Give your final answer now using what you have." }] }), { signal });
         text = final.response.message.content ?? "";
@@ -506,6 +519,9 @@ export async function runWorker(config: GatewayConfig, opts: RunOptions): Promis
       costUsd: Math.round(costUsd * 1e6) / 1e6,
       unpriced,
       truncated,
+      ...(truncatedBy ? { truncatedBy } : {}),
+      maxTokens: opts.maxTokens ?? config.defaults.maxTokens,
+      maxIterations: maxIter,
     };
   } finally {
     // The watchdog outlives the loop otherwise, and a finished run must not keep warning.

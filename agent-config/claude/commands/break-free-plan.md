@@ -3,6 +3,8 @@ description: Decompose a goal into parallel tasks and run them on worker models 
 argument-hint: <goal>
 allowed-tools: mcp__break-free-gateway, Bash(git diff *), Bash(git status *), Bash(git log *)
 ---
+
+> Operations named below that are not in your tool list (the compact profile advertises only the execution tools) are called with `bf_invoke` - `{operation, arguments}` - and `bf_discover` lists every one with its schema.
 Follow the `break-free-model-gateway` skill's "lead's loop" for: `$ARGUMENTS`
 
 1. `ledger_resume` (create with `init:true` if missing). `code_map` if you don't know the codebase yet.

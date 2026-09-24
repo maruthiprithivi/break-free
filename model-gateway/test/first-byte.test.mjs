@@ -165,3 +165,54 @@ test("the stall deadline is off when it is zero, and the total budget still appl
     assert.equal(err.reason, "timeout", "with no stall deadline a wedged body is an ordinary timeout again");
   } finally { srv.close(); }
 });
+
+// --- which hosts get a header deadline, and what a late timer means -------------------------
+// ollama sends no headers until the whole answer is ready (ttfb=19.50s total=19.50s), so a header
+// deadline there measures generation time and kills healthy answers. DeepSeek sends headers first
+// and answered 426 calls past 20s under the same deadline, so it keeps the fast failure. And the
+// deepseek "no_response" trips that looked like the opposite were this process freezing: timers
+// set for 20000ms fired at 23-84s, three within 300ms, while another process got answers in 2s.
+
+test("the header deadline stays on by default, and is off for ollama, which buffers headers", async () => {
+  const { loadConfig, resolveProvider } = await import("../dist/config.js");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "fb-default-"));
+  const cfg = loadConfig({ workspaceRoot: tmp, configPath: path.join(tmp, "none.json") }).config;
+  assert.equal(cfg.defaults.firstByteMs, 20_000, "a host that sends headers first still gets the fast failure");
+  assert.equal(resolveProvider(cfg, "ollama").firstByteMs, 0, "ollama's headers arrive with its answer, so the deadline would measure generation");
+  assert.equal(resolveProvider(cfg, "deepseek").firstByteMs, undefined, "no catalog opinion: the default applies");
+});
+
+test("a deadline that passed while this process was frozen is started again, not trusted", async () => {
+  // The server lives in another process: freezing this one must not freeze it, exactly as a
+  // real provider keeps answering while a gateway is blocked on a synchronous call.
+  const { spawn } = await import("node:child_process");
+  const child = spawn(process.execPath, ["-e", `
+    const http = require("http");
+    const s = http.createServer((q, r) => setTimeout(() => {
+      r.writeHead(200, { "content-type": "application/json" });
+      r.end(JSON.stringify({ id: "c", choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "answered once it was asked" } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+    }, 100));
+    s.listen(0, "127.0.0.1", () => console.log(s.address().port));
+  `], { stdio: ["ignore", "pipe", "inherit"] });
+  const port = await new Promise((resolve) => child.stdout.once("data", (b) => resolve(Number(String(b).trim()))));
+  try {
+    // Freeze BEFORE the request can leave: the case that matters. The 300ms deadline passes while
+    // the request is still unsent, and without the restart the overdue timer aborts the moment
+    // the process wakes - before the host has even seen the request. (Freezing after it has
+    // left does not reproduce anything: Node reads the reply before the late abort lands.)
+    const pending = chatCompletion(provider(port), req, { timeoutMs: 60_000, firstByteMs: 300 });
+    const t0 = Date.now(); while (Date.now() - t0 < 1_500) { /* blocked, as on a sync git call */ }
+    const r = await pending;
+    assert.equal(r.message.content, "answered once it was asked", "the deadline measured the freeze, not the host");
+  } finally { child.kill(); }
+});
+
+test("a host that is genuinely silent is still caught, freeze or no freeze", async () => {
+  const started = Date.now();
+  const err = await chatCompletion(provider(silent.port), req, { timeoutMs: 60_000, firstByteMs: 300 }).then(() => undefined, (e) => e);
+  assert.equal(err?.reason, "no_response", "the guard delays the verdict; it does not change it");
+  assert.ok(Date.now() - started < 5_000);
+});
