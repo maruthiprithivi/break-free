@@ -874,7 +874,7 @@ const COMMANDS: Record<string, { flags: string[]; usage: string }> = {
   },
   firstmate: {
     flags: [],
-    usage: "bf firstmate\n    Firstmate is the entry point; start your home directly; `bf firstmate profiles` generates dispatch profiles.",
+    usage: "bf firstmate\n    Firstmate is the entry point; start your home directly.",
   },
   help: { flags: [], usage: "bf help" },
 };

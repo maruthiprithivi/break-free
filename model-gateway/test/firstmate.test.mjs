@@ -13,7 +13,7 @@ test("bf firstmate prints the migration notice and exits 2", () => {
   const result = spawnSync(process.execPath, [cli, "firstmate"], { encoding: "utf8" });
   assert.equal(result.status, 2);
   assert.match(result.stderr, /Firstmate is the entry point; start your home directly/);
-  assert.match(result.stderr, /bf firstmate profiles/);
+  assert.doesNotMatch(result.stderr, /profiles/);
   assert.equal(result.stderr.trim(), FIRSTMATE_DEPRECATION);
 });
 
