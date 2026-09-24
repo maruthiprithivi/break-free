@@ -972,7 +972,7 @@ server.registerTool("run_plan", {
       return json({ job_id: job.id, state: job.state, tasks: a.tasks.map((t) => t.id), hint: "poll job_status for progress; job_result for the consolidated report" });
     }
     const r = await runPlan(ctx, a);
-    return text(`${r.report}\n\n---\nmeta: ${JSON.stringify({ ok: r.ok, order: r.order, usage: r.usage, cost_usd: r.costUsd, ms: r.ms, results: r.results.map(({ report: _r, meta: _m, ...rest }) => rest) })}`);
+    return text(`${r.report}\n\n---\nmeta: ${JSON.stringify({ ok: r.ok, order: r.order, usage: r.usage, cost_usd: r.costUsd, ms: r.ms, results: r.results.map(({ report: _r, meta: m, ...rest }) => ({ ...rest, ...((m as { truncated_by?: string } | undefined)?.truncated_by ? { unfinished: (m as { truncated_by: string }).truncated_by } : {}) })) })}`);
   } catch (e) {
     return fail(e);
   }
