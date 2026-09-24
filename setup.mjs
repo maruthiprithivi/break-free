@@ -163,7 +163,14 @@ async function build() {
     report.info("running the gateway's own test-suite (mock provider, ~5-15 s)…");
     // Explicit file list: a bare `node --test` would also execute test/mock-provider.mjs as a script and hang forever.
     const files = fs.readdirSync(path.join(GW, "test")).filter((f) => f.endsWith(".test.mjs")).map((f) => path.join("test", f));
-    const t = await run(NODE, ["--test", "--test-reporter=tap", "--test-timeout=60000", ...files], { cwd: GW, timeoutMs: 180_000 });
+    // The suite runs on the user's own machine, so it runs in a scrubbed environment. Inherited,
+    // it saw real provider keys - one test made live, paid calls to api.typesafe.ai - and the
+    // harness markers of whatever session launched the installer, so installing from inside
+    // Claude Code reported "6 failed" for tests that pass everywhere else. Only what a process
+    // needs to run is passed through.
+    const keep = ["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "USER", "LOGNAME", "SHELL", "TERM", "SYSTEMROOT", "COMSPEC", "PATHEXT"];
+    const hermetic = Object.fromEntries(keep.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]));
+    const t = await run(NODE, ["--test", "--test-reporter=tap", "--test-timeout=60000", ...files], { cwd: GW, timeoutMs: 180_000, replaceEnv: hermetic });
     const m = (t.stdout + t.stderr).match(/# pass (\d+)[\s\S]*# fail (\d+)/);
     if (t.ok && m) report.pass("self-tests", `${m[1]} passed`);
     else if (t.error?.killed) { report.warn("self-tests timed out after 180 s", "", "run `cd model-gateway && npm test` manually to see where it hangs; not fatal"); report.log(t.stdout + t.stderr); }

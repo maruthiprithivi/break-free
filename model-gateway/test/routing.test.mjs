@@ -231,6 +231,12 @@ describe("the rules engine is deterministic and needs no key", () => {
   });
 
   test("a plan with no key completes on rules and says why it degraded", async () => {
+    // "No key" has to be true, not assumed. The installer runs this suite on the user's own
+    // machine, where TYPESAFE_API_KEY is often set - and with it set, this test made a live, paid
+    // call to api.typesafe.ai and failed on whatever came back.
+    const saved = process.env.TYPESAFE_API_KEY;
+    delete process.env.TYPESAFE_API_KEY;
+    try {
     const noKey = loadConfig({ workspaceRoot: tmp, configPath: path.join(tmp, "empty-config.json") }).config;
     const r = await routePlanTasks(noKey, [task("a", { task: "Update the README", files: ["README.md"] }), task("b", { task: "Add a migration", files: ["db/migrations/1.sql"] })], { engine: "jev" });
     assert.equal(r.engine, "jev", "the requested engine is still reported");
@@ -241,6 +247,9 @@ describe("the rules engine is deterministic and needs no key", () => {
       ["local", "strong"],
     );
     assert.equal(r.decisions[0].model, "local");
+    } finally {
+      if (saved === undefined) delete process.env.TYPESAFE_API_KEY; else process.env.TYPESAFE_API_KEY = saved;
+    }
   });
 
   test("six or more files raise difficulty and set the repo-context flag", async () => {

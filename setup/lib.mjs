@@ -141,9 +141,11 @@ export function which(cmd) {
   return r.status === 0 ? r.stdout.trim().split("\n")[0] : null;
 }
 
-export async function run(cmd, args, { cwd, env, timeoutMs = 120_000, input } = {}) {
+export async function run(cmd, args, { cwd, env, replaceEnv, timeoutMs = 120_000, input } = {}) {
   try {
-    const { stdout, stderr } = await execFileP(cmd, args, { cwd, env: { ...process.env, ...(env ?? {}) }, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, ...(input !== undefined ? { input } : {}) });
+    // replaceEnv: the child gets exactly this environment, nothing inherited.
+    const childEnv = replaceEnv ?? { ...process.env, ...(env ?? {}) };
+    const { stdout, stderr } = await execFileP(cmd, args, { cwd, env: childEnv, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, ...(input !== undefined ? { input } : {}) });
     return { ok: true, code: 0, stdout: stdout ?? "", stderr: stderr ?? "" };
   } catch (e) {
     return { ok: false, code: e.code ?? 1, stdout: e.stdout ?? "", stderr: e.stderr ?? e.message ?? "", error: e };
