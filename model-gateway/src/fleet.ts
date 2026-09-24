@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { atomicWrite, locked, sleepMs, withDirLock } from "./atomic.js";
 
 export type FleetEventKind = "job.done" | "job.failed" | "harness.exited" | "harness.output" | "harness.idle" | "ci.pending" | "ci.failed" | "provider.circuit_open";
 
@@ -78,9 +79,6 @@ const CURSOR_IDLE_RETIRE_MS = 30 * 24 * 60 * 60 * 1000;
  * history, not news.
  */
 const UNSTAMPED_TTL_MS = 60 * 60 * 1000;
-const LOCK_DIR = ".lock";
-/** A lock older than this belonged to a process that died holding it. */
-const LOCK_STALE_MS = 30_000;
 const CURSOR_FILE = "cursor";
 const SNAPSHOT_FILE = "snapshot.json";
 const RESOLVED_FILE = "resolved.json";
@@ -353,7 +351,7 @@ export function appendEvents(sessionDir: string, events: Omit<FleetEvent, "seq">
   // The lock makes the single-writer assumption true rather than aspirational. Failing to take
   // it is not a reason to drop a wake event, so an append that cannot get it still happens —
   // that is exactly today's behaviour, no worse.
-  const { out, total } = withQueueLock(dir, write) ?? write();
+  const { out, total } = withDirLock(dir, write) ?? write();
 
   // Outside the lock: pruneQueue takes it itself, and re-entering would deadlock.
   if (total >= PRUNE_AT) pruneQueue(sessionDir);
@@ -555,79 +553,6 @@ export function expireCi(sessionDir: string, now: number, timeoutMs: number, wor
   return expired;
 }
 
-/** Block this thread briefly. The queue's callers are synchronous, so the wait must be too. */
-function sleepMs(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * One writer at a time, across processes.
- *
- * The file's own comment said it "assumes a single writer", but in practice a gateway runs per
- * workspace and per worktree, all sharing one session directory — which is how a finished job
- * came to be announced fifteen times. `mkdir` is atomic on every platform we run on and needs
- * no dependency, so it is the mutex. A holder that crashes would otherwise wedge the queue
- * forever, so a lock older than LOCK_STALE_MS is treated as abandoned rather than respected.
- */
-/**
- * Replace a file so a concurrent reader sees the old contents or the new, never neither.
- *
- * writeFileSync truncates and then writes. A gateway reading in that gap got an empty cursor
- * file, took it for a fresh install, and its next drain wrote `{baseline: 0}` with only its own
- * key - erasing every other workspace's position, so every session re-saw everything it had
- * already collected. A rename within one directory is atomic.
- */
-function atomicWrite(file: string, text: string): void {
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, text, { mode: 0o600 });
-  fs.renameSync(tmp, file);
-}
-
-/** Directories whose lock this process already holds, so a nested call does not wait on itself. */
-const heldLocks = new Set<string>();
-
-function withQueueLock<T>(dir: string, fn: () => T, waitMs = 2_000): T | undefined {
-  // Re-entrant within one process: drainTo inside pruneQueue, say. Across processes the mkdir
-  // below is still the only way in.
-  if (heldLocks.has(dir)) return fn();
-  const lock = path.join(dir, LOCK_DIR);
-  const deadline = Date.now() + waitMs;
-  for (;;) {
-    try {
-      fs.mkdirSync(lock);
-      break;
-    } catch {
-      try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
-          fs.rmSync(lock, { recursive: true, force: true });
-          continue;
-        }
-      } catch {
-        // It vanished between the two calls: the holder just released it, so try to take it.
-      }
-      if (Date.now() >= deadline) return undefined;
-      sleepMs(25);
-    }
-  }
-  heldLocks.add(dir);
-  try {
-    return fn();
-  } finally {
-    heldLocks.delete(dir);
-    try { fs.rmSync(lock, { recursive: true, force: true }); } catch { /* releasing must not throw */ }
-  }
-}
-
-/**
- * Run a read-modify-write under the queue lock, or unlocked if the lock cannot be had.
- *
- * Not `withQueueLock(dir, fn) ?? fn()`: for a function that returns nothing, withQueueLock
- * returns undefined on success too, and that fallback would run the change twice.
- */
-function locked(dir: string, fn: () => void): void {
-  if (withQueueLock(dir, () => { fn(); return true as const; }) === undefined) fn();
-}
-
 /**
  * Drop the rows nobody can see any more.
  *
@@ -649,7 +574,7 @@ function locked(dir: string, fn: () => void): void {
  */
 export function pruneQueue(sessionDir: string): { removed: number; kept: number } {
   const dir = fleetDir(sessionDir);
-  return withQueueLock(dir, () => {
+  return withDirLock(dir, () => {
     const file = path.join(dir, QUEUE_FILE);
     const text = readFileText(file);
     if (text === undefined) return { removed: 0, kept: 0 };

@@ -19,6 +19,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { atomicWrite, locked, sleepMs } from "./atomic.js";
 import { execFileSync } from "node:child_process";
 
 export const WORKTREE_STATUSES = ["active", "inactive", "blocked", "merged", "abandoned", "deleted"] as const;
@@ -133,17 +134,49 @@ export class WorktreeRegistry {
     return !!this.file;
   }
 
+  /**
+   * The registry as it is on disk now.
+   *
+   * An unreadable file used to be rebuilt as an empty registry, and every caller then saved that
+   * - so one gateway reading in another's truncate-then-write gap wiped every agent's
+   * registration, claimed paths and handoff note. A read that fails is tried once more (an older
+   * gateway may be mid-write); a file that is genuinely corrupt is moved aside, never written
+   * over, so what was in it can still be recovered.
+   */
   private load(): Registry {
-    if (this.file && fs.existsSync(this.file)) {
-      try { return JSON.parse(fs.readFileSync(this.file, "utf8")) as Registry; } catch { /* rebuild */ }
+    const fresh = (): Registry => ({ version: 1, repo: this.repoName(), mainBranch: this.detectMainBranch(), worktrees: {}, updatedAt: now() });
+    if (!this.file || !fs.existsSync(this.file)) return fresh();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try { return JSON.parse(fs.readFileSync(this.file, "utf8")) as Registry; } catch { if (attempt === 0) sleepMs(20); }
     }
-    return { version: 1, repo: this.repoName(), mainBranch: this.detectMainBranch(), worktrees: {}, updatedAt: now() };
+    try { fs.renameSync(this.file, `${this.file}.corrupt-${process.pid}-${Date.now()}`); } catch { /* it moved already */ }
+    return fresh();
   }
   private save(r: Registry): void {
     if (!this.file) throw new Error("not a git repository: worktree registry unavailable");
     r.updatedAt = now();
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, JSON.stringify(r, null, 2) + "\n");
+    atomicWrite(this.file, JSON.stringify(r, null, 2) + "\n", 0o644);
+  }
+  /**
+   * Change the registry starting from the file as it is now, under a lock.
+   *
+   * Every writer read, changed and saved with nothing in between stopping another - and
+   * reconcile() held its copy across dozens of git subprocesses while doing it, so a handoff
+   * written by another agent in that window was replaced by the stale copy. Callers do their
+   * slow work first and hand only the change to this.
+   */
+  private mutate<T>(change: (r: Registry) => T): T {
+    if (!this.file) throw new Error("not a git repository: worktree registry unavailable");
+    const dir = path.dirname(this.file);
+    fs.mkdirSync(dir, { recursive: true });
+    let out!: T;
+    locked(dir, () => {
+      const r = this.load();
+      out = change(r);
+      this.save(r);
+    });
+    return out;
   }
 
   repoName(): string {
@@ -170,57 +203,73 @@ export class WorktreeRegistry {
 
   /** Reconcile registry with git reality; returns the fresh registry. */
   reconcile(): Registry {
-    const r = this.load();
+    // Slow part first and unlocked: ask git about every worktree. Only facts about the
+    // checkouts come out of it; they are applied below to the registry as it is by then.
+    const snapshot = this.load();
     const live = listGitWorktrees(this.root);
     const byPath = new Map(live.map((w) => [w.path, w]));
     const mainPath = live.find((w) => !w.bare)?.path;
     const inactiveMs = (this.opts.inactiveAfterHours ?? 48) * 3600_000;
-    // main is always present as a record
-    if (mainPath && !Object.values(r.worktrees).some((w) => realpathSafe(w.path) === mainPath)) {
-      const mw = byPath.get(mainPath)!;
-      r.worktrees[mw.branch ?? "main"] = { name: mw.branch ?? "main", path: mainPath, branch: mw.branch ?? r.mainBranch, base: r.mainBranch, status: "active", purpose: "main working tree (integration branch)", tasks: [], issues: [], prs: [], tools: [], models: [], paths: [], createdAt: now(), updatedAt: now(), lastSeenAt: now(), isMain: true, log: [`${now()} registered automatically`] };
+    const facts = new Map<string, { lastCommit?: string; ahead: number; landedByContent?: boolean }>();
+    for (const w of Object.values(snapshot.worktrees)) {
+      if (!byPath.get(realpathSafe(w.path))) continue;
+      const ahead = Number(tryGit(w.path, ["rev-list", "--count", `${w.base}..HEAD`]) ?? "1");
+      facts.set(`${w.path}\u0000${w.base}`, {
+        lastCommit: tryGit(w.path, ["log", "-1", "--format=%cI"]),
+        ahead,
+        // The expensive check, and only when ancestry has not already answered it.
+        landedByContent: !w.isMain && ["active", "inactive"].includes(w.status) && ahead !== 0 ? mergeAddsNothing(w.path, w.base) : undefined,
+      });
     }
-    for (const w of Object.values(r.worktrees)) {
-      const g = byPath.get(realpathSafe(w.path));
-      if (!g) {
-        if (w.status !== "deleted") {
-          w.status = "deleted";
-          w.reason ??= "worktree removed outside the gateway (git worktree remove / directory deleted)";
-          w.updatedAt = now();
-          w.log.push(`${now()} detected deleted: ${w.reason}`);
+
+    return this.mutate((r) => {
+        // main is always present as a record
+        if (mainPath && !Object.values(r.worktrees).some((w) => realpathSafe(w.path) === mainPath)) {
+          const mw = byPath.get(mainPath)!;
+          r.worktrees[mw.branch ?? "main"] = { name: mw.branch ?? "main", path: mainPath, branch: mw.branch ?? r.mainBranch, base: r.mainBranch, status: "active", purpose: "main working tree (integration branch)", tasks: [], issues: [], prs: [], tools: [], models: [], paths: [], createdAt: now(), updatedAt: now(), lastSeenAt: now(), isMain: true, log: [`${now()} registered automatically`] };
         }
-        continue;
-      }
-      w.head = g.head;
-      if (g.branch && g.branch !== w.branch) { w.log.push(`${now()} branch changed ${w.branch} → ${g.branch}`); w.branch = g.branch; }
-      const lastCommit = tryGit(w.path, ["log", "-1", "--format=%cI"]);
-      if (lastCommit) w.lastCommitAt = lastCommit;
-      if (w.status === "deleted") { w.status = "active"; w.reason = undefined; w.log.push(`${now()} worktree is back`); }
-      if (!w.isMain && ["active", "inactive"].includes(w.status)) {
-        // merged := the branch made commits since it was registered and none of its CONTENT is
-        // missing from base. Ancestry is the cheap case; tree-equality catches the squash and
-        // rebase merges that ancestry never sees. The reason records which one decided it,
-        // because they fail differently and a wrong "merged" is worse than a stale "active".
-        const ahead = Number(tryGit(w.path, ["rev-list", "--count", `${w.base}..HEAD`]) ?? "1");
-        const hasOwnCommits = !!w.startHead && w.head !== w.startHead;
-        const byAncestry = ahead === 0;
-        const landed = byAncestry || mergeAddsNothing(w.path, w.base);
-        if (hasOwnCommits && landed) {
-          w.status = "merged";
-          w.reason ??= byAncestry
-            ? `branch ${w.branch} is contained in ${w.base}`
-            : `branch ${w.branch} adds nothing to ${w.base} (squashed or rebased in)`;
-          w.log.push(`${now()} detected merged into ${w.base}`);
-        } else {
-          const seen = Math.max(Date.parse(w.lastSeenAt || "") || 0, Date.parse(w.lastCommitAt ?? "") || 0);
-          const inactive = Date.now() - seen > inactiveMs;
-          if (inactive && w.status === "active") { w.status = "inactive"; w.reason = `no activity for ${Math.round((Date.now() - seen) / 3600_000)} h`; w.log.push(`${now()} marked inactive: ${w.reason}`); }
-          else if (!inactive && w.status === "inactive" && /^no activity/.test(w.reason ?? "")) { w.status = "active"; w.reason = undefined; w.log.push(`${now()} active again`); }
+        for (const w of Object.values(r.worktrees)) {
+          const g = byPath.get(realpathSafe(w.path));
+          if (!g) {
+            if (w.status !== "deleted") {
+              w.status = "deleted";
+              w.reason ??= "worktree removed outside the gateway (git worktree remove / directory deleted)";
+              w.updatedAt = now();
+              w.log.push(`${now()} detected deleted: ${w.reason}`);
+            }
+            continue;
+          }
+          w.head = g.head;
+          if (g.branch && g.branch !== w.branch) { w.log.push(`${now()} branch changed ${w.branch} → ${g.branch}`); w.branch = g.branch; }
+          // Registered, or re-based, since the git pass above: its facts are the next pass's job.
+          const f = facts.get(`${w.path}\u0000${w.base}`);
+          if (!f) continue;
+          if (f.lastCommit) w.lastCommitAt = f.lastCommit;
+          if (w.status === "deleted") { w.status = "active"; w.reason = undefined; w.log.push(`${now()} worktree is back`); }
+          if (!w.isMain && ["active", "inactive"].includes(w.status)) {
+            // merged := the branch made commits since it was registered and none of its CONTENT is
+            // missing from base. Ancestry is the cheap case; tree-equality catches the squash and
+            // rebase merges that ancestry never sees. The reason records which one decided it,
+            // because they fail differently and a wrong "merged" is worse than a stale "active".
+            const hasOwnCommits = !!w.startHead && w.head !== w.startHead;
+            const byAncestry = f.ahead === 0;
+            const landed = byAncestry || f.landedByContent === true;
+            if (hasOwnCommits && landed) {
+              w.status = "merged";
+              w.reason ??= byAncestry
+                ? `branch ${w.branch} is contained in ${w.base}`
+                : `branch ${w.branch} adds nothing to ${w.base} (squashed or rebased in)`;
+              w.log.push(`${now()} detected merged into ${w.base}`);
+            } else {
+              const seen = Math.max(Date.parse(w.lastSeenAt || "") || 0, Date.parse(w.lastCommitAt ?? "") || 0);
+              const inactive = Date.now() - seen > inactiveMs;
+              if (inactive && w.status === "active") { w.status = "inactive"; w.reason = `no activity for ${Math.round((Date.now() - seen) / 3600_000)} h`; w.log.push(`${now()} marked inactive: ${w.reason}`); }
+              else if (!inactive && w.status === "inactive" && /^no activity/.test(w.reason ?? "")) { w.status = "active"; w.reason = undefined; w.log.push(`${now()} active again`); }
+            }
+          }
         }
-      }
-    }
-    this.save(r);
-    return r;
+        return r;
+    });
   }
 
   list(): WorktreeRecord[] {
@@ -234,24 +283,26 @@ export class WorktreeRegistry {
 
   /** Register the current checkout (or a given path) with its metadata. */
   register(a: { path?: string; name?: string; base?: string; purpose?: string; agent?: string; tasks?: string[]; issues?: string[]; prs?: string[]; tools?: string[]; models?: string[]; paths?: string[]; handoff?: string }): WorktreeRecord {
-    const r = this.reconcile();
+    this.reconcile();
     const p = realpathSafe(a.path ?? this.root);
-    const g = listGitWorktrees(this.root).find((w) => w.path === p);
+    const worktrees = listGitWorktrees(this.root);
+    const g = worktrees.find((w) => w.path === p);
     if (!g) throw new Error(`${p} is not a worktree of this repository (git worktree list)`);
-    let w = Object.values(r.worktrees).find((x) => realpathSafe(x.path) === p);
-    const isMain = listGitWorktrees(this.root).find((x) => !x.bare)?.path === p;
-    if (!w) {
-      const name = a.name ?? g.branch ?? path.basename(p);
-      if (r.worktrees[name] && realpathSafe(r.worktrees[name].path) !== p) throw new Error(`name '${name}' is already used by ${r.worktrees[name].path}`);
-      w = { name, path: p, branch: g.branch ?? "HEAD", base: a.base ?? r.mainBranch, head: g.head, startHead: g.head, status: "active", tasks: [], issues: [], prs: [], tools: [], models: [], paths: [], createdAt: now(), updatedAt: now(), lastSeenAt: now(), isMain, log: [`${now()} registered`] };
-      r.worktrees[name] = w;
-    }
-    this.merge(w, a);
-    w.status = w.status === "deleted" ? "active" : w.status;
-    w.lastSeenAt = now();
-    w.updatedAt = now();
-    this.save(r);
-    return w;
+    const isMain = worktrees.find((x) => !x.bare)?.path === p;
+    return this.mutate((r) => {
+      let w = Object.values(r.worktrees).find((x) => realpathSafe(x.path) === p);
+      if (!w) {
+        const name = a.name ?? g.branch ?? path.basename(p);
+        if (r.worktrees[name] && realpathSafe(r.worktrees[name].path) !== p) throw new Error(`name '${name}' is already used by ${r.worktrees[name].path}`);
+        w = { name, path: p, branch: g.branch ?? "HEAD", base: a.base ?? r.mainBranch, head: g.head, startHead: g.head, status: "active", tasks: [], issues: [], prs: [], tools: [], models: [], paths: [], createdAt: now(), updatedAt: now(), lastSeenAt: now(), isMain, log: [`${now()} registered`] };
+        r.worktrees[name] = w;
+      }
+      this.merge(w, a);
+      w.status = w.status === "deleted" ? "active" : w.status;
+      w.lastSeenAt = now();
+      w.updatedAt = now();
+      return w;
+    });
   }
 
   private merge(w: WorktreeRecord, a: { base?: string; purpose?: string; agent?: string; handoff?: string; tasks?: string[]; issues?: string[]; prs?: string[]; tools?: string[]; models?: string[]; paths?: string[] }): void {
@@ -292,30 +343,32 @@ export class WorktreeRegistry {
   }
 
   update(name: string, a: { status?: WorktreeStatus; reason?: string; purpose?: string; agent?: string; base?: string; tasks?: string[]; issues?: string[]; prs?: string[]; tools?: string[]; models?: string[]; paths?: string[]; handoff?: string; log?: string; heartbeat?: boolean }): WorktreeRecord {
-    const r = this.reconcile();
-    const w = r.worktrees[name] ?? Object.values(r.worktrees).find((x) => x.branch === name || realpathSafe(x.path) === realpathSafe(name));
-    if (!w) throw new Error(`unknown worktree '${name}' (see worktree_list)`);
-    this.merge(w, a);
-    if (a.status && a.status !== w.status) {
-      w.log.push(`${now()} ${w.status} → ${a.status}${a.reason ? `: ${a.reason}` : ""}`);
-      w.status = a.status;
-      w.reason = a.reason;
-    } else if (a.reason) w.reason = a.reason;
-    if (a.log) w.log.push(`${now()} ${a.log}`);
-    if (a.heartbeat !== false) w.lastSeenAt = now();
-    w.updatedAt = now();
-    if (w.log.length > 100) w.log.splice(0, w.log.length - 100);
-    this.save(r);
-    return w;
+    this.reconcile();
+    return this.mutate((r) => {
+      const w = r.worktrees[name] ?? Object.values(r.worktrees).find((x) => x.branch === name || realpathSafe(x.path) === realpathSafe(name));
+      if (!w) throw new Error(`unknown worktree '${name}' (see worktree_list)`);
+      this.merge(w, a);
+      if (a.status && a.status !== w.status) {
+        w.log.push(`${now()} ${w.status} → ${a.status}${a.reason ? `: ${a.reason}` : ""}`);
+        w.status = a.status;
+        w.reason = a.reason;
+      } else if (a.reason) w.reason = a.reason;
+      if (a.log) w.log.push(`${now()} ${a.log}`);
+      if (a.heartbeat !== false) w.lastSeenAt = now();
+      w.updatedAt = now();
+      if (w.log.length > 100) w.log.splice(0, w.log.length - 100);
+      return w;
+    });
   }
 
   markLedgerMerged(name: string, summary: string): void {
-    const r = this.reconcile();
-    const w = r.worktrees[name];
-    if (!w) return;
-    w.ledgerMergedAt = now();
-    w.log.push(`${now()} ledger absorbed into main: ${summary}`);
-    this.save(r);
+    this.reconcile();
+    this.mutate((r) => {
+      const w = r.worktrees[name];
+      if (!w) return;
+      w.ledgerMergedAt = now();
+      w.log.push(`${now()} ledger absorbed into main: ${summary}`);
+    });
   }
 
   /** Create a new worktree (non-destructive) and register it. */

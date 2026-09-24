@@ -19,6 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { appendEvents } from "./fleet.js";
+import { atomicWrite } from "./atomic.js";
 import { log as rlog } from "./logger.js";
 
 export interface CircuitState {
@@ -94,9 +95,7 @@ export class Breaker {
     if (!this.file) return;
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
-      const tmp = `${this.file}.${process.pid}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(st, null, 2), { mode: 0o600 });
-      fs.renameSync(tmp, this.file);
+      atomicWrite(this.file, JSON.stringify(st, null, 2));
       const after = fs.statSync(this.file);
       this.version = `${after.mtimeMs}:${after.size}`;
     } catch {
