@@ -63,17 +63,6 @@ mkdir -p "$T/home/.gemini/config" && : > "$T/home/.gemini/config/mcp_config.json
 REAL_GIT="$(command -v git)"
 export MODEL_GATEWAY_HOME_OVERRIDE="$T/home" PATH="$T/bin:$PATH" NO_COLOR=1
 
-# A local stand-in for the firstmate upstream, so provisioning is exercised without network.
-FMUP="$T/firstmate-upstream"
-mkdir -p "$FMUP/bin"
-printf '# firstmate\n\nhard rule 1\n' > "$FMUP/AGENTS.md"
-printf '#!/usr/bin/env bash\necho "reread-firstmate: no"\necho "restart-secondmates: none"\necho "nudge-secondmates: none"\n' > "$FMUP/bin/fm-update.sh"
-chmod +x "$FMUP/bin/fm-update.sh"
-"$REAL_GIT" -C "$FMUP" init -q -b main
-"$REAL_GIT" -C "$FMUP" -c user.name=t -c user.email=t@t add -A
-"$REAL_GIT" -C "$FMUP" -c user.name=t -c user.email=t@t commit -q -m "firstmate"
-export BREAK_FREE_FIRSTMATE_ORIGIN="$FMUP"
-
 fail() { echo "SELFTEST FAIL: $1" >&2; exit 1; }
 
 mkdir -p "$T/home/.claude/skills/model-gateway" "$T/home/.claude/commands" "$T/home/.agents/skills/github-flow"
@@ -156,13 +145,11 @@ grep -q "break-free ledger guard" "$T/proj/.git/hooks/pre-commit" || fail "ledge
 grep -q -- '--fleet-check --hook' "$T/home/.claude/settings.json" || fail "Stop hook missing after install"
 echo "ok"
 
-echo "### firstmate provisioning"
-[ -f "$T/home/.break-free/firstmate/AGENTS.md" ] || fail "firstmate was not cloned"
-grep -q '"pin"' "$T/home/.config/model-gateway/config.json" || fail "firstmate was cloned but not pinned"
+echo "### firstmate is not provisioned"
+[ ! -e "$T/home/.break-free/firstmate" ] || fail "installer created a Firstmate checkout"
+node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if(j.firstmate?.pin || j.firstmate?.root)process.exit(1)' "$T/home/.config/model-gateway/config.json" || fail "installer wrote a Firstmate pin"
 grep -R -F -q "Crew, worktrees and merge authority (firstmate)" "$T/home" "$T/proj" && fail "install left a firstmate standing rule"
-# Migration must preserve the neighbouring delegation rule.
-grep -q "Delegating to other models" "$T/home/.omp/agent/AGENTS.md" || fail "omp lost its delegation rule when the firstmate rule was added"
-grep -q "firstmate" "$T/install.out" || fail "the install said nothing about firstmate"
+grep -q "Delegating to other models" "$T/home/.omp/agent/AGENTS.md" || fail "omp lost its delegation rule"
 echo ok
 
 echo "### install idempotence (Stop hook)"

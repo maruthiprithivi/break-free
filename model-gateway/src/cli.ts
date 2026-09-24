@@ -873,83 +873,17 @@ const COMMANDS: Record<string, { flags: string[]; usage: string }> = {
       "    it defaults to the current directory, and it will delete files the runs added.",
   },
   firstmate: {
-    flags: ["harness", "task", "fm-home", "json", "dry-run"],
-    usage: "bf firstmate [--harness claude|grok|pi|omp|codex|opencode|cursor-agent] [--task \"...\"] [--fm-home <dir>] [--dry-run] [--json]\n    Start a firstmate-led session inside the provisioned distro, connected to this gateway.\n    firstmate leads that session: it owns the crew, the worktrees and the merge authority.\n    Refuses when the distro is drifted or dirty, because that would run instructions nobody\n    approved. --dry-run prints the exact command instead of running it.",
+    flags: [],
+    usage: "bf firstmate\n    Firstmate is the entry point; start your home directly; `bf firstmate profiles` generates dispatch profiles.",
   },
   help: { flags: [], usage: "bf help" },
 };
 
 
-/**
- * Start a firstmate-led session.
- *
- * The launcher lives here rather than in the MCP server on purpose: a server cannot make an
- * already-running client adopt firstmate's identity, because the distro is instructions a
- * harness reads at startup and startup is over. Launching a new session is the only honest way
- * for break-free to put firstmate in the lead.
- */
-async function cmdFirstmate(flags: Record<string, string | boolean>): Promise<number> {
-  const { loadConfig } = await import("./config.js");
-  const { planLaunch, FIRSTMATE_LABEL } = await import("./firstmate.js");
-  const { spawnSync } = await import("node:child_process");
-
-  const cfg = loadConfig().config;
-  // Walk PATH directly rather than shelling out. `command -v <bin>` through a shell concatenates
-  // rather than escapes its arguments, which node deprecates for exactly the reason that matters
-  // here: the name comes from --harness, so it is caller input.
-  const onPath = (bin: string) => {
-    if (bin.includes("/") || bin.includes("\\")) return false;
-    for (const dir of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
-      try {
-        fs.accessSync(path.join(dir, bin), fs.constants.X_OK);
-        return true;
-      } catch { /* not here; try the next entry */ }
-    }
-    return false;
-  };
-  // Which harnesses the install actually wired, so a machine with three installed still gets
-  // the one the user chose to use with break-free.
-  const wired: string[] = [];
-  try {
-    const st = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".config", "model-gateway", "last-install.json"), "utf8"));
-    if (st.claude_scope && st.claude_scope !== "none") wired.push("claude");
-    if (st.codex_scope && st.codex_scope !== "none") wired.push("codex");
-    for (const e of st.extra_agents ?? []) if (e === "opencode" || e === "pi" || e === "omp" || e === "cursor") wired.push(e === "cursor" ? "cursor-agent" : e);
-  } catch { /* no install state: fall through to what is on PATH */ }
-
-  const plan = planLaunch(cfg.firstmate, {
-    configured: cfg.firstmate.harness,
-    wired,
-    harness: typeof flags.harness === "string" ? flags.harness : undefined,
-    task: typeof flags.task === "string" ? flags.task : undefined,
-    fmHome: typeof flags["fm-home"] === "string" ? (flags["fm-home"] as string) : undefined,
-    available: onPath,
-  });
-
-  if (flags.json) {
-    console.log(JSON.stringify(plan, null, 2));
-    return plan.ok ? 0 : 1;
-  }
-  if (!plan.ok) {
-    console.error(`bf firstmate: ${plan.reason}`);
-    return 1;
-  }
-
-  const shown = [plan.command, ...plan.args].join(" ");
-  const { runningHarnesses } = await import("./firstmate.js");
-  const nested = runningHarnesses();
-  if (nested.length > 1) {
-    console.error(`note: this session looks like ${nested.join(" inside ")}, so the harness could not be told from the environment. Using ${plan.command}; pass --harness or set firstmate.harness to be sure.`);
-  }
-  if (flags["dry-run"]) {
-    console.log(`${plan.label}\n  cd ${plan.cwd}\n  ${Object.entries(plan.env).map(([k, v]) => `${k}=${v}`).join(" ")} ${shown}`);
-    return 0;
-  }
-
-  // Say which system is about to lead, before it takes the terminal.
-  console.log(`${plan.label} — ${shown} in ${plan.cwd}`);
-  const r = spawnSync(plan.command!, plan.args, { cwd: plan.cwd, env: { ...process.env, ...plan.env }, stdio: "inherit" });
-  return r.status ?? 1;
+async function cmdFirstmate(): Promise<number> {
+  const { FIRSTMATE_DEPRECATION } = await import("./firstmate.js");
+  console.error(FIRSTMATE_DEPRECATION);
+  return 2;
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<number> {
@@ -975,7 +909,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   if (cmd === "demo") return cmdDemo(flags);
   if (cmd === "scenarios") return cmdScenarios(flags);
   if (cmd === "validate") return cmdValidate(flags);
-  if (cmd === "firstmate") return cmdFirstmate(flags);
+  if (cmd === "firstmate") return cmdFirstmate();
   console.log(HELP);
   return cmd === "help" || cmd === "--help" ? 0 : 2;
 }

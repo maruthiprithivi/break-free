@@ -673,78 +673,6 @@ function redact(k) { return !k ? "(none)" : k.length <= 8 ? "****" : `${k.slice(
 
 
 
-/**
- * Does the user want firstmate? Default no.
- *
- * It is not a dependency of break-free; it changes who leads a session. Someone who did not ask
- * for that should not find their crew, worktrees and merge authority owned by a distro they
- * have never read.
- */
-async function firstmateAnswer() {
-  // Default YES: firstmate ships WITH break-free. It is what runs the crew and the worktrees,
-  // and a session that never engages it pays only the standing rule, not its instructions.
-  return { firstmate: await prompter.confirm("firstmate", "Install firstmate for crew, worktrees and merge authority? (recommended: it is how break-free runs a crew)", true) };
-}
-
-// ---- firstmate ---------------------------------------------------------------
-/**
- * Provision the firstmate distro, if the user wants it.
- *
- * Off unless asked for. firstmate becomes the LEAD of the sessions it runs — it owns the crew,
- * the worktrees and the merge authority — and that is a change to how someone works, not a
- * dependency an installer should decide for them. Declining leaves break-free exactly as it is.
- *
- * The clone is pinned to the commit it landed on, so the instructions the agent obeys are a
- * revision somebody can name rather than whatever origin happened to hold that morning.
- */
-async function installFirstmate(answers) {
-  report.section("firstmate (crew, worktrees, merge authority)");
-  const want = answers.firstmate ?? false;
-  if (!want) {
-    report.info("firstmate not installed — break-free works standalone; `bf firstmate` needs it");
-    return;
-  }
-  const root = path.join(process.env.BREAK_FREE_HOME ?? path.join(home(), ".break-free"), "firstmate");
-  try {
-    if (fs.existsSync(path.join(root, "AGENTS.md"))) {
-      // Already there: move it to the latest upstream with THEIR script, which is
-      // fast-forward only and never touches the gitignored operational directories.
-      const up = await run(path.join(root, "bin", "fm-update.sh"), [], { cwd: root, timeoutMs: 300_000 });
-      if (up.ok) {
-        const reread = /reread-firstmate:\s*yes/.test(up.stdout);
-        report.pass("firstmate updated", reread ? "its instructions changed — agents re-read them next session" : "already current");
-      } else {
-        report.warn("firstmate not updated", up.stderr.slice(0, 160) || "fm-update.sh failed; the pinned revision is unchanged");
-      }
-    } else {
-      fs.mkdirSync(path.dirname(root), { recursive: true });
-      // Full history on purpose: pinning and reviewing an update both need to diff two
-      // revisions, and a shallow clone cannot do that offline.
-      // The origin is overridable so the provisioning path can be tested against a local
-      // repository. Without that seam this code could only ever run against the network,
-      // which is why it went untested.
-      const origin = process.env.BREAK_FREE_FIRSTMATE_ORIGIN || "https://github.com/kunchenguid/firstmate";
-      const cloned = await run("git", ["clone", origin, root], { timeoutMs: 600_000 });
-      if (!cloned.ok) throw new Error(cloned.stderr.slice(0, 200));
-      report.pass("firstmate cloned", root);
-    }
-    // Pin to what was actually cloned. An unpinned distro is a moving target that becomes the
-    // agent's instructions, which is the supply-chain problem this exists to bound.
-    const rev = await run("git", ["-C", root, "rev-parse", "HEAD"]);
-    if (!rev.ok) throw new Error("cloned, but could not read HEAD to pin it");
-    const head = rev.stdout.trim();
-    const cfg = readJsonSafe(CFG_FILE) ?? {};
-    cfg.firstmate = { ...(cfg.firstmate ?? {}), enabled: true, root, pin: head };
-    writeSecret(CFG_FILE, JSON.stringify(cfg, null, 2) + "\n");
-    report.pass("firstmate pinned", `${head.slice(0, 12)}`);
-
-  } catch (e) {
-    // A WARN, not a FAIL. break-free works without firstmate, and turning a break-free
-    // install red because GitHub was unreachable blames the wrong thing — the user sees a
-    // failed product when what failed was a download they can retry.
-    report.warn("firstmate not provisioned", `${String(e.message).slice(0, 160)} — break-free is installed and working; re-run to retry`);
-  }
-}
 
 // ---- scope ------------------------------------------------------------------
 async function chooseScope() {
@@ -2009,7 +1937,6 @@ function finish() {
   await installProject();
   await installGithubFlow();
   await installExtraAgents();
-  await installFirstmate(await firstmateAnswer());
   await verify();
   writeInstallState();
   finish();
