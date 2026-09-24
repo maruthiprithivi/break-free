@@ -133,6 +133,8 @@ const ConfigSchema = z.object({
    */
   firstmate: z
     .object({
+      /** Auto-detect Firstmate workers and primaries, or retain standalone gateway behavior. */
+      mode: z.enum(["auto", "off"]).default("auto"),
       /** firstmate ships with break-free; this turns the integration off, it does not turn it on. */
       enabled: z.boolean().default(true),
       /** Where the distro CODE lives, separate from FM_HOME, which holds operational state. */

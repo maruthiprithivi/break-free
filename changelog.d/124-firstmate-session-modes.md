@@ -1,0 +1,1 @@
+- **Firstmate sessions use role-specific gateway tools.** Crewmates and primaries see only the model operations they need, reducing standing context and leaving dispatch to Firstmate.
