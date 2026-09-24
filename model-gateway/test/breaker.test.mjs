@@ -211,11 +211,11 @@ test("config patches from two writers both land, and the file is never half-writ
   const path = await import("node:path");
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cfg-")), "config.json");
   fs.writeFileSync(file, JSON.stringify({ providers: { deepseek: { apiKey: "keep-me" } } }));
-  saveConfigPatch(file, { firstmate: { pin: "abc" } });
+  saveConfigPatch(file, { aliases: { fast: { candidates: ["deepseek/good"] } } });
   saveConfigPatch(file, { providers: { kimi: { enabled: false } } });
   const j = JSON.parse(fs.readFileSync(file, "utf8"));
   assert.equal(j.providers.deepseek.apiKey, "keep-me", "an unrelated setting survives every patch");
-  assert.equal(j.firstmate.pin, "abc");
+  assert.deepEqual(j.aliases.fast.candidates, ["deepseek/good"]);
   assert.equal(j.providers.kimi.enabled, false);
   assert.deepEqual(fs.readdirSync(path.dirname(file)).filter((f) => f.includes(".tmp")), []);
 });

@@ -126,32 +126,25 @@ const ConfigSchema = z.object({
         .default({}),
     })
     .default({}),
-  /**
-   * firstmate: the agent distro break-free provisions and drives for crew and worktrees.
-   * Never forked — cloned, pinned, and moved deliberately, because its contents become the
-   * instructions the user's agent obeys.
-   */
+  /** Legacy Firstmate settings are accepted for old configs but have no effect. */
   firstmate: z
     .object({
-      /** firstmate ships with break-free; this turns the integration off, it does not turn it on. */
+      /** Legacy setting, ignored. */
       enabled: z.boolean().default(true),
-      /** Where the distro CODE lives, separate from FM_HOME, which holds operational state. */
+      /** Legacy setting, ignored. */
       root: z.string().optional(),
-      /** The commit this machine is pinned to. Absent means unpinned, which is not a default. */
+      /** Legacy setting, ignored. */
       pin: z.string().optional(),
-      /** Harness for `bf firstmate`. Default: the one running this session, then what the install wired. */
+      /** Legacy setting, ignored. */
       harness: z.string().optional(),
     })
     .default({}),
-  /** Keeping break-free and firstmate current. */
+  /** Check whether break-free has an update. */
   updates: z
     .object({
-      /** Ask origin whether either is behind. Off means never touch the network for this. */
+      /** Ask origin whether break-free is behind. Off means never touch the network for this. */
       check: z.boolean().default(true),
-      /**
-       * Fast-forward both at session start. break-free's new bytes land next start because the
-       * process is already running; firstmate's are read during the session, so they land now.
-       */
+      /** Legacy setting, accepted but unused. */
       apply: z.boolean().default(true),
       /** How long a check is considered current, so a session start is not a round trip. */
       intervalHours: z.number().min(0).default(6),

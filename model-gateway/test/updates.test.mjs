@@ -1,5 +1,5 @@
 /**
- * Keeping break-free and firstmate current.
+ * Checking whether break-free is current.
  *
  * Offline and deterministic: real git repositories in a temp directory, a local path as
  * origin, no network. The cases worth pinning are the ones where the honest answer is "I do
@@ -83,31 +83,15 @@ test("nothing to say produces no notice at all", () => {
     undefined,
     "current is not news",
   );
-  // A component that could not be checked is also not news — it is a reason, not an update.
-  assert.equal(
-    notice({ checkedAt: "x", applied: [], components: [{ name: "firstmate", root: "/r", instructionChanges: [], reason: "could not reach origin" }] }),
-    undefined,
-  );
+  // Old cache entries for Firstmate are ignored.
+  assert.equal(notice({ checkedAt: "x", applied: [{ name: "firstmate", from: "a", to: "b" }], components: [{ name: "firstmate", root: "/fm", behind: 2, instructionChanges: [] }] }), undefined);
 });
 
-test("an applied update names the rollback, and a waiting one names the command", () => {
-  const applied = notice({
-    checkedAt: "x",
-    applied: [{ name: "firstmate", from: "abcdef1234567890", to: "1234567890abcdef" }],
-    components: [{ name: "firstmate", root: "/fm", behind: 0, instructionChanges: ["AGENTS.md", "bin/fm-spawn.sh"] }],
-  });
-  assert.match(applied, /firstmate updated abcdef12 -> 12345678/);
-  assert.match(applied, /2 file\(s\) that steer an agent/, "an instruction change is the part worth reading");
-  assert.match(applied, /git -C \/fm reset --hard abcdef123456/, "rolling back has to be one command");
-
-  const waiting = notice({
-    checkedAt: "x",
-    applied: [],
-    components: [{ name: "break-free", root: "/bf", behind: 3, instructionChanges: [] }],
-  });
+test("a waiting break-free update names the rebuild command", () => {
+  const waiting = notice({ checkedAt: "x", applied: [], components: [{ name: "break-free", root: "/bf", behind: 3, instructionChanges: [] }] });
   assert.match(waiting, /break-free is 3 commit\(s\) behind/);
-  assert.match(waiting, /node \/bf\/setup\.mjs --update/, "an absolute path: the notice is read from inside some other project");
-  assert.match(waiting, /rebuilds/, "and it says why this is the command, not a background merge");
+  assert.match(waiting, /node \/bf\/setup\.mjs --update/);
+  assert.match(waiting, /rebuilds/);
 });
 
 test("break-free is never reported as updated by a source-only merge", () => {
@@ -115,13 +99,6 @@ test("break-free is never reported as updated by a source-only merge", () => {
   // running the old build while the notice announced "break-free updated".
   const n = notice({ checkedAt: "x", applied: [], components: [{ name: "break-free", root: "/bf", behind: 2, instructionChanges: [] }] });
   assert.doesNotMatch(n, /updated/);
-});
-
-test("a fast-forward that could not land says so, instead of looking like nothing happened", () => {
-  const n = notice({ checkedAt: "x", applied: [], components: [{ name: "firstmate", root: "/fm", behind: 4, instructionChanges: ["AGENTS.md"], applyFailed: true }] });
-  assert.match(n, /could not be fast-forwarded/);
-  assert.match(n, /\/fm has local changes/);
-  assert.match(n, /Nothing was touched/, "and that the local changes are safe");
 });
 
 // --- whose job is it ------------------------------------------------------------------

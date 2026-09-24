@@ -57,17 +57,7 @@ mkdir -p "$T/home/.gemini/config" && : > "$T/home/.gemini/config/mcp_config.json
 
 REAL_GIT="$(command -v git)"
 export MODEL_GATEWAY_HOME_OVERRIDE="$T/home" PATH="$T/bin:$PATH" NO_COLOR=1
-
-# A local stand-in for the firstmate upstream, so provisioning is exercised without network.
-FMUP="$T/firstmate-upstream"
-mkdir -p "$FMUP/bin"
-printf '# firstmate\n\nhard rule 1\n' > "$FMUP/AGENTS.md"
-printf '#!/usr/bin/env bash\necho "reread-firstmate: no"\necho "restart-secondmates: none"\necho "nudge-secondmates: none"\n' > "$FMUP/bin/fm-update.sh"
-chmod +x "$FMUP/bin/fm-update.sh"
-"$REAL_GIT" -C "$FMUP" init -q -b main
-"$REAL_GIT" -C "$FMUP" -c user.name=t -c user.email=t@t add -A
-"$REAL_GIT" -C "$FMUP" -c user.name=t -c user.email=t@t commit -q -m "firstmate"
-export BREAK_FREE_FIRSTMATE_ORIGIN="$FMUP"
+export BREAK_FREE_SERVE_PORT="$(node -e 'const s=require("node:net").createServer(); s.listen(0,"127.0.0.1",()=>{ console.log(s.address().port); s.close(); })')"
 
 fail() { echo "SELFTEST FAIL: $1" >&2; exit 1; }
 
@@ -122,22 +112,11 @@ grep -q "break-free ledger guard" "$T/proj/.git/hooks/pre-commit" || fail "ledge
 grep -q -- '--fleet-check --hook' "$T/home/.claude/settings.json" || fail "Stop hook missing after install"
 echo "ok"
 
-echo "### firstmate provisioning"
-[ -f "$T/home/.break-free/firstmate/AGENTS.md" ] || fail "firstmate was not cloned"
-grep -q '"pin"' "$T/home/.config/model-gateway/config.json" || fail "firstmate was cloned but not pinned"
-grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.claude/CLAUDE.md" || fail "the firstmate standing rule is missing; a clone nothing points at is a clone nothing uses"
-# The rule has to reach every harness the install wired, not just Claude and Codex. An omp user
-# had the server, the skills and the delegation rule but no firstmate rule, so the distro sat
-# there unmentioned.
-grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.codex/AGENTS.md" || fail "codex has no firstmate rule"
-grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.omp/agent/AGENTS.md" || fail "omp has no firstmate rule — the rule is the integration for an ordinary session"
-grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.gemini/GEMINI.md" || fail "gemini has no firstmate rule"
-# and it must not have eaten the delegation rule that was already there
-grep -q "Delegating to other models" "$T/home/.omp/agent/AGENTS.md" || fail "omp lost its delegation rule when the firstmate rule was added"
-# idempotent: exactly one copy after the re-install that happens later in this script
-[ "$(grep -c "Crew, worktrees and merge authority (firstmate)" "$T/home/.omp/agent/AGENTS.md")" = "1" ] || fail "firstmate rule duplicated in omp AGENTS.md"
-grep -q "firstmate" "$T/install.out" || fail "the install said nothing about firstmate"
-echo ok
+echo "### firstmate is not provisioned"
+[ ! -e "$T/home/.break-free/firstmate" ] || fail "installer created a Firstmate checkout"
+node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if(j.firstmate?.pin || j.firstmate?.root)process.exit(1)' "$T/home/.config/model-gateway/config.json" || fail "installer wrote a Firstmate pin"
+! grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.claude/CLAUDE.md" || fail "installer wrote a Firstmate standing rule"
+echo "ok"
 
 echo "### install idempotence (Stop hook)"
 node "$ROOT/setup.mjs" --answers "$T/answers.json" > "$T/install2.out" 2>&1 || fail "second install exited non-zero (see $T/install2.out)"
@@ -189,13 +168,13 @@ grep -q "break-free-claude-deepseek()" "$T/home/.config/model-gateway/harness/br
 grep -q "break-free-codex-deepseek()" "$T/home/.config/model-gateway/harness/break-free.sh" || fail "codex shell function missing"
 grep -q '\[model_providers.break_free_deepseek\]' "$T/home/.codex/config.toml" || fail "codex model_provider missing"
 grep -q '\[profiles.break_free_deepseek\]' "$T/home/.codex/config.toml" || fail "codex profile missing"
-grep -q 'base_url = "http://127.0.0.1:18790/deepseek/v1"' "$T/home/.codex/config.toml" || fail "codex provider should point at the shim"
+grep -q "base_url = \"http://127.0.0.1:${BREAK_FREE_SERVE_PORT}/deepseek/v1\"" "$T/home/.codex/config.toml" || fail "codex provider should point at the shim"
 grep -A6 'model_providers.break_free_deepseek' "$T/home/.codex/config.toml" | grep -q 'wire_api = "responses"' || fail "codex provider must use wire_api=responses"
 grep -q 'wire_api = "chat"' "$T/home/.codex/config.toml" && fail "stale wire_api=chat should have been rewritten"
 grep -q "break-free-serve()" "$T/home/.config/model-gateway/harness/break-free.sh" || fail "shim shell function missing"
 grep -q "Codex shim: /deepseek/v1/responses answered" "$T/install.out" || fail "shim round-trip not verified (see $T/install.out)"
-curl -sf http://127.0.0.1:18790/healthz >/dev/null || fail "shim not running after install"
-curl -sf -X POST -H 'content-type: application/json' -d '{"input":"hi","stream":true}' http://127.0.0.1:18790/deepseek/v1/responses | grep -q "response.completed" || fail "shim streaming failed"
+curl -sf "http://127.0.0.1:${BREAK_FREE_SERVE_PORT}/healthz" >/dev/null || fail "shim not running after install"
+curl -sf -X POST -H 'content-type: application/json' -d '{"input":"hi","stream":true}' "http://127.0.0.1:${BREAK_FREE_SERVE_PORT}/deepseek/v1/responses" | grep -q "response.completed" || fail "shim streaming failed"
 grep -q "break-free harness profiles" "$T/home/.zshrc" || fail "zshrc line missing"
 grep -q "test-key" "$T/home/.config/model-gateway/harness/deepseek.env" || fail "env file should carry the key (mode 600)"
 [ "$(stat -c %a "$T/home/.config/model-gateway/harness/deepseek.env" 2>/dev/null || stat -f %Lp "$T/home/.config/model-gateway/harness/deepseek.env")" = "600" ] || fail "harness env not 0600"
@@ -224,7 +203,7 @@ grep -q "Delegating to other models" "$T/home/.codex/AGENTS.md" && fail "codex A
 grep -q "Delegating to other models" "$T/proj/AGENTS.md" && fail "project AGENTS.md delegation rule still present"
 grep -q 'break-free-gateway' "$T/proj/.mcp.json" && fail "project registration still present"
 [ ! -d "$T/home/.config/model-gateway/harness" ] || fail "harness dir still present"
-sleep 0.5; curl -sf http://127.0.0.1:18790/healthz >/dev/null && fail "shim still running after uninstall"
+sleep 0.5; curl -sf "http://127.0.0.1:${BREAK_FREE_SERVE_PORT}/healthz" >/dev/null && fail "shim still running after uninstall"
 grep -q "break-free harness profiles" "$T/home/.zshrc" && fail "zshrc line still present"
 grep -q 'break_free_deepseek' "$T/home/.codex/config.toml" && fail "codex profile still present"
 node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if(j.mcp["break-free-gateway"]||!j.mcp.other||j.model!=="x/y")process.exit(1)' "$T/home/.config/opencode/opencode.json" || fail "opencode entry not removed (or user config damaged)"

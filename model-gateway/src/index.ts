@@ -20,7 +20,7 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { loadConfig, listProviderNames, priceFor, costUsd, redactKey, resolveProvider, saveConfigPatch, FALLBACK_REASONS, type GatewayConfig, type LoadedConfig } from "./config.js";
@@ -35,7 +35,6 @@ import { startServe } from "./serve.js";
 import { WorktreeRegistry, WORKTREE_STATUSES, isLinkedWorktree, shadowLedgerDir, installGuardHook, guardHookStatus, removeGuardHook, LEDGER_GUARD_WORKFLOW } from "./worktrees.js";
 import { LEDGER_DIR } from "./ledger.js";
 import { resolveVault, linkLedger, resolveGraph, type GraphProbe } from "./knowledge.js";
-import { status as firstmateStatus, planUpdate, updateCommand, parseUpdateSummary, updateAvailable, sessionLabel, FIRSTMATE_REPO, FIRSTMATE_LABEL, followablePin } from "./firstmate.js";
 import { behindOrigin, isCheckout, readCache, writeCache, cacheIsWarm, notice as updateNotice, type UpdateState, type ComponentUpdate } from "./updates.js";
 import { estimateTokens, line as ctxLine, report as ctxReport, renderReport, type ContextLine } from "./context.js";
 import { runSteward, hygiene } from "./steward.js";
@@ -208,18 +207,6 @@ function graphResolution() {
  * a cache that ledger_resume reads, so the notice reaches the session whether or not this
  * finished first.
  */
-/** Record the pin the auto-update already approved; the decision is followablePin()'s. */
-function followPin(root: string, target: string): void {
-  const next = followablePin(root, ctx.config.firstmate.pin, target);
-  if (!next) return;
-  try {
-    saveConfigPatch(loaded.writePath, { firstmate: { pin: next } });
-    rlog("firstmate.pin", { from: ctx.config.firstmate.pin, to: next });
-  } catch {
-    // Unwritable config: the pin check keeps reporting drift, which is the honest answer.
-  }
-}
-
 async function refreshUpdates(): Promise<UpdateState | undefined> {
   const cfg = ctx.config.updates;
   const sessionDir = ctx.config.sessionDir;
@@ -228,58 +215,20 @@ async function refreshUpdates(): Promise<UpdateState | undefined> {
   const cached = readCache(sessionDir);
   if (cacheIsWarm(cached, cfg.intervalHours)) return cached;
 
-  const roots: { name: ComponentUpdate["name"]; root: string }[] = [
-    { name: "break-free", root: path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..") },
-    { name: "firstmate", root: firstmateStatus(ctx.config.firstmate).root },
-  ];
-
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..");
+  const name: ComponentUpdate["name"] = "break-free";
   const components: ComponentUpdate[] = [];
-  const applied: UpdateState["applied"] = [];
-
-  for (const { name, root } of roots) {
-    if (!isCheckout(root)) { components.push({ name, root, instructionChanges: [], reason: "not a git checkout" }); continue; }
+  if (!isCheckout(root)) components.push({ name, root, instructionChanges: [], reason: "not a git checkout" });
+  else {
     const r = await behindOrigin(root, { fetch: true });
-    // Only firstmate's changes steer an agent; break-free's are a program's.
-    const instructionChanges = name === "firstmate" && r.target ? planUpdate(root, r.target).instructionChanges : [];
-    const before = r.behind;
-
-    // Only firstmate is fast-forwarded here. It is instructions and scripts, live the moment they
-    // change. break-free is a program: its source does nothing until the installer rebuilds it,
-    // so merging source alone left every session running the old build while the notice said
-    // "updated". It is reported, with the one command that actually updates it.
-    let applyFailed = false;
-    if (cfg.apply && name === "firstmate" && (r.behind ?? 0) > 0) {
-      const from = execFileSyncQuiet(root, ["rev-parse", "HEAD"]);
-      // Fast-forward only: a checkout someone has edited is left exactly as it is, because
-      // discarding their work to install a version they did not ask for would be far worse
-      // than being a version behind.
-      const ok = execFileSyncQuiet(root, ["merge", "--ff-only", r.target ?? "origin/HEAD"]) !== undefined;
-      const to = execFileSyncQuiet(root, ["rev-parse", "HEAD"]);
-      if (ok && from && to && from !== to) applied.push({ name, from, to });
-      else applyFailed = true;
-    }
-    // The update IS the approval - the user asked for both to update themselves - so the pin
-    // moves with it. It never did: the pin check then read the gateway's own fast-forward as
-    // "instructions nobody approved" and refused to launch `bf firstmate`. Runs even when nothing
-    // was behind, because machines already stuck that way are sitting at origin with a stale pin.
-    if (name === "firstmate" && cfg.apply && r.target) followPin(root, r.target);
-    const after = cfg.apply ? (await behindOrigin(root)).behind : before;
-    components.push({ name, root, behind: after ?? before, instructionChanges, reason: r.reason, ...(applyFailed ? { applyFailed } : {}) });
+    components.push({ name, root, behind: r.behind, instructionChanges: [], reason: r.reason });
   }
+  const applied: UpdateState["applied"] = [];
 
   const state: UpdateState = { checkedAt: new Date().toISOString(), components, applied };
   writeCache(sessionDir, state);
   if (applied.length) rlog("updates.applied", { applied });
   return state;
-}
-
-/** git, quietly: a failure here is information, not an exception to propagate. */
-function execFileSyncQuiet(cwd: string, args: string[]): string | undefined {
-  try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 60_000 }).trim();
-  } catch {
-    return undefined;
-  }
 }
 
 async function fleetCheck(): Promise<{ running: { jobs: number; harness: number }; pending: FleetEvent[]; blocking: boolean }> {
@@ -1440,29 +1389,6 @@ server.registerTool("context_report", {
   return text(`${renderReport(r)}\n\n${JSON.stringify(r, null, 2)}`);
 });
 
-server.registerTool("firstmate_status", {
-  title: "Is the firstmate distro provisioned, and what is it pinned to",
-  description: "Report the firstmate distro break-free drives for crew, worktrees and merge authority: where it lives, the commit the agent is actually obeying, the pinned commit, and whether the two have drifted apart. Drift means instructions nobody approved are in force.",
-  inputSchema: {},
-}, async () => json({ ...firstmateStatus(ctx.config.firstmate), repo: FIRSTMATE_REPO, label: FIRSTMATE_LABEL }));
-
-server.registerTool("firstmate_update_plan", {
-  title: "What moving the firstmate pin would change",
-  description: "Show what a revision would change in the surfaces that steer an agent — AGENTS.md, bin/ and skills/ — WITHOUT changing anything. An upstream commit becomes the instructions your agent obeys, so it is reviewed before it is applied, never after. Returns the command break-free would run, which is upstream's own fast-forward-only script, so you can run it yourself instead.",
-  inputSchema: {
-    target: z.string().optional().describe("Revision to plan towards. Default: origin's current default branch."),
-  },
-}, async (a) => {
-  try {
-    const st = firstmateStatus(ctx.config.firstmate);
-    if (!st.installed) return json({ installed: false, reason: st.reason, repo: FIRSTMATE_REPO });
-    const plan = planUpdate(st.root, a.target ?? "origin/HEAD");
-    return json({ ...plan, apply: updateCommand(st.root), note: plan.instructionChanges.length ? "These files steer the agent. Read them before applying." : "No change to instruction surfaces." });
-  } catch (e) {
-    return fail(e);
-  }
-});
-
 server.registerTool("obsidian_link", {
   title: "Surface this project's ledger in an Obsidian vault",
   description: "Link (or index) the project ledger into the Obsidian vault, so notes, tasks and the journal open in the vault with their wikilinks intact. The repository stays the source of truth: `link` symlinks the ledger rather than copying it. Does nothing when no vault is detected. Anything already at the target that is not our own link is left untouched.",
@@ -1689,7 +1615,7 @@ server.registerTool("harness_list", {
  */
 server.registerTool("bf_discover", {
   title: "List the operations that are not advertised permanently",
-  description: "break-free keeps execution and its lifecycle typed and resident, and moves everything else — worktrees, the ledger and its tasks and notes, provider and alias configuration, sessions, harnesses, cost, routing, the steward, firstmate — behind this. Call it with no argument for the list, or with `operation` for that one's full schema, then call it through bf_invoke. Nothing is unreachable; it is simply not spent on every turn.",
+  description: "break-free keeps execution and its lifecycle typed and resident, and moves everything else — worktrees, the ledger and its tasks and notes, provider and alias configuration, sessions, harnesses, cost, routing, the steward — behind this. Call it with no argument for the list, or with `operation` for that one's full schema, then call it through bf_invoke. Nothing is unreachable; it is simply not spent on every turn.",
   inputSchema: {
     operation: z.string().optional().describe("Return this operation's full input schema instead of the list."),
     match: z.string().optional().describe("Substring filter over names and titles, e.g. 'worktree' or 'note'."),
@@ -1755,10 +1681,8 @@ async function main() {
     // "Which knowledge layer am I actually using" is otherwise unanswerable. An absent vault
     // is reported as absent, not as a problem: Obsidian is optional and most machines lack it.
     const vault = resolveVault(ctx.config.knowledge);
-    const fm = firstmateStatus(ctx.config.firstmate);
     const knowledge = {
       graph: { configured: ctx.config.knowledge.graph.provider, ...(await graphResolution()) },
-      firstmate: { installed: fm.installed, root: fm.root, head: fm.head?.slice(0, 12) ?? null, pin: fm.pin ?? null, drifted: fm.drifted, ...(fm.installed ? { update: updateAvailable(fm.root) } : {}), ...(fm.reason ? { reason: fm.reason } : {}) },
       obsidian: vault
         ? { vault: vault.path, source: vault.source, mode: ctx.config.knowledge.obsidian.mode }
         : { vault: null, detected: false },
