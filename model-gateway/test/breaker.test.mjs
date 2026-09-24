@@ -133,3 +133,59 @@ test("a corrupt state file forgets rather than throws", async () => {
   const b = new Breaker(dir, { enabled: true, failures: 1, cooldownMs: 1000 });
   assert.equal(b.openUntil("host"), undefined, "forgetting costs one timeout; throwing costs every call");
 });
+
+// --- one machine, many gateways ---------------------------------------------------------
+// breaker.json is shared by every gateway on the machine - 28 on one of them. Each used to read
+// it once and write its whole in-memory copy back, so a gateway that loaded the file hours ago
+// erased every circuit another had opened, the moment it recorded one strike against anything.
+
+test("a circuit opened by one gateway survives another gateway's unrelated strike", async () => {
+  const { Breaker } = await import("../dist/breaker.js");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "brk-multi-"));
+  const cfg = { enabled: true, failures: 2, cooldownMs: 300_000 };
+
+  const stale = new Breaker(dir, cfg);
+  assert.equal(stale.openUntil("ollama"), undefined, "loaded before anything went wrong");
+
+  const other = new Breaker(dir, cfg);
+  other.record("ollama", "timeout");
+  assert.equal(other.record("ollama", "timeout"), true, "the second strike opens it");
+
+  // The stale gateway strikes a DIFFERENT provider. It used to write {kimi:...} over the file.
+  stale.record("kimi", "timeout");
+  assert.ok(new Breaker(dir, cfg).openUntil("ollama") !== undefined, "ollama's open circuit is still on disk");
+  assert.ok(stale.openUntil("ollama") !== undefined, "and the stale gateway now sees it too, without paying for it");
+});
+
+test("a gateway that notices an outage already open does not report it again", async () => {
+  const { Breaker } = await import("../dist/breaker.js");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "brk-noticed-"));
+  const cfg = { enabled: true, failures: 2, cooldownMs: 300_000 };
+  const a = new Breaker(dir, cfg), b = new Breaker(dir, cfg);
+
+  a.record("deepseek", "timeout");
+  assert.equal(a.record("deepseek", "timeout"), true, "a opens it");
+  // b strikes the same provider twice more: the circuit is already open, so these are not trips,
+  // and each would otherwise have appended its own provider.circuit_open row.
+  assert.equal(b.record("deepseek", "timeout"), false);
+  assert.equal(b.record("deepseek", "timeout"), false);
+});
+
+test("the breaker file is never left half-written for another gateway to read", async () => {
+  const { Breaker } = await import("../dist/breaker.js");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "brk-atomic-"));
+  const b = new Breaker(dir, { enabled: true, failures: 5, cooldownMs: 300_000 });
+  for (let i = 0; i < 20; i += 1) b.record(`p${i}`, "x");
+  // Written through a rename: no temp file is left behind, and what is there parses.
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => f.includes(".tmp")), []);
+  assert.equal(Object.keys(JSON.parse(fs.readFileSync(path.join(dir, "breaker.json"), "utf8"))).length, 20);
+});
