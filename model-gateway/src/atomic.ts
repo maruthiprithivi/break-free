@@ -55,7 +55,12 @@ export function withDirLock<T>(dir: string, fn: () => T, waitMs = 2_000): T | un
     try {
       fs.mkdirSync(lock);
       break;
-    } catch {
+    } catch (e) {
+      // Only EEXIST means someone holds it. Anything else - a missing directory, no permission -
+      // will not change by waiting, and waiting here is Atomics.wait: every retry froze this
+      // process's event loop for the full deadline, the same kind of freeze that made healthy
+      // providers look dead. Give up at once and let the caller fall back.
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") return undefined;
       try {
         if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
           fs.rmSync(lock, { recursive: true, force: true });

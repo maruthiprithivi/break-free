@@ -14,6 +14,7 @@
 import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
+import { atomicWrite, locked } from "./atomic.js";
 import os from "node:os";
 import { PROVIDER_CATALOG } from "./providers.js";
 
@@ -770,16 +771,28 @@ export function loadConfig(opts: { workspaceRoot?: string; configPath?: string }
 }
 
 /** Save a partial config into the user config file (merging with what is there). */
+/**
+ * Merge a patch into a config file that every gateway on the machine reads.
+ *
+ * It was read, merged and rewritten in place with nothing stopping another gateway doing the
+ * same: two configure_* calls at once lost one patch, and a gateway starting in the gap between
+ * truncate and write failed to parse the file and did not start at all. Now under the directory
+ * lock, re-read inside it, and replaced through a rename. A file that cannot be parsed is never
+ * written over - readJson throws, and that is the right answer for the only copy of someone's
+ * provider settings.
+ */
 export function saveConfigPatch(writePath: string, patch: Record<string, unknown>): void {
-  const existing = (readJson(writePath) as Record<string, unknown> | undefined) ?? {};
-  const merged = deepMerge(existing, patch);
-  fs.mkdirSync(path.dirname(writePath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(writePath, JSON.stringify(merged, null, 2) + "\n", { mode: 0o600 });
-  try {
-    fs.chmodSync(writePath, 0o600);
-  } catch {
-    /* windows */
-  }
+  const dir = path.dirname(writePath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const write = () => {
+    const existing = (readJson(writePath) as Record<string, unknown> | undefined) ?? {};
+    atomicWrite(writePath, JSON.stringify(deepMerge(existing, patch), null, 2) + "\n", 0o600);
+  };
+  // The lock is for the machine-wide file every gateway shares. A project's .model-gateway.json
+  // sits in the repository root, where a lock directory would show up in the user's working tree
+  // (and stay there if a process died holding it); it is written rarely, and atomically.
+  if (path.basename(writePath) === ".model-gateway.json") write();
+  else locked(dir, write);
 }
 
 /** Resolve "${VAR}" / "$VAR" references. */

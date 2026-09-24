@@ -189,3 +189,33 @@ test("the breaker file is never left half-written for another gateway to read", 
   assert.deepEqual(fs.readdirSync(dir).filter((f) => f.includes(".tmp")), []);
   assert.equal(Object.keys(JSON.parse(fs.readFileSync(path.join(dir, "breaker.json"), "utf8"))).length, 20);
 });
+
+// --- the shared lock gives up at once on an error waiting cannot fix -------------------------
+test("a lock that cannot be created for a reason other than contention fails fast", async () => {
+  const { withDirLock } = await import("../dist/atomic.js");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  // A directory that does not exist: mkdir fails with ENOENT, which no amount of waiting fixes.
+  // Every retry used to be an Atomics.wait freezing the process for the whole 2s deadline.
+  const missing = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "lock-")), "gone", "deeper");
+  const t0 = Date.now();
+  assert.equal(withDirLock(missing, () => "ran"), undefined, "not acquired");
+  assert.ok(Date.now() - t0 < 200, `gave up in ${Date.now() - t0}ms instead of waiting out the deadline`);
+});
+
+test("config patches from two writers both land, and the file is never half-written", async () => {
+  const { saveConfigPatch } = await import("../dist/config.js");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cfg-")), "config.json");
+  fs.writeFileSync(file, JSON.stringify({ providers: { deepseek: { apiKey: "keep-me" } } }));
+  saveConfigPatch(file, { firstmate: { pin: "abc" } });
+  saveConfigPatch(file, { providers: { kimi: { enabled: false } } });
+  const j = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.equal(j.providers.deepseek.apiKey, "keep-me", "an unrelated setting survives every patch");
+  assert.equal(j.firstmate.pin, "abc");
+  assert.equal(j.providers.kimi.enabled, false);
+  assert.deepEqual(fs.readdirSync(path.dirname(file)).filter((f) => f.includes(".tmp")), []);
+});
