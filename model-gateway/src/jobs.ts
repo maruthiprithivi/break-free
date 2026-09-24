@@ -6,6 +6,19 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { atomicWrite } from "./atomic.js";
+
+/**
+ * How many of the newest job records a listing reads.
+ *
+ * The Stop hook lists jobs at every turn end of every session. It used to read and JSON-parse
+ * every record ever written - 299 files, 2.5 MB, 89% of it result text it then threw away - and
+ * nothing removed any of them, so the cost of ending a turn grew with the lifetime of the
+ * install. A stat is microseconds; only the newest records are opened.
+ */
+const LIST_SCAN = 150;
+/** Finished records older than this are removed; job_result on one returns "unknown job". */
+const JOB_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 import type { GatewayConfig } from "./config.js";
 import { log as rlog } from "./logger.js";
 
@@ -78,10 +91,13 @@ export class JobRegistry {
     const live = this.jobs.get(id);
     if (live) return live.rec;
     if (this.dir) {
-      const f = path.join(this.dir, `${id.replace(/[^A-Za-z0-9._-]/g, "_")}.json`);
-      if (fs.existsSync(f)) {
+      const base = path.join(this.dir, id.replace(/[^A-Za-z0-9._-]/g, "_"));
+      if (fs.existsSync(`${base}.json`)) {
         try {
-          return JSON.parse(fs.readFileSync(f, "utf8")) as JobRecord;
+          const rec = JSON.parse(fs.readFileSync(`${base}.json`, "utf8")) as JobRecord;
+          // The result lives beside the record, read only when someone asks for it.
+          if (rec.result === undefined && fs.existsSync(`${base}.result.json`)) rec.result = JSON.parse(fs.readFileSync(`${base}.result.json`, "utf8"));
+          return rec;
         } catch {
           return undefined;
         }
@@ -113,9 +129,29 @@ export class JobRegistry {
   list(opts: { mine?: boolean } = {}): Omit<JobRecord, "result" | "progress">[] {
     const rows = new Map<string, JobRecord>();
     if (this.dir) {
-      for (const f of fs.readdirSync(this.dir).filter((f) => f.endsWith(".json"))) {
+      const now = Date.now();
+      const entries: { f: string; mtime: number }[] = [];
+      for (const f of fs.readdirSync(this.dir)) {
+        if (!f.endsWith(".json") || f.endsWith(".result.json")) continue;
+        try { entries.push({ f, mtime: fs.statSync(path.join(this.dir, f)).mtimeMs }); } catch { /* raced a delete */ }
+      }
+      entries.sort((a, b) => b.mtime - a.mtime);
+      for (const [i, { f, mtime }] of entries.entries()) {
+        const file = path.join(this.dir, f);
+        if (now - mtime > JOB_RETENTION_MS) {
+          // Every record on disk is a finished job: running ones live in memory until they end.
+          for (const x of [file, file.replace(/\.json$/, ".result.json")]) fs.rmSync(x, { force: true });
+          continue;
+        }
+        if (i >= LIST_SCAN) continue;
         try {
-          const j = JSON.parse(fs.readFileSync(path.join(this.dir, f), "utf8")) as JobRecord;
+          const j = JSON.parse(fs.readFileSync(file, "utf8")) as JobRecord;
+          if (j.result !== undefined) {
+            // Written before results moved out. Keep its age: rewriting it would otherwise make
+            // an old job look newest and restart its retention clock.
+            this.split(j);
+            try { fs.utimesSync(file, mtime / 1000, mtime / 1000); } catch { /* ordering is best effort */ }
+          }
           rows.set(j.id, j);
         } catch {
           /* skip */
@@ -132,9 +168,22 @@ export class JobRegistry {
   private persist(rec: JobRecord): void {
     if (!this.dir) return;
     try {
-      fs.writeFileSync(path.join(this.dir, `${rec.id}.json`), JSON.stringify(rec, null, 2), { mode: 0o600 });
+      this.split(rec);
     } catch {
       /* best effort */
     }
+  }
+
+  /**
+   * Write a record and its result as two files: the listing reads the small one, and only
+   * job_result reads the large one. The result is written first so a record never points at a
+   * result that is not there yet.
+   */
+  private split(rec: JobRecord): void {
+    if (!this.dir) return;
+    const base = path.join(this.dir, rec.id.replace(/[^A-Za-z0-9._-]/g, "_"));
+    const { result, ...head } = rec;
+    if (result !== undefined) atomicWrite(`${base}.result.json`, JSON.stringify(result));
+    atomicWrite(`${base}.json`, JSON.stringify(head, null, 2));
   }
 }
