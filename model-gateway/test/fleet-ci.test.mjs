@@ -26,7 +26,10 @@ afterEach(() => {
   fs.rmSync(sessionDir, { recursive: true, force: true });
 });
 
-const t = (ms) => new Date(ms).toISOString();
+// Offsets from now, not from 1970: an event that belongs to no workspace expires after an hour
+// (fleet.ts UNSTAMPED_TTL_MS), and a 1970 timestamp is fifty-six years past it.
+const BASE = Date.now();
+const t = (ms) => new Date(BASE + ms).toISOString();
 
 test("enqueueCi twice for the same sha yields one pending event", () => {
   const first = enqueueCi(sessionDir, { repo: "acme/app", branch: "main", sha: "abc123" });
@@ -78,7 +81,7 @@ test("expireCi clears a stale pending and returns 1", () => {
     { ts: t(0), kind: "ci.pending", id: "old-sha", reason: "ci.pending", ci: { sha: "old-sha" } },
   ]);
 
-  assert.equal(expireCi(sessionDir, 10_000, 5_000), 1);
+  assert.equal(expireCi(sessionDir, BASE + 10_000, 5_000), 1);
   assert.deepEqual(pendingEvents(sessionDir), []);
   assert.equal(readEvents(sessionDir).length, 1);
 });

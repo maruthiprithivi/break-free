@@ -345,7 +345,7 @@ export class Workspace {
       // trusting the agent to remember: best-effort, and never allowed to fail the push.
       try {
         const sha = (await this.git(["rev-parse", "HEAD"])).trim();
-        if (sha && this.config.sessionDir) enqueueCi(this.config.sessionDir, { sha, branch });
+        if (sha && this.config.sessionDir) enqueueCi(this.config.sessionDir, { sha, branch }, this.root);
       } catch { /* the push succeeded; bookkeeping must not undo that */ }
       return out;
     });

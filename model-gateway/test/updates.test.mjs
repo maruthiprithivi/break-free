@@ -158,7 +158,10 @@ test("a fetch that never answers does not block the process while it waits", asy
   // so "fire and forget" froze the event loop for the whole timeout - at startup and at every
   // Stop hook. Here the remote is a listener that accepts and never speaks.
   const net = await import("node:net");
-  const silent = net.createServer(() => {});
+  // Every accepted socket is destroyed afterwards: server.close() waits for open connections,
+  // and one left behind keeps this test file's process alive for ever.
+  const conns = new Set();
+  const silent = net.createServer((c) => conns.add(c));
   await new Promise((r) => silent.listen(0, "127.0.0.1", r));
   const { clone } = pair();
   git(clone, ["remote", "set-url", "origin", `http://127.0.0.1:${silent.address().port}/repo.git`]);
@@ -167,6 +170,7 @@ test("a fetch that never answers does not block the process while it waits", asy
   const ticker = setInterval(() => { ticks += 1; }, 20);
   const r = await behindOrigin(clone, { fetch: true, timeoutMs: 800 });
   clearInterval(ticker);
+  for (const c of conns) c.destroy();
   silent.close();
 
   assert.equal(r.behind, undefined, "an unreachable origin is never reported as nothing-new");

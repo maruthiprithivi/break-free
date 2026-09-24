@@ -152,14 +152,14 @@ async function reconcileCi(sessionDir: string): Promise<void> {
   const shas = [...new Set(pendingEvents(sessionDir, ctx.workspace.root).filter((e) => e.kind === "ci.pending").map((e) => e.ci?.sha).filter((x): x is string => !!x))];
   if (!shas.length) return;
 
-  expireCi(sessionDir, Date.now(), ctx.config.fleet.ciTimeoutMs);
+  expireCi(sessionDir, Date.now(), ctx.config.fleet.ciTimeoutMs, ctx.workspace.root);
 
   const runs = (await ghJson(["run", "list", "--json", "databaseId,status,conclusion,url,headSha,name", "--limit", "30"])) as
     | { databaseId: number; status: string; conclusion: string | null; url: string; headSha: string; name: string }[]
     | undefined;
   if (!runs) {
     // No gh, no auth, or no repo: we cannot verify, so stop blocking on it.
-    expireCi(sessionDir, Date.now(), 0);
+    expireCi(sessionDir, Date.now(), 0, ctx.workspace.root);
     return;
   }
 
@@ -167,7 +167,7 @@ async function reconcileCi(sessionDir: string): Promise<void> {
     const run = runs.find((r) => r.headSha === sha);
     if (!run || run.status !== "completed") continue; // still pending: keep blocking
     if (run.conclusion !== "success") {
-      resolveCi(sessionDir, sha, { state: "failed", runId: run.databaseId, url: run.url, job: run.name });
+      resolveCi(sessionDir, sha, { state: "failed", runId: run.databaseId, url: run.url, job: run.name }, ctx.workspace.root);
       continue;
     }
     const deps = (await ghJson(["api", `repos/{owner}/{repo}/deployments?sha=${sha}`])) as { id: number }[] | undefined;
@@ -175,12 +175,12 @@ async function reconcileCi(sessionDir: string): Promise<void> {
       const states = await Promise.all(deps.map((d) => ghJson(["api", `repos/{owner}/{repo}/deployments/${d.id}/statuses?per_page=1`]) as Promise<{ state: string }[] | undefined>));
       const latest = states.map((x) => Array.isArray(x) && x[0] ? x[0].state : undefined);
       if (latest.some((st) => st === "failure" || st === "error")) {
-        resolveCi(sessionDir, sha, { state: "failed", runId: run.databaseId, url: run.url, job: "deployment" });
+        resolveCi(sessionDir, sha, { state: "failed", runId: run.databaseId, url: run.url, job: "deployment" }, ctx.workspace.root);
         continue;
       }
       if (!latest.every((st) => st === "success")) continue; // deployment still in flight: keep blocking
     }
-    resolveCi(sessionDir, sha, { state: "success", runId: run.databaseId, url: run.url });
+    resolveCi(sessionDir, sha, { state: "success", runId: run.databaseId, url: run.url }, ctx.workspace.root);
   }
 }
 
@@ -1773,7 +1773,7 @@ async function main() {
           // Name the exact call. "call fleet_status" is not enough: without drain:true the events
           // stay pending and the next turn blocks on the identical list, which is a loop the
           // agent cannot escape by following the instruction it was given.
-          const reason = `${parts.join(", ")} - ${ciFailed.length ? "fix it before ending the turn" : "call fleet_status with drain:true to collect them"}`;
+          const reason = `${parts.join(", ")} - ${ciFailed.length ? "fix it, then call fleet_status with drain:true to clear it" : "call fleet_status with drain:true to collect them"}`;
           console.log(JSON.stringify({ decision: "block", reason }));
         }
       } catch {
