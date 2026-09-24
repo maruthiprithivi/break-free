@@ -36,13 +36,18 @@ mkdir -p "$T/home/.cursor"
 chmod +x "$T/bin/"*
 
 ( cd "$ROOT/model-gateway" && [ -d node_modules ] || npm install --silent --no-audit --no-fund )
-PORT=18787 node "$ROOT/model-gateway/test/mock-provider.mjs" > "$T/mock.log" 2>&1 &
+free_port() { node -e 'const s=require("net").createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})'; }
+MOCK_PORT="$(free_port)"
+SHIM_PORT="$(free_port)"
+while [ "$SHIM_PORT" = "$MOCK_PORT" ]; do SHIM_PORT="$(free_port)"; done
+export BREAK_FREE_SERVE_PORT="$SHIM_PORT"
+PORT="$MOCK_PORT" node "$ROOT/model-gateway/test/mock-provider.mjs" > "$T/mock.log" 2>&1 &
 MOCK_PID=$!
 sleep 1
 
 mkdir -p "$T/home/.config/model-gateway"
 cat > "$T/home/.config/model-gateway/config.json" <<EOF
-{ "providers": { "deepseek": { "baseUrl": "http://127.0.0.1:18787/v1", "defaultModel": "good" } } }
+{ "providers": { "deepseek": { "baseUrl": "http://127.0.0.1:$MOCK_PORT/v1", "defaultModel": "good" } } }
 EOF
 cat > "$T/answers.json" <<EOF
 { "fix_stale_wire_api": true, "extra_agents": "detected", "extra_scope": "both", "claude_scope": "both", "codex_scope": "both", "project_dir": "$T/proj", "key_storage": "config",
@@ -76,6 +81,18 @@ echo "old" > "$T/home/.claude/skills/model-gateway/SKILL.md"; echo "uses model-g
 mkdir -p "$T/home/.codex" && printf '[mcp_servers.model_gateway]\ncommand = "node"\n\n[model_providers.mine]\nname = "mine"\nbase_url = "http://localhost:11434/v1"\nwire_api = "chat"\n' > "$T/home/.codex/config.toml"
 printf '# my rules\n\n<!-- Append to your repo'"'"'s AGENTS.md (or ~/.codex/AGENTS.md for all projects). -->\n\n## Delegating to other models\n\nThe `break_free_gateway` MCP server is available. Use the `break-free-model-gateway` skill old text.\n' > "$T/home/.codex/AGENTS.md"
 mkdir -p "$T/home/.claude" && printf '# mine\n\n## Delegating to other models (break-free-model-gateway)\nOLD VERSION of the rule.\n' > "$T/home/.claude/CLAUDE.md"
+cat >> "$T/home/.claude/CLAUDE.md" <<'EOF'
+## Crew, worktrees and merge authority (firstmate)
+Obsolete crew rule.
+## My instructions
+Keep this section verbatim.
+EOF
+mkdir -p "$T/home/.omp/agent" && cat > "$T/home/.omp/agent/AGENTS.md" <<'EOF'
+## Crew, worktrees and merge authority (firstmate)
+Obsolete crew rule.
+## My instructions
+Keep this section verbatim.
+EOF
 cat > "$T/home/.claude/settings.json" <<'EOF'
 {
   "permissions": { "allow": ["Bash(echo hi:*)"] },
@@ -108,6 +125,23 @@ grep -q "Work tracking (break-free-github-flow)" "$T/home/.claude/CLAUDE.md" || 
 grep -q "Delegating to other models (break-free-model-gateway)" "$T/home/.claude/CLAUDE.md" || fail "CLAUDE.md delegation rule missing"
 grep -q "OLD VERSION" "$T/home/.claude/CLAUDE.md" && fail "stale CLAUDE.md rule not replaced"
 grep -q "^# mine" "$T/home/.claude/CLAUDE.md" || fail "user's own CLAUDE.md content lost"
+grep -q 'Keep this section verbatim.' "$T/home/.claude/CLAUDE.md" || fail "Claude rule migration ate the adjacent section"
+grep -q 'Keep this section verbatim.' "$T/home/.omp/agent/AGENTS.md" || fail "omp rule migration ate the adjacent section"
+grep -q 'In a session launched by Firstmate (a `FIRSTMATE_OP` launch brief)' "$T/home/.claude/CLAUDE.md" || fail "Claude carve-out missing"
+grep -q 'In a session launched by Firstmate (a `FIRSTMATE_OP` launch brief)' "$T/home/.codex/AGENTS.md" || fail "Codex carve-out missing"
+node - "$ROOT" "$T/home/.claude/CLAUDE.md" "$T/home/.codex/AGENTS.md" <<'NODE' || fail "adjacent delegation or work tracking section changed beyond the carve-out"
+const fs = require('fs');
+const path = require('path');
+const [root, claude, codex] = process.argv.slice(2);
+for (const [file, snippet] of [
+  [claude, 'claude/CLAUDE.gateway.snippet'],
+  [claude, 'claude/CLAUDE.md.snippet'],
+  [codex, 'codex/AGENTS.md.snippet'],
+  [codex, 'codex/AGENTS.github-flow.snippet'],
+]) {
+  if (!fs.readFileSync(file, 'utf8').includes(fs.readFileSync(path.join(root, 'agent-config', snippet), 'utf8').trim())) process.exit(1);
+}
+NODE
 [ "$(grep -c "Delegating to other models" "$T/home/.codex/AGENTS.md")" = "1" ] || fail "codex AGENTS.md should have exactly one delegation rule (v2 removed, v3 added)"
 grep -q "run_plan" "$T/home/.codex/AGENTS.md" || fail "codex AGENTS.md rule is not the v3 rule"
 grep -q "old text" "$T/home/.codex/AGENTS.md" && fail "v2 codex rule not removed"
@@ -125,17 +159,9 @@ echo "ok"
 echo "### firstmate provisioning"
 [ -f "$T/home/.break-free/firstmate/AGENTS.md" ] || fail "firstmate was not cloned"
 grep -q '"pin"' "$T/home/.config/model-gateway/config.json" || fail "firstmate was cloned but not pinned"
-grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.claude/CLAUDE.md" || fail "the firstmate standing rule is missing; a clone nothing points at is a clone nothing uses"
-# The rule has to reach every harness the install wired, not just Claude and Codex. An omp user
-# had the server, the skills and the delegation rule but no firstmate rule, so the distro sat
-# there unmentioned.
-grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.codex/AGENTS.md" || fail "codex has no firstmate rule"
-grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.omp/agent/AGENTS.md" || fail "omp has no firstmate rule — the rule is the integration for an ordinary session"
-grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.gemini/GEMINI.md" || fail "gemini has no firstmate rule"
-# and it must not have eaten the delegation rule that was already there
+grep -R -F -q "Crew, worktrees and merge authority (firstmate)" "$T/home" "$T/proj" && fail "install left a firstmate standing rule"
+# Migration must preserve the neighbouring delegation rule.
 grep -q "Delegating to other models" "$T/home/.omp/agent/AGENTS.md" || fail "omp lost its delegation rule when the firstmate rule was added"
-# idempotent: exactly one copy after the re-install that happens later in this script
-[ "$(grep -c "Crew, worktrees and merge authority (firstmate)" "$T/home/.omp/agent/AGENTS.md")" = "1" ] || fail "firstmate rule duplicated in omp AGENTS.md"
 grep -q "firstmate" "$T/install.out" || fail "the install said nothing about firstmate"
 echo ok
 
@@ -183,19 +209,19 @@ echo "ok"
 
 echo "### harness profiles"
 [ -f "$T/home/.config/model-gateway/harness/deepseek.env" ] || fail "deepseek harness env missing"
-grep -q "ANTHROPIC_BASE_URL='http://127.0.0.1:18787'" "$T/home/.config/model-gateway/harness/deepseek.env" || fail "anthropic base url not derived from provider baseUrl"
+grep -F -q "ANTHROPIC_BASE_URL='http://127.0.0.1:$MOCK_PORT'" "$T/home/.config/model-gateway/harness/deepseek.env" || fail "anthropic base url not derived from provider baseUrl"
 grep -q "ANTHROPIC_MODEL='good'" "$T/home/.config/model-gateway/harness/deepseek.env" || fail "anthropic model missing"
 grep -q "break-free-claude-deepseek()" "$T/home/.config/model-gateway/harness/break-free.sh" || fail "claude shell function missing"
 grep -q "break-free-codex-deepseek()" "$T/home/.config/model-gateway/harness/break-free.sh" || fail "codex shell function missing"
 grep -q '\[model_providers.break_free_deepseek\]' "$T/home/.codex/config.toml" || fail "codex model_provider missing"
 grep -q '\[profiles.break_free_deepseek\]' "$T/home/.codex/config.toml" || fail "codex profile missing"
-grep -q 'base_url = "http://127.0.0.1:18790/deepseek/v1"' "$T/home/.codex/config.toml" || fail "codex provider should point at the shim"
+grep -F -q "base_url = \"http://127.0.0.1:$SHIM_PORT/deepseek/v1\"" "$T/home/.codex/config.toml" || fail "codex provider should point at the shim"
 grep -A6 'model_providers.break_free_deepseek' "$T/home/.codex/config.toml" | grep -q 'wire_api = "responses"' || fail "codex provider must use wire_api=responses"
 grep -q 'wire_api = "chat"' "$T/home/.codex/config.toml" && fail "stale wire_api=chat should have been rewritten"
 grep -q "break-free-serve()" "$T/home/.config/model-gateway/harness/break-free.sh" || fail "shim shell function missing"
 grep -q "Codex shim: /deepseek/v1/responses answered" "$T/install.out" || fail "shim round-trip not verified (see $T/install.out)"
-curl -sf http://127.0.0.1:18790/healthz >/dev/null || fail "shim not running after install"
-curl -sf -X POST -H 'content-type: application/json' -d '{"input":"hi","stream":true}' http://127.0.0.1:18790/deepseek/v1/responses | grep -q "response.completed" || fail "shim streaming failed"
+curl -sf "http://127.0.0.1:$SHIM_PORT/healthz" >/dev/null || fail "shim not running after install"
+curl -sf -X POST -H 'content-type: application/json' -d '{"input":"hi","stream":true}' "http://127.0.0.1:$SHIM_PORT/deepseek/v1/responses" | grep -q "response.completed" || fail "shim streaming failed"
 grep -q "break-free harness profiles" "$T/home/.zshrc" || fail "zshrc line missing"
 grep -q "test-key" "$T/home/.config/model-gateway/harness/deepseek.env" || fail "env file should carry the key (mode 600)"
 [ "$(stat -c %a "$T/home/.config/model-gateway/harness/deepseek.env" 2>/dev/null || stat -f %Lp "$T/home/.config/model-gateway/harness/deepseek.env")" = "600" ] || fail "harness env not 0600"
@@ -214,6 +240,14 @@ grep -q "GREEN" "$T/doctor.out" || fail "doctor not GREEN"
 echo "ok"
 
 echo "### uninstall"
+cat >> "$T/home/.claude/CLAUDE.md" <<'EOF'
+## Crew, worktrees and merge authority (firstmate)
+Obsolete crew rule.
+EOF
+cat >> "$T/home/.omp/agent/AGENTS.md" <<'EOF'
+## Crew, worktrees and merge authority (firstmate)
+Obsolete crew rule.
+EOF
 node "$ROOT/setup.mjs" --uninstall --project "$T/proj" --yes > "$T/uninstall.out" 2>&1 || fail "uninstall failed"
 [ ! -d "$T/home/.claude/skills/break-free-model-gateway" ] || fail "claude skill still present"
 [ ! -d "$T/home/.claude/skills/break-free-github-flow" ] || fail "github-flow skill still present"
@@ -224,7 +258,7 @@ grep -q "Delegating to other models" "$T/home/.codex/AGENTS.md" && fail "codex A
 grep -q "Delegating to other models" "$T/proj/AGENTS.md" && fail "project AGENTS.md delegation rule still present"
 grep -q 'break-free-gateway' "$T/proj/.mcp.json" && fail "project registration still present"
 [ ! -d "$T/home/.config/model-gateway/harness" ] || fail "harness dir still present"
-sleep 0.5; curl -sf http://127.0.0.1:18790/healthz >/dev/null && fail "shim still running after uninstall"
+sleep 0.5; curl -sf "http://127.0.0.1:$SHIM_PORT/healthz" >/dev/null && fail "shim still running after uninstall"
 grep -q "break-free harness profiles" "$T/home/.zshrc" && fail "zshrc line still present"
 grep -q 'break_free_deepseek' "$T/home/.codex/config.toml" && fail "codex profile still present"
 node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if(j.mcp["break-free-gateway"]||!j.mcp.other||j.model!=="x/y")process.exit(1)' "$T/home/.config/opencode/opencode.json" || fail "opencode entry not removed (or user config damaged)"
@@ -241,8 +275,7 @@ grep -q "read:" "$T/home/.aider.conf.yml" && fail "aider read: not removed"
 echo "ok"
 
 # A rule left pointing at a distro that is gone reads as an instruction, not a suggestion.
-grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.claude/CLAUDE.md" && fail "uninstall left the firstmate rule in claude"
-grep -q "Crew, worktrees and merge authority (firstmate)" "$T/home/.omp/agent/AGENTS.md" && fail "uninstall left the firstmate rule in omp"
+grep -R -F -q "Crew, worktrees and merge authority (firstmate)" "$T/home" "$T/proj" && fail "uninstall left a firstmate standing rule"
 echo ok
 
 echo "### doctor after uninstall (expect RED, exit 1)"
