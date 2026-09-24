@@ -125,6 +125,27 @@ export interface UpdatePlan {
  * those are what a human needs to have seen. A thousand-line docs change is not the thing that
  * can quietly alter what the agent does.
  */
+/**
+ * The commit firstmate's pin should move to, or undefined when it must stay put.
+ *
+ * The auto-update fast-forwards firstmate but never moved the pin, so the pin check then read the
+ * gateway's own update as "instructions nobody approved" and refused to launch `bf firstmate`.
+ * The pin follows HEAD only when HEAD got there the way the auto-update gets there - each
+ * condition rules out something that must go on reading as drift:
+ *
+ *   HEAD is exactly the upstream target      nothing local was committed on top
+ *   the pin is an ancestor of HEAD           it only moved forward: no checkout, no rewrite
+ *   the working tree is clean                no one has edited the instructions
+ */
+export function followablePin(root: string, pin: string | undefined, target: string): string | undefined {
+  const head = git(root, ["rev-parse", "HEAD"]);
+  if (!pin || !head || head.startsWith(pin) || pin.startsWith(head)) return undefined;
+  if (head !== git(root, ["rev-parse", target])) return undefined;
+  if (git(root, ["merge-base", "--is-ancestor", pin, head]) === undefined) return undefined;
+  if (git(root, ["status", "--porcelain"]) !== "") return undefined;
+  return head;
+}
+
 export function planUpdate(root: string, target: string): UpdatePlan {
   const from = git(root, ["rev-parse", "HEAD"]);
   const to = git(root, ["rev-parse", target]);

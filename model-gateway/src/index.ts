@@ -35,8 +35,8 @@ import { startServe } from "./serve.js";
 import { WorktreeRegistry, WORKTREE_STATUSES, isLinkedWorktree, shadowLedgerDir, installGuardHook, guardHookStatus, removeGuardHook, LEDGER_GUARD_WORKFLOW } from "./worktrees.js";
 import { LEDGER_DIR } from "./ledger.js";
 import { resolveVault, linkLedger, resolveGraph, type GraphProbe } from "./knowledge.js";
-import { status as firstmateStatus, planUpdate, updateCommand, parseUpdateSummary, updateAvailable, sessionLabel, FIRSTMATE_REPO, FIRSTMATE_LABEL } from "./firstmate.js";
-import { behindOrigin, isCheckout, readCache, writeCache, cacheIsWarm, notice as updateNotice, type UpdateState, type ComponentUpdate } from "./updates.js";
+import { status as firstmateStatus, planUpdate, updateCommand, parseUpdateSummary, updateAvailable, sessionLabel, FIRSTMATE_REPO, FIRSTMATE_LABEL, followablePin } from "./firstmate.js";
+import { behindOrigin, isCheckout, readCache, restoreBuildArtefacts, writeCache, cacheIsWarm, notice as updateNotice, type UpdateState, type ComponentUpdate } from "./updates.js";
 import { estimateTokens, line as ctxLine, report as ctxReport, renderReport, type ContextLine } from "./context.js";
 import { runSteward, hygiene } from "./steward.js";
 import { DEFAULT_PRICING } from "./config.js";
@@ -208,6 +208,18 @@ function graphResolution() {
  * a cache that ledger_resume reads, so the notice reaches the session whether or not this
  * finished first.
  */
+/** Record the pin the auto-update already approved; the decision is followablePin()'s. */
+function followPin(root: string, target: string): void {
+  const next = followablePin(root, ctx.config.firstmate.pin, target);
+  if (!next) return;
+  try {
+    saveConfigPatch(loaded.writePath, { firstmate: { pin: next } });
+    rlog("firstmate.pin", { from: ctx.config.firstmate.pin, to: next });
+  } catch {
+    // Unwritable config: the pin check keeps reporting drift, which is the honest answer.
+  }
+}
+
 async function refreshUpdates(): Promise<UpdateState | undefined> {
   const cfg = ctx.config.updates;
   const sessionDir = ctx.config.sessionDir;
@@ -232,6 +244,9 @@ async function refreshUpdates(): Promise<UpdateState | undefined> {
     const before = r.behind;
 
     if (cfg.apply && (r.behind ?? 0) > 0) {
+      // A lockfile the installer rewrote is not an edit; without this the merge below aborts for
+      // ever on every install that ever ran `npm install` against a stale lockfile.
+      if (name === "break-free") restoreBuildArtefacts(root);
       const from = execFileSyncQuiet(root, ["rev-parse", "HEAD"]);
       // Fast-forward only: a checkout someone has edited is left exactly as it is, because
       // discarding their work to install a version they did not ask for would be far worse
@@ -240,6 +255,11 @@ async function refreshUpdates(): Promise<UpdateState | undefined> {
       const to = execFileSyncQuiet(root, ["rev-parse", "HEAD"]);
       if (ok && from && to && from !== to) applied.push({ name, from, to });
     }
+    // The update IS the approval - the user asked for both to update themselves - so the pin
+    // moves with it. It never did: the pin check then read the gateway's own fast-forward as
+    // "instructions nobody approved" and refused to launch `bf firstmate`. Runs even when nothing
+    // was behind, because machines already stuck that way are sitting at origin with a stale pin.
+    if (name === "firstmate" && cfg.apply && r.target) followPin(root, r.target);
     const after = cfg.apply ? (await behindOrigin(root)).behind : before;
     components.push({ name, root, behind: after ?? before, instructionChanges, reason: r.reason });
   }
