@@ -13,6 +13,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { atomicWrite } from "./atomic.js";
 
+/**
+ * Keys a lead may send to a sub-agent by name. An allow-list rather than anything tmux accepts:
+ * send-keys treats an unrecognised name as text to type, so a typo would be typed into the agent.
+ */
+export const HARNESS_KEY = /^(Escape|Enter|Tab|BTab|BSpace|Space|Up|Down|Left|Right|Home|End|PageUp|PageDown|C-[a-z])$/;
+
 /** An exited session's record is dropped once tmux has confirmed it gone for this long. */
 const EXITED_RETENTION_MS = 24 * 60 * 60 * 1000;
 import { randomBytes } from "node:crypto";
@@ -126,10 +132,22 @@ export class HarnessController {
   }
 
   /** Write literal keystrokes into the session (optionally followed by Enter). */
-  async send(id: string, text: string, enter = true): Promise<void> {
+  /**
+   * Named keys first - Escape to interrupt a sub-agent, C-c to stop one - then literal text, then
+   * Enter. There was no way to send a key at all: a lead that passed `keys` had them silently
+   * dropped, sent an empty line instead, and reported the sub-agent interrupted when it was not.
+   */
+  async send(id: string, text: string, enter = true, keys: string[] = []): Promise<void> {
     const s = this.must(id);
-    const r = await this.tmuxRun(["send-keys", "-t", s.tmux, "-l", text]);
-    if (!r.ok) throw new Error(`tmux send-keys failed: ${r.out.trim()}`);
+    for (const k of keys) {
+      if (!HARNESS_KEY.test(k)) throw new Error(`not a key tmux can send: "${k}"`);
+      const r = await this.tmuxRun(["send-keys", "-t", s.tmux, k]);
+      if (!r.ok) throw new Error(`tmux send-keys ${k} failed: ${r.out.trim()}`);
+    }
+    if (text) {
+      const r = await this.tmuxRun(["send-keys", "-t", s.tmux, "-l", text]);
+      if (!r.ok) throw new Error(`tmux send-keys failed: ${r.out.trim()}`);
+    }
     if (enter) await this.tmuxRun(["send-keys", "-t", s.tmux, "Enter"]);
     s.updatedAt = new Date().toISOString();
     this.save(s);

@@ -45,7 +45,8 @@ before(async () => {
     'arg() { local f="$1" prev=""; shift; for a in "$@"; do [ "$prev" = "$f" ] && { printf "%s" "$a"; return 0; }; prev="$a"; done; }',
     'case "$cmd" in',
     '  new-session) : > "$STATE/$(arg -s "$@")"; exit 0 ;;',
-    '  send-keys) t="$(arg -t "$@")"; lit="$(arg -l "$@")"; [ -n "$lit" ] && printf "%s" "$lit" >> "$STATE/$t"; case " $* " in *" Enter "*) echo >> "$STATE/$t" ;; esac; exit 0 ;;',
+    // Named keys are recorded as <Name>, so a test can see that a key reached tmux rather than trust sent:true.
+    '  send-keys) t="$(arg -t "$@")"; lit="$(arg -l "$@")"; if [ -n "$lit" ]; then printf "%s" "$lit" >> "$STATE/$t"; else skip=""; for k in "$@"; do if [ -n "$skip" ]; then skip=""; continue; fi; case "$k" in -t) skip=1 ;; Enter) echo >> "$STATE/$t" ;; *) printf "<%s>" "$k" >> "$STATE/$t" ;; esac; done; fi; exit 0 ;;',
     '  capture-pane) cat "$STATE/$(arg -t "$@")" 2>/dev/null; exit 0 ;;',
     '  has-session) [ -f "$STATE/$(arg -t "$@")" ] && exit 0 || exit 1 ;;',
     '  kill-session) rm -f "$STATE/$(arg -t "$@")"; exit 0 ;;',
@@ -337,6 +338,14 @@ test("harness sub-agents: spawn, send, read, status, list, close over tmux", asy
   assert.match(read.output, /explain src\/app\.js/);
   assert.equal((await call("harness_status", { id: sp.id })).json().state, "running");
   assert.ok((await call("harness_list")).json().sessions.some((x) => x.id === sp.id));
+  // Interrupting a sub-agent: a key, no text, and no stray Enter. `keys` used to be silently
+  // dropped, so this sent an empty line and reported success.
+  await call("harness_send", { id: sp.id, keys: ["Escape"] });
+  assert.match((await call("harness_read", { id: sp.id })).json().output, /<Escape>$/, "the key reached tmux, and nothing followed it");
+  const empty = await call("harness_send", { id: sp.id });
+  assert.equal(empty.isError, true, "nothing to send is an error, not a silent Enter");
+  const typo = await call("harness_send", { id: sp.id, keys: ["Escpae"] });
+  assert.equal(typo.isError, true, "a mistyped key is refused - tmux would type it as text");
   assert.equal((await call("harness_close", { id: sp.id })).json().closed, true);
   assert.equal((await call("harness_status", { id: sp.id })).json().state, "exited");
   // unknown id is a clean error, not a crash

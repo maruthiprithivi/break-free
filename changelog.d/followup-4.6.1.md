@@ -11,3 +11,9 @@
 - **The installer's self-test runs in a scrubbed environment.** It inherited provider keys - one
   test made live, paid calls to TypeSafe - and the markers of whatever session launched it, which
   produced false failures when installing from inside Claude Code.
+- **A sub-agent can actually be interrupted.** `harness_send` takes named keys - `Escape`, `C-c`
+  and the like - so a lead can interrupt a harness. It had no such argument, and a lead that passed
+  one had it dropped without a word: an empty line was sent, `sent: true` came back, and the lead
+  reported an interrupt that never happened.
+- **`bf_invoke` refuses arguments an operation does not have**, naming them and listing what it
+  accepts, and explains a wrong type by field instead of dumping the validation error.
