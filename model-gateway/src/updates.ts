@@ -15,7 +15,7 @@
  * Checking is cheap but not free — it talks to a remote — so the result is cached and a check
  * is skipped while that cache is warm. A session start must never block on the network.
  */
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -59,9 +59,13 @@ export function isCheckout(root: string): boolean {
  * which is honest but stale. A failure to reach the remote is `undefined`, never 0 — "I could
  * not ask" and "there is nothing new" are different answers and only one of them is good news.
  */
-export function behindOrigin(root: string, opts: { fetch?: boolean; timeoutMs?: number } = {}): { behind?: number; target?: string; reason?: string } {
+export async function behindOrigin(root: string, opts: { fetch?: boolean; timeoutMs?: number } = {}): Promise<{ behind?: number; target?: string; reason?: string }> {
   if (!isCheckout(root)) return { reason: "not a git checkout" };
-  if (opts.fetch && git(root, ["fetch", "--quiet", "origin"], opts.timeoutMs ?? 20_000) === undefined) {
+  // The fetch is the only step here that touches the network, so it is the only one that must
+  // not block. It used to be execFileSync inside an async function that ran before its first
+  // await, which froze the event loop for up to its timeout - at startup and in the Stop hook -
+  // on a network that black-holes TCP. The local steps below are milliseconds and stay simple.
+  if (opts.fetch && !(await fetchOrigin(root, opts.timeoutMs ?? 20_000))) {
     return { reason: "could not reach origin" };
   }
   const target = git(root, ["rev-parse", "origin/HEAD"]) ?? git(root, ["rev-parse", "origin/main"]);
@@ -70,6 +74,12 @@ export function behindOrigin(root: string, opts: { fetch?: boolean; timeoutMs?: 
   if (target === head) return { behind: 0, target };
   const n = Number(git(root, ["rev-list", "--count", `${head}..${target}`]) ?? "");
   return Number.isFinite(n) ? { behind: n, target } : { reason: "could not count commits" };
+}
+
+function fetchOrigin(root: string, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile("git", ["fetch", "--quiet", "origin"], { cwd: root, timeout: timeoutMs, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }, (err) => resolve(!err));
+  });
 }
 
 /** Cached so a session start is not a network round trip every time. */

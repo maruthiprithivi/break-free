@@ -226,7 +226,7 @@ async function refreshUpdates(): Promise<UpdateState | undefined> {
 
   for (const { name, root } of roots) {
     if (!isCheckout(root)) { components.push({ name, root, instructionChanges: [], reason: "not a git checkout" }); continue; }
-    const r = behindOrigin(root, { fetch: true });
+    const r = await behindOrigin(root, { fetch: true });
     // Only firstmate's changes steer an agent; break-free's are a program's.
     const instructionChanges = name === "firstmate" && r.target ? planUpdate(root, r.target).instructionChanges : [];
     const before = r.behind;
@@ -240,7 +240,7 @@ async function refreshUpdates(): Promise<UpdateState | undefined> {
       const to = execFileSyncQuiet(root, ["rev-parse", "HEAD"]);
       if (ok && from && to && from !== to) applied.push({ name, from, to });
     }
-    const after = cfg.apply ? behindOrigin(root).behind : before;
+    const after = cfg.apply ? (await behindOrigin(root)).behind : before;
     components.push({ name, root, behind: after ?? before, instructionChanges, reason: r.reason });
   }
 
@@ -1684,10 +1684,6 @@ server.registerTool("bf_invoke", {
 
 // ------------------------------------------------------------ main
 async function main() {
-  // Fire and forget: a session must not wait on a git fetch, and a network that is down is
-  // not a reason for the gateway to be.
-  void refreshUpdates().catch(() => undefined);
-
   if (argv.includes("--selftest")) {
     // Print a config/provider summary and exit non-zero if nothing is usable.
     const rows = listProviderNames(ctx.config).map(providerReport);
@@ -1825,6 +1821,12 @@ async function main() {
   rlog("server", { event: "start", workspace: ctx.workspace.root, config: loaded.sources, stateless, pid: process.pid, version: VERSION });
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  // Only a long-lived server checks for updates, and only once it is answering. This used to
+  // run at the very top of main(), so every Stop hook - a fresh process at every turn end - and
+  // every one-shot CLI mode paid for it too, and the fetch inside was synchronous despite the
+  // "fire and forget" comment above it. A network that is down is not a reason for a session
+  // to wait, so nothing here is awaited.
+  setImmediate(() => void refreshUpdates().catch(() => undefined));
 }
 
 main().catch((e) => {

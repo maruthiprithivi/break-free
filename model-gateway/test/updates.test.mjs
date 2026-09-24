@@ -30,30 +30,30 @@ function pair() {
   return { upstream, clone };
 }
 
-test("a directory that is not a checkout is said to be, not guessed at", () => {
+test("a directory that is not a checkout is said to be, not guessed at", async () => {
   assert.equal(isCheckout(tmp()), false);
   assert.equal(isCheckout(""), false);
   const { clone } = pair();
   assert.equal(isCheckout(clone), true);
-  assert.equal(behindOrigin(tmp()).reason, "not a git checkout");
+  assert.equal((await behindOrigin(tmp())).reason, "not a git checkout");
 });
 
-test("behind is counted, and a failure to ask is never reported as nothing-new", () => {
+test("behind is counted, and a failure to ask is never reported as nothing-new", async () => {
   const { upstream, clone } = pair();
-  assert.equal(behindOrigin(clone).behind, 0, "level with origin");
+  assert.equal((await behindOrigin(clone)).behind, 0, "level with origin");
 
   fs.writeFileSync(path.join(upstream, "AGENTS.md"), "# rules CHANGED\n");
   git(upstream, ["commit", "-qam", "two"]);
   fs.writeFileSync(path.join(upstream, "readme.md"), "more prose\n");
   git(upstream, ["commit", "-qam", "three"]);
 
-  assert.equal(behindOrigin(clone).behind, 0, "without a fetch the clone only knows what it heard");
-  assert.equal(behindOrigin(clone, { fetch: true }).behind, 2);
+  assert.equal((await behindOrigin(clone)).behind, 0, "without a fetch the clone only knows what it heard");
+  assert.equal((await behindOrigin(clone, { fetch: true })).behind, 2);
 
   // An unreachable origin must be undefined, never 0. "I could not ask" and "there is nothing
   // new" are different answers and only one of them is good news.
   fs.rmSync(upstream, { recursive: true, force: true });
-  const broken = behindOrigin(clone, { fetch: true });
+  const broken = await behindOrigin(clone, { fetch: true });
   assert.equal(broken.behind, undefined);
   assert.match(broken.reason, /could not reach origin/);
 });
@@ -151,4 +151,26 @@ test("a job record written before it had an owner stays visible to everyone", as
   const r = new JobRegistry({ sessionDir, budget: {} }, false, "/repo/mine");
   // An upgrade must not make work someone is relying on disappear from their listing.
   assert.deepEqual(r.list({ mine: true }).map((j) => j.label), ["from before"]);
+});
+
+test("a fetch that never answers does not block the process while it waits", async () => {
+  // The old fetch was execFileSync inside an async function that ran before its first await,
+  // so "fire and forget" froze the event loop for the whole timeout - at startup and at every
+  // Stop hook. Here the remote is a listener that accepts and never speaks.
+  const net = await import("node:net");
+  const silent = net.createServer(() => {});
+  await new Promise((r) => silent.listen(0, "127.0.0.1", r));
+  const { clone } = pair();
+  git(clone, ["remote", "set-url", "origin", `http://127.0.0.1:${silent.address().port}/repo.git`]);
+
+  let ticks = 0;
+  const ticker = setInterval(() => { ticks += 1; }, 20);
+  const r = await behindOrigin(clone, { fetch: true, timeoutMs: 800 });
+  clearInterval(ticker);
+  silent.close();
+
+  assert.equal(r.behind, undefined, "an unreachable origin is never reported as nothing-new");
+  assert.match(r.reason, /could not reach origin/);
+  // A blocked event loop would have produced zero ticks across the whole wait.
+  assert.ok(ticks >= 10, `the event loop must keep running during the fetch, saw ${ticks} ticks`);
 });
