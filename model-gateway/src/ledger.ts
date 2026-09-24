@@ -17,6 +17,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { atomicWrite } from "./atomic.js";
 
 export const LEDGER_DIR = ".break-free";
 export const TASK_STATUSES = ["todo", "in_progress", "blocked", "review", "done", "cancelled"] as const;
@@ -237,14 +238,40 @@ export class Ledger {
     return `${prefix}${String(Math.max(0, ...ids) + 1).padStart(3, "0")}`;
   }
 
+  /**
+   * Create a task under a fresh id, claimed atomically.
+   *
+   * The id was "highest existing plus one", checked for existence and then written with a plain
+   * overwrite. Two gateways on one checkout - a run_plan and a task_create a millisecond apart -
+   * both chose T-037, both saw it free, and the second write silently replaced the first task.
+   * The file is now written complete to a temp name and hard-linked into place: link() fails if
+   * the name already exists, so exactly one creator gets each id, the loser takes the next one,
+   * and no reader ever sees a claimed but empty task.
+   */
   createTask(t: { id?: string; title: string; problem?: string; acceptance?: string; depends_on?: string[]; owner?: string; verify?: string; tags?: string[]; status?: TaskStatus; plan?: string; plan_task?: string; routing?: TaskRouting }): Task {
     this.ensure();
-    const id = t.id ?? this.nextId();
-    if (this.taskFileAnyLayer(id)) throw new Error(`task ${id} already exists`);
-    const task: Task = { id, title: t.title, status: t.status ?? "todo", owner: t.owner, depends_on: t.depends_on ?? [], tags: t.tags ?? [], verify: t.verify, plan: t.plan, plan_task: t.plan_task, created: now(), updated: now(), problem: t.problem, acceptance: t.acceptance, log: [`${now()} created`], ...t.routing };
-    this.saveTask(task);
-    this.render();
-    return task;
+    for (let attempt = 0; ; attempt += 1) {
+      const id = t.id ?? this.nextId();
+      if (this.taskFileAnyLayer(id)) {
+        if (t.id || attempt >= 20) throw new Error(`task ${id} already exists`);
+        continue;
+      }
+      const task: Task = { id, title: t.title, status: t.status ?? "todo", owner: t.owner, depends_on: t.depends_on ?? [], tags: t.tags ?? [], verify: t.verify, plan: t.plan, plan_task: t.plan_task, created: now(), updated: now(), problem: t.problem, acceptance: t.acceptance, log: [`${now()} created`], ...t.routing };
+      const file = this.taskFile(id);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, this.renderTask(task));
+      try {
+        fs.linkSync(tmp, file);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "EEXIST" || t.id || attempt >= 20) throw new Error(`task ${id} already exists`);
+        continue; // someone else took this id between our check and our claim
+      } finally {
+        fs.rmSync(tmp, { force: true });
+      }
+      this.render();
+      return task;
+    }
   }
 
   getTask(id: string): Task | undefined {
@@ -315,6 +342,13 @@ export class Ledger {
   }
 
   private saveTask(t: Task): void {
+    const file = this.taskFile(t.id);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // Through a rename, so another gateway listing tasks never reads half of this one.
+    atomicWrite(file, this.renderTask(t), 0o644);
+  }
+
+  private renderTask(t: Task): string {
     const meta = {
       id: t.id,
       title: t.title,
@@ -351,8 +385,7 @@ export class Ledger {
       ...t.log.map((l) => `- ${l}`),
       "",
     ].join("\n");
-    fs.mkdirSync(path.dirname(this.taskFile(t.id)), { recursive: true });
-    fs.writeFileSync(this.taskFile(t.id), renderFrontmatter(meta) + body);
+    return renderFrontmatter(meta) + body;
   }
 
   /** Tasks whose dependencies are all done and that are not finished themselves. */
