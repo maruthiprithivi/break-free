@@ -873,7 +873,7 @@ const COMMANDS: Record<string, { flags: string[]; usage: string }> = {
       "    it defaults to the current directory, and it will delete files the runs added.",
   },
   firstmate: {
-    flags: [],
+    flags: ["harness", "task", "fm-home", "json", "dry-run"],
     usage: "bf firstmate\n    Firstmate is the entry point; start your home directly.",
   },
   help: { flags: [], usage: "bf help" },

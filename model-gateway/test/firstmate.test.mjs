@@ -17,6 +17,13 @@ test("bf firstmate prints the migration notice and exits 2", () => {
   assert.equal(result.stderr.trim(), FIRSTMATE_DEPRECATION);
 });
 
+test("bf firstmate accepts legacy launch flags and still prints the migration notice", () => {
+  const args = [cli, "firstmate", "--harness", "claude", "--task", "x", "--fm-home", "/tmp/fm", "--dry-run", "--json"];
+  const result = spawnSync(process.execPath, args, { encoding: "utf8" });
+  assert.equal(result.status, 2);
+  assert.equal(result.stderr.trim(), FIRSTMATE_DEPRECATION);
+});
+
 test("legacy Firstmate config keys still load", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bf-fm-config-"));
   const file = path.join(dir, "config.json");
