@@ -48,7 +48,7 @@ export interface FleetSnapshot {
    * event is attributed to whichever gateway happened to observe it, so a crew session running
    * in one project blocks the turn-end guard of every other project on the machine.
    */
-  harness: Record<string, { state: string; digest: string; since: string; cwd?: string }>;
+  harness: Record<string, { state: string; digest: string; since: string; cwd?: string; idleReported?: string }>;
 }
 
 const QUEUE_FILE = "wake-queue.jsonl";
@@ -176,9 +176,19 @@ export function classify(prev: FleetSnapshot | undefined, next: FleetSnapshot, i
 
       if (digestUnchanged) {
         const since = prevH!.since;
+        // One idle period is one event. `since` only moves when the pane changes, so it names the
+        // period. This used to be derived afresh on every check, so once the owning session drained
+        // it the next check raised it again: a harness waiting at a permission prompt blocked that
+        // session at every turn end until someone killed it. The period is marked on the snapshot
+        // being built - `next` is what gets persisted - and carried until the pane changes.
+        if (prevH!.idleReported === since) {
+          h.idleReported = since;
+          continue;
+        }
         const idle = elapsedMs(next.ts, since);
         if (idle !== undefined && idle > idleMs) {
           events.push({ ts: next.ts, kind: "harness.idle", id, reason: `idle for ${idle}ms`, ...(h.cwd ? { workspace: h.cwd } : {}) });
+          h.idleReported = since;
         }
       }
     }
