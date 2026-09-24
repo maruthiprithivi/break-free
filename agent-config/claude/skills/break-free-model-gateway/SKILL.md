@@ -152,3 +152,9 @@ If a tool this skill mentions is not in your tool list, it is not missing:
 
 Arguments are validated exactly as they would be if the tool were advertised. Set
 `context.toolProfile` to `"full"` to advertise everything instead.
+
+Firstmate sessions are the exception. A crewmate (`FM_TASK_ID` set) or a Firstmate primary home
+sees only `bf_discover` and `bf_invoke`, and they reach a fixed set of operations: `panel`,
+`review` and `list_models` for a crewmate; model configuration, provider tests, logs and cost for
+a primary. Anything else is refused because Firstmate owns that work. Set `firstmate.mode` to
+`"off"` to keep standalone behaviour.
