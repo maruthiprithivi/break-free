@@ -54,6 +54,9 @@ break-free code that overlaps firstmate at all.
 
 ## 2. Where the distro lives, and how it updates
 
+> Superseded (#123): break-free no longer installs, pins, updates or launches Firstmate.
+> Firstmate owns its own lifecycle; this section is kept as the design record only.
+
 ### One managed location, not one per repo
 
 ```
