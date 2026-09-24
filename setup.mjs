@@ -144,7 +144,16 @@ async function build() {
   if (!fs.existsSync(path.join(GW, "package.json"))) { report.fail("model-gateway/package.json missing", GW, "run this script from the repository root"); return false; }
   report.info("npm install (first run can take a minute)…");
   prompter.pause();
-  const inst = await run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: GW, timeoutMs: 300_000 });
+  // `npm ci`, as CI does: it installs exactly the lockfile and never rewrites it. `npm install`
+  // rewrote a stale committed lockfile on every install, leaving the checkout dirty so that the
+  // next upstream lockfile change made every fast-forward update abort. If ci cannot be used - no
+  // lockfile, or one npm rejects - install normally, then put the lockfile back.
+  const hasLock = fs.existsSync(path.join(GW, "package-lock.json"));
+  let inst = hasLock ? await run("npm", ["ci", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: GW, timeoutMs: 300_000 }) : { ok: false, stderr: "" };
+  if (!inst.ok) {
+    inst = await run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: GW, timeoutMs: 300_000 });
+    if (inst.ok && hasLock && fs.existsSync(path.join(HERE, ".git"))) await run("git", ["checkout", "--", "model-gateway/package-lock.json"], { cwd: HERE, timeoutMs: 30_000 });
+  }
   if (!inst.ok) { prompter.resume(); report.fail("npm install failed", lastLines(inst.stderr), "check network/proxy; see setup.log"); report.log(inst.stderr); return false; }
   report.pass("npm install");
   const b = await run("npm", ["run", "build", "--silent"], { cwd: GW, timeoutMs: 300_000 });
@@ -1947,6 +1956,15 @@ function writeInstallState() {
 async function update() {
   report.section("Update");
   if (fs.existsSync(path.join(HERE, ".git"))) {
+    // A lockfile an older installer rewrote is not an edit, and left in place it makes every
+    // fast-forward abort. Put it back first; anything else modified is somebody's work and stays.
+    // Mirrors restoreBuildArtefacts() in model-gateway/src/updates.ts.
+    const st = await run("git", ["diff", "--name-only", "HEAD"], { cwd: HERE, timeoutMs: 30_000 });
+    const dirty = st.ok ? st.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+    if (dirty.length && dirty.every((f) => f === "model-gateway/package-lock.json")) {
+      await run("git", ["checkout", "--", ...dirty], { cwd: HERE, timeoutMs: 30_000 });
+      report.pass("restored the lockfile an earlier install had rewritten");
+    }
     const r = await run("git", ["pull", "--ff-only"], { cwd: HERE, timeoutMs: 180_000 });
     if (r.ok) report.pass("pulled latest source", lastLines(r.stdout) || "up to date");
     else report.warn("git pull failed", lastLines(r.stderr || r.stdout), "uncommitted changes or no upstream — continuing with the current files");

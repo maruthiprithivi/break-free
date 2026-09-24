@@ -82,6 +82,33 @@ function fetchOrigin(root: string, timeoutMs: number): Promise<boolean> {
   });
 }
 
+/**
+ * Files an install produces, and that no one edits by hand.
+ *
+ * `npm install` used to rewrite a stale committed lockfile, so every real install carried
+ * `M model-gateway/package-lock.json`, and the first upstream commit that changed the lockfile
+ * made every fast-forward abort - auto-update stopped for good and nothing said so. Anything
+ * else modified is somebody's work and is never touched. Mirrored in setup.mjs update().
+ */
+export const BUILD_ARTEFACTS = ["model-gateway/package-lock.json"];
+
+/**
+ * Put build artefacts back when they are the only reason a checkout is dirty.
+ *
+ * Returns true when the checkout is clean afterwards (or already was), false when something a
+ * person changed is in the way - in which case nothing is touched.
+ */
+export function restoreBuildArtefacts(root: string): boolean {
+  // Names only - no status prefix to parse. `status --porcelain` fed through this file's git(),
+  // which trims, lost the first line's leading space and so the first character of its path.
+  const changed = git(root, ["diff", "--name-only", "HEAD"]);
+  if (changed === undefined) return false;
+  const dirty = changed.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (dirty.length === 0) return true;
+  if (!dirty.every((f) => BUILD_ARTEFACTS.includes(f))) return false;
+  return git(root, ["checkout", "--", ...dirty]) !== undefined;
+}
+
 /** Cached so a session start is not a network round trip every time. */
 export function readCache(sessionDir: string): UpdateState | undefined {
   try {
