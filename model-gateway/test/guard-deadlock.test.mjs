@@ -22,6 +22,7 @@ import { appendEvents, pendingEvents, resolveJob, drainTo } from "../dist/fleet.
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const entry = path.join(here, "..", "dist", "index.js");
+const { FM_TASK_ID: _fmTaskId, ...standaloneEnv } = process.env;
 let tmp;
 
 /** A workspace with a config, and a pending job.done nobody has collected. */
@@ -49,7 +50,7 @@ test("every tool the blocking guard names is advertised under the compact profil
   const { ws, cfg, sessionDir } = stuckSession("compact");
   appendEvents(sessionDir, [{ ts: new Date().toISOString(), kind: "job.done", id: "delegate-stuck-1", reason: "done" }], ws);
 
-  const out = execFileSync(process.execPath, [entry, "--workspace", ws, "--config", cfg, "--fleet-check", "--hook"], { encoding: "utf8" });
+  const out = execFileSync(process.execPath, [entry, "--workspace", ws, "--config", cfg, "--fleet-check", "--hook"], { encoding: "utf8", env: standaloneEnv });
   const decision = JSON.parse(out.trim());
   assert.equal(decision.decision, "block", "a pending event must still block; this test is about the way out, not the guard");
   assert.match(decision.reason, /job\.done delegate-stuck-1/, "and it still names what is pending");
@@ -70,7 +71,7 @@ test("every tool the blocking guard names is advertised under the compact profil
 test("the guard names the call that actually drains, not just the tool", async () => {
   const { ws, cfg, sessionDir } = stuckSession();
   appendEvents(sessionDir, [{ ts: new Date().toISOString(), kind: "job.done", id: "delegate-stuck-2", reason: "done" }], ws);
-  const { reason } = JSON.parse(execFileSync(process.execPath, [entry, "--workspace", ws, "--config", cfg, "--fleet-check", "--hook"], { encoding: "utf8" }).trim());
+  const { reason } = JSON.parse(execFileSync(process.execPath, [entry, "--workspace", ws, "--config", cfg, "--fleet-check", "--hook"], { encoding: "utf8", env: standaloneEnv }).trim());
   // Without drain:true the events survive the call and the next turn blocks on the same list.
   assert.match(reason, /drain:true/, "following the instruction has to end the block");
 });
@@ -154,8 +155,21 @@ test("events are deduplicated per workspace, not across the machine", () => {
 // guard must not be able to trap a session. The harness sets stop_hook_active once it has
 // blocked on our account; ignoring it is what forced Claude Code to override the hook.
 
-const hook = (ws, cfg, input) =>
-  execFileSync(process.execPath, [entry, "--workspace", ws, "--config", cfg, "--fleet-check", "--hook"], { encoding: "utf8", ...(input === undefined ? {} : { input }) });
+const hook = (ws, cfg, input, env = standaloneEnv) =>
+  execFileSync(process.execPath, [entry, "--workspace", ws, "--config", cfg, "--fleet-check", "--hook"], { encoding: "utf8", env, ...(input === undefined ? {} : { input }) });
+
+test("Firstmate workers and primary homes leave a pending CI event to Firstmate", () => {
+  const { ws, cfg, sessionDir } = stuckSession();
+  appendEvents(sessionDir, [{ ts: new Date().toISOString(), kind: "ci.pending", id: "abc123", reason: "ci.pending" }], ws);
+
+  assert.match(hook(ws, cfg, ""), /"decision":"block"/, "standalone still blocks on the same event");
+  assert.equal(hook(ws, cfg, "", { ...standaloneEnv, FM_TASK_ID: "t2" }), "", "worker hook exits silently");
+
+  fs.writeFileSync(path.join(ws, "AGENTS.md"), "# Firstmate\n");
+  fs.mkdirSync(path.join(ws, "bin"));
+  fs.writeFileSync(path.join(ws, "bin", "fm-spawn.sh"), "#!/bin/sh\n");
+  assert.equal(hook(ws, cfg, ""), "", "primary hook exits silently");
+});
 
 test("the guard stands down once the harness says it has already blocked", () => {
   const { ws, cfg, sessionDir } = stuckSession();
