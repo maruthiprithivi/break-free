@@ -36,7 +36,7 @@ import { WorktreeRegistry, WORKTREE_STATUSES, isLinkedWorktree, shadowLedgerDir,
 import { LEDGER_DIR } from "./ledger.js";
 import { resolveVault, linkLedger, resolveGraph, type GraphProbe } from "./knowledge.js";
 import { status as firstmateStatus, planUpdate, updateCommand, parseUpdateSummary, updateAvailable, sessionLabel, FIRSTMATE_REPO, FIRSTMATE_LABEL, followablePin } from "./firstmate.js";
-import { behindOrigin, isCheckout, readCache, restoreBuildArtefacts, writeCache, cacheIsWarm, notice as updateNotice, type UpdateState, type ComponentUpdate } from "./updates.js";
+import { behindOrigin, isCheckout, readCache, writeCache, cacheIsWarm, notice as updateNotice, type UpdateState, type ComponentUpdate } from "./updates.js";
 import { estimateTokens, line as ctxLine, report as ctxReport, renderReport, type ContextLine } from "./context.js";
 import { runSteward, hygiene } from "./steward.js";
 import { DEFAULT_PRICING } from "./config.js";
@@ -243,10 +243,12 @@ async function refreshUpdates(): Promise<UpdateState | undefined> {
     const instructionChanges = name === "firstmate" && r.target ? planUpdate(root, r.target).instructionChanges : [];
     const before = r.behind;
 
-    if (cfg.apply && (r.behind ?? 0) > 0) {
-      // A lockfile the installer rewrote is not an edit; without this the merge below aborts for
-      // ever on every install that ever ran `npm install` against a stale lockfile.
-      if (name === "break-free") restoreBuildArtefacts(root);
+    // Only firstmate is fast-forwarded here. It is instructions and scripts, live the moment they
+    // change. break-free is a program: its source does nothing until the installer rebuilds it,
+    // so merging source alone left every session running the old build while the notice said
+    // "updated". It is reported, with the one command that actually updates it.
+    let applyFailed = false;
+    if (cfg.apply && name === "firstmate" && (r.behind ?? 0) > 0) {
       const from = execFileSyncQuiet(root, ["rev-parse", "HEAD"]);
       // Fast-forward only: a checkout someone has edited is left exactly as it is, because
       // discarding their work to install a version they did not ask for would be far worse
@@ -254,6 +256,7 @@ async function refreshUpdates(): Promise<UpdateState | undefined> {
       const ok = execFileSyncQuiet(root, ["merge", "--ff-only", r.target ?? "origin/HEAD"]) !== undefined;
       const to = execFileSyncQuiet(root, ["rev-parse", "HEAD"]);
       if (ok && from && to && from !== to) applied.push({ name, from, to });
+      else applyFailed = true;
     }
     // The update IS the approval - the user asked for both to update themselves - so the pin
     // moves with it. It never did: the pin check then read the gateway's own fast-forward as
@@ -261,7 +264,7 @@ async function refreshUpdates(): Promise<UpdateState | undefined> {
     // was behind, because machines already stuck that way are sitting at origin with a stale pin.
     if (name === "firstmate" && cfg.apply && r.target) followPin(root, r.target);
     const after = cfg.apply ? (await behindOrigin(root)).behind : before;
-    components.push({ name, root, behind: after ?? before, instructionChanges, reason: r.reason });
+    components.push({ name, root, behind: after ?? before, instructionChanges, reason: r.reason, ...(applyFailed ? { applyFailed } : {}) });
   }
 
   const state: UpdateState = { checkedAt: new Date().toISOString(), components, applied };

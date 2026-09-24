@@ -28,6 +28,8 @@ export interface ComponentUpdate {
   instructionChanges: string[];
   /** Why no answer, when there is none. */
   reason?: string;
+  /** A fast-forward was attempted and did not land - local changes in the way. */
+  applyFailed?: boolean;
 }
 
 export interface UpdateState {
@@ -153,7 +155,17 @@ export function notice(state: UpdateState | undefined): string | undefined {
     parts.push(`${a.name} updated ${a.from.slice(0, 8)} -> ${a.to.slice(0, 8)}${changed}. Roll back with: git -C ${c?.root ?? "<root>"} reset --hard ${a.from.slice(0, 12)}`);
   }
   for (const c of waiting) {
-    parts.push(`${c.name} is ${c.behind} commit(s) behind origin${c.name === "firstmate" && c.instructionChanges.length ? `, touching ${c.instructionChanges.length} instruction file(s)` : ""}. Take it with: node setup.mjs --update`);
+    const touching = c.name === "firstmate" && c.instructionChanges.length ? `, touching ${c.instructionChanges.length} instruction file(s)` : "";
+    if (c.name === "break-free") {
+      // A program, not instructions: new source does nothing until it is rebuilt, and only the
+      // installer rebuilds it. Moving the source alone - what the background update used to do -
+      // changed nothing that runs and then reported "updated".
+      parts.push(`break-free is ${c.behind} commit(s) behind origin. Update with: node ${path.join(c.root, "setup.mjs")} --update (it rebuilds; new sessions use it, open ones keep the old version until restarted)`);
+    } else if (c.applyFailed) {
+      parts.push(`${c.name} is ${c.behind} commit(s) behind origin${touching}, and could not be fast-forwarded: ${c.root} has local changes. Nothing was touched.`);
+    } else {
+      parts.push(`${c.name} is ${c.behind} commit(s) behind origin${touching}. Take it with: node setup.mjs --update`);
+    }
   }
   return parts.length ? parts.join("\n") : undefined;
 }

@@ -106,7 +106,22 @@ test("an applied update names the rollback, and a waiting one names the command"
     components: [{ name: "break-free", root: "/bf", behind: 3, instructionChanges: [] }],
   });
   assert.match(waiting, /break-free is 3 commit\(s\) behind/);
-  assert.match(waiting, /node setup\.mjs --update/);
+  assert.match(waiting, /node \/bf\/setup\.mjs --update/, "an absolute path: the notice is read from inside some other project");
+  assert.match(waiting, /rebuilds/, "and it says why this is the command, not a background merge");
+});
+
+test("break-free is never reported as updated by a source-only merge", () => {
+  // It used to be fast-forwarded in the background with no rebuild, so every session kept
+  // running the old build while the notice announced "break-free updated".
+  const n = notice({ checkedAt: "x", applied: [], components: [{ name: "break-free", root: "/bf", behind: 2, instructionChanges: [] }] });
+  assert.doesNotMatch(n, /updated/);
+});
+
+test("a fast-forward that could not land says so, instead of looking like nothing happened", () => {
+  const n = notice({ checkedAt: "x", applied: [], components: [{ name: "firstmate", root: "/fm", behind: 4, instructionChanges: ["AGENTS.md"], applyFailed: true }] });
+  assert.match(n, /could not be fast-forwarded/);
+  assert.match(n, /\/fm has local changes/);
+  assert.match(n, /Nothing was touched/, "and that the local changes are safe");
 });
 
 // --- whose job is it ------------------------------------------------------------------
