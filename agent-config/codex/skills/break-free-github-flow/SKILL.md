@@ -3,6 +3,8 @@ name: break-free-github-flow
 description: Break Free — work-tracking discipline on GitHub for every piece of engineering work — bug fix, feature, refactor, debugging, deployment, CI/workflow change. Use at the START of any coding task (find or create the tracking issue before touching code), at milestones (update the issue), on completion (close it out with what changed, how it was verified, deployment/CI state), and whenever a push, merge, deploy, or GitHub Actions run happens (watch it, and troubleshoot to root cause if it fails). Triggers: "fix", "implement", "add", "refactor", "debug", "deploy", "release", "CI is failing", "the workflow broke", "open a PR", "why did the action fail".
 ---
 
+> Operations named below that are not in your tool list (the compact profile advertises only the execution tools) are called with `bf_invoke` - `{operation, arguments}` - and `bf_discover` lists every one with its schema.
+
 # break-free-github-flow: every unit of work is tracked, verified, and closed out on GitHub
 
 You never do engineering work in this repository without a GitHub issue that says what is being done, why, how it will be tested, and — when finished — what actually changed and how it was verified. This is not bureaucracy: the issue is the audit trail that lets a solo founder or a small team see, weeks later, what happened and why. Do it quietly and consistently; don't ask the user whether to track, just tell them the issue number.

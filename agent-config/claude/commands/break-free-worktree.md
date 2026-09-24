@@ -3,6 +3,8 @@ description: Multi-agent worktrees — list what every worktree/agent is doing, 
 argument-hint: [list|claim|create <branch> <purpose>|handoff <note>|status <name> <status> <reason>]
 allowed-tools: mcp__break-free-gateway, Bash(git worktree *), Bash(git status *), Bash(git branch *)
 ---
+
+> Operations named below that are not in your tool list (the compact profile advertises only the execution tools) are called with `bf_invoke` - `{operation, arguments}` - and `bf_discover` lists every one with its schema.
 Follow the `break-free-model-gateway` skill's "Parallel agents & worktrees" section for: `$ARGUMENTS`
 
 - no args / `list` → `worktree_list` and summarise: who is where, status + reason, open PRs/issues, last hand-offs; flag inactive/abandoned ones and anything merged that can be removed.
