@@ -324,6 +324,18 @@ const ShapeSchema = z.enum(["ship", "scout"]).optional().describe(
   "Task shape: 'ship' uses the requested capabilities (default); 'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
 );
 
+/**
+ * The same field, described once.
+ *
+ * delegate, supervise and run_plan's per-task schema share six fields, and zod-to-json-schema
+ * inlines a field's description everywhere it is used - so the same six paragraphs were sent
+ * three times, 2,094 bytes every turn of every session, for nothing: the model reads all three
+ * schemas side by side. delegate carries the full text and is always advertised; the others
+ * point at it. The enum values and types stay in every schema, so nothing a caller needs in order
+ * to call correctly is hidden - only the repeated prose.
+ */
+const asDelegate = (field: string) => `As delegate.${field}.`;
+
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
 const json = (o: unknown) => text(JSON.stringify(o, null, 2));
 const fail = (e: unknown) => ({ content: [{ type: "text" as const, text: `ERROR: ${(e as Error).message ?? String(e)}` }], isError: true });
@@ -829,12 +841,12 @@ server.registerTool("supervise", {
     worker: z.string().optional().describe("Default: config.defaults.model"),
     supervisor: z.string().optional().describe("Default: config.defaults.supervisor"),
     max_rounds: z.number().int().min(1).max(10).optional().describe("Default 3"),
-    capabilities: CapabilitySchema.optional(),
-    shape: ShapeSchema,
-    min_tier: MinTierSchema,
-    allow_downgrade: AllowDowngradeSchema,
-    stall_abort_ms: StallAbortMsSchema,
-    stall_warn_ms: StallWarnMsSchema,
+    capabilities: CapabilitySchema.optional().describe(asDelegate("capabilities")),
+    shape: ShapeSchema.describe(asDelegate("shape")),
+    min_tier: MinTierSchema.describe(asDelegate("min_tier")),
+    allow_downgrade: AllowDowngradeSchema.describe(asDelegate("allow_downgrade")),
+    stall_abort_ms: StallAbortMsSchema.describe(asDelegate("stall_abort_ms")),
+    stall_warn_ms: StallWarnMsSchema.describe(asDelegate("stall_warn_ms")),
     acceptance_criteria: z.string().optional(),
     context: z.string().optional(),
     session_id: z.string().optional(),
@@ -914,10 +926,10 @@ const PlanTaskSchema = z.object({
   id: z.string().describe("Short unique id, e.g. 'api', 'tests', 'docs' — or an existing ledger task id (T-007) to run that task"),
   task: z.string().describe("Self-contained instructions for this worker: scope, files, constraints, expected output"),
   model: z.string().optional().describe("Alias/provider/model for this task (default config.defaults.model). Mix vendors freely."),
-  capabilities: CapabilitySchema.optional(),
-  shape: ShapeSchema,
-  min_tier: MinTierSchema,
-  allow_downgrade: AllowDowngradeSchema,
+  capabilities: CapabilitySchema.optional().describe(asDelegate("capabilities")),
+  shape: ShapeSchema.describe(asDelegate("shape")),
+  min_tier: MinTierSchema.describe(asDelegate("min_tier")),
+  allow_downgrade: AllowDowngradeSchema.describe(asDelegate("allow_downgrade")),
   depends_on: z.array(z.string()).optional().describe("Task ids that must finish first; their reports are given to this worker as context"),
   context: z.string().optional(),
   role: z.string().optional(),
@@ -931,13 +943,13 @@ const PlanTaskSchema = z.object({
   review: z.boolean().optional().describe("Independent review of this task's result (overrides plan-level review)"),
   session_id: z.string().optional(),
   max_iterations: z.number().int().positive().optional(),
-  stall_abort_ms: StallAbortMsSchema,
-  stall_warn_ms: StallWarnMsSchema,
+  stall_abort_ms: StallAbortMsSchema.describe(asDelegate("stall_abort_ms")),
+  stall_warn_ms: StallWarnMsSchema.describe(asDelegate("stall_warn_ms")),
 });
 
 server.registerTool("run_plan", {
   title: "Run a plan: many workers in parallel with dependencies",
-  description: "Run delegated tasks as a dependency graph: independent ones in parallel, each with its own model, capabilities, acceptance criteria and verify command. A task whose prerequisite failed is skipped, and a dependant is given its prerequisites' reports. Use async for long plans. Per task, shape:'ship' uses the requested capabilities (default); shape:'scout' is a read-only investigation whose capabilities are forced to ['read'] regardless of what was asked for.",
+  description: "Run delegated tasks as a dependency graph: independent ones in parallel, each with its own model, capabilities, acceptance criteria and verify command. A task whose prerequisite failed is skipped, and a dependant is given its prerequisites' reports. Use async for long plans.",
   inputSchema: {
     goal: z.string().optional().describe("One line describing what the whole plan achieves (recorded in the ledger)"),
     tasks: z.array(PlanTaskSchema).min(1).max(40),
