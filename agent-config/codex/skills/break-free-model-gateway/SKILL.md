@@ -139,7 +139,7 @@ Update to the latest Break Free at any time by running `node <source_dir>/setup.
 break-free advertises execution and its lifecycle permanently — `delegate`, `run_plan`,
 `supervise`, `review`, the `job_*` tools, `ledger_resume`, `list_models`. Everything else named
 in this skill — worktrees, tasks, notes, provider and alias configuration, sessions, harnesses,
-cost, the steward, firstmate — is registered but not advertised, because a tool's schema is sent
+cost, the steward — is registered but not advertised, because a tool's schema is sent
 to you in every session and re-sent every turn whether or not you call it.
 
 If a tool this skill mentions is not in your tool list, it is not missing:
