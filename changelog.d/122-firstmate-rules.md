@@ -1,0 +1,1 @@
+- **Firstmate sessions keep their own authority.** Global gateway and issue tracking rules defer to Firstmate, and installation removes the obsolete crew rule from agent instructions.

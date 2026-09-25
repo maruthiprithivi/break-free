@@ -738,60 +738,6 @@ async function installFirstmate(answers) {
     writeSecret(CFG_FILE, JSON.stringify(cfg, null, 2) + "\n");
     report.pass("firstmate pinned", `${head.slice(0, 12)}`);
 
-    // The standing rule is what makes an ORDINARY session firstmate-aware. A harness reads
-    // AGENTS.md from where it starts, so a session started in a project would never see the
-    // distro — but it always reads these, which is how the delegation rule already works.
-    const rule = (f) => fs.readFileSync(path.join(AGENT_CFG, f), "utf8").replaceAll("__FM_ROOT__", root);
-    // Everything that is not Claude Code reads AGENTS.md conventions, and the Codex snippet names
-    // no harness-specific server — so it IS the generic form, used verbatim.
-    const genericFm = rule(path.join("codex", "AGENTS.firstmate.snippet"));
-    // Written for every agent the install touched. A clone nothing points at is a clone
-    // nothing uses: the rule IS the integration for an ordinary session.
-    if (scope.claude !== "none" || scope.project) {
-      appendOnce(path.join(home(), ".claude", "CLAUDE.md"), FM_MARKER, rule(path.join("claude", "CLAUDE.firstmate.snippet")))
-        ? report.pass("firstmate rule added to ~/.claude/CLAUDE.md") : report.pass("~/.claude/CLAUDE.md already has the firstmate rule");
-    }
-    if (scope.codex !== "none" || scope.project) {
-      appendOnce(path.join(home(), ".codex", "AGENTS.md"), FM_MARKER, genericFm)
-        ? report.pass("firstmate rule added to ~/.codex/AGENTS.md") : report.pass("~/.codex/AGENTS.md already has the firstmate rule");
-    }
-    // …and for every OTHER agent the install wired, in the instruction file installExtraAgents
-    // already wrote for it. Verified on a real machine: an omp user had the MCP server, both
-    // skills and the delegation rule but no firstmate rule at all, so the distro sat there
-    // unmentioned — the rule is the entire integration for an ordinary session.
-    const fmUser = ["user", "both"].includes(state.extraScope);
-    const fmProject = ["project", "both"].includes(state.extraScope) && !!scope.project;
-    const fmOwned = [], fmAider = [], fmNoFile = [];
-    for (const k of state.extraAgents ?? []) {
-      const a = EXTRA_AGENTS[k];
-      const added = [], present = [];
-      let aiderOnly = false;
-      try {
-        for (const [t, base, isUser] of [[a.user, null, true], [a.project, scope.project, false]]) {
-          if (!t?.rules || (isUser ? !fmUser : !fmProject)) continue;
-          // aider keeps its rule as a `read:` entry in a YAML config, not an instruction file: this
-          // text does not fit there, and an existing read: list is the user's. Left alone on purpose.
-          if (t.rulesKind === "aider") { aiderOnly = true; continue; }
-          const abs = isUser ? expandHome(t.rules) : path.join(base, t.rules);
-          // kiro/agy/cline own their rule file outright (installExtraAgents rewrites it from
-          // scratch): append INTO it, never truncate it. A missing rule is a re-run away; a file
-          // this installer owns for another purpose is not recoverable.
-          if (appendOnce(abs, FM_MARKER, genericFm)) { added.push(t.rules); if (t.rulesOwned) fmOwned.push(t.rules); }
-          else present.push(t.rules);
-        }
-        if (added.length) report.pass(`${a.label}: firstmate rule`, added.join(", "));
-        else if (present.length) report.pass(`${a.label}: firstmate rule already in`, present.join(", "));
-        else if (aiderOnly && !fmAider.includes(a.label)) fmAider.push(a.label);
-        else if (!aiderOnly) fmNoFile.push(a.label);
-      } catch (e) {
-        // One harness's file refusing a write must not cost the other twenty their rule.
-        report.warn(`${a.label}: firstmate rule not written`, `${String(e.message).slice(0, 160)} — the distro is installed; re-run or add the rule by hand`);
-      }
-    }
-    if (fmOwned.length) report.info(`appended, not rewritten: ${fmOwned.join(", ")} — the install owns those files, so the rule is a second block inside them`);
-    if (fmAider.length) report.info(`firstmate rule NOT written for ${fmAider.join(", ")}: aider reads AGENTS.md through a \`read:\` key in .aider.conf.yml, which this text does not fit — add the distro to that list by hand if you want it`);
-    if (fmNoFile.length) report.info(`firstmate rule not placed for ${fmNoFile.join(", ")}: no instruction file at the installed scope — a user-scope install (or the repo's AGENTS.md) is what reaches them`);
-    report.info("any session now knows firstmate is there; `bf firstmate` starts a dedicated firstmate-led one");
   } catch (e) {
     // A WARN, not a FAIL. break-free works without firstmate, and turning a break-free
     // install red because GitHub was unreachable blames the wrong thing — the user sees a
@@ -1170,6 +1116,7 @@ async function installExtraAgents() {
   if (!picked.length) { report.skip("no other agents selected"); return; }
   const wantU = ["user", "both"].includes(state.extraScope);
   const wantP = ["project", "both"].includes(state.extraScope) && scope.project;
+  stripLegacyFirstmateRules(scope.project);
   const gfRule = state.githubFlow === "full";
   for (const k of picked) {
     const a = EXTRA_AGENTS[k];
@@ -1235,7 +1182,7 @@ function uninstallExtraAgents(projectDir) {
         if (t.rules && fs.existsSync(abs(t.rules))) {
           if (t.rulesKind === "aider") { upsertAiderRead(abs(t.rules), true); removed.push(`${a.label} rules`); }
           else if (t.rulesOwned) { if (fs.readFileSync(abs(t.rules), "utf8").includes(GENERIC_MARKER_NOTE)) { fs.rmSync(abs(t.rules)); removed.push(`${a.label} rules`); } }
-          else { stripBlock(abs(t.rules), GW_MARKER); stripBlock(abs(t.rules), GF_MARKER); stripBlock(abs(t.rules), FM_MARKER); removed.push(`${a.label} rules`); }
+          else { stripBlock(abs(t.rules), GW_MARKER); stripBlock(abs(t.rules), GF_MARKER); removed.push(`${a.label} rules`); }
         }
       } catch (e) { report.warn(`${a.label}: could not fully remove`, String(e.message).slice(0, 160)); }
     };
@@ -1494,15 +1441,46 @@ function stripBlock(file, marker) {
   const cur = fs.readFileSync(file, "utf8");
   const i = cur.indexOf(marker);
   if (i < 0) return;
-  // remove from the "## Work tracking" heading through the end of that paragraph
+  // Stop at either a blank line or the next heading; older snippets have no blank separator.
   const start = cur.lastIndexOf("\n## ", i);
-  const end = cur.indexOf("\n\n", i);
-  fs.writeFileSync(file, (cur.slice(0, start < 0 ? i : start) + (end < 0 ? "" : cur.slice(end))).replace(/\n{3,}/g, "\n\n"));
+  const paragraphEnd = cur.indexOf("\n\n", i);
+  const headingEnd = cur.indexOf("\n## ", i);
+  const end = [paragraphEnd, headingEnd].filter((n) => n >= 0).sort((a, b) => a - b)[0];
+  fs.writeFileSync(file, (cur.slice(0, start < 0 ? i : start) + (end === undefined ? "" : cur.slice(end))).replace(/\n{3,}/g, "\n\n"));
 }
 const GF_MARKER = "## Work tracking (break-free-github-flow)";
 const GW_MARKER = "## Delegating to other models (break-free-model-gateway)";
 const FM_MARKER = "## Crew, worktrees and merge authority (firstmate)";
 const LEGACY_GF_MARKER = "## Work tracking (github-flow)";
+
+function stripLegacyFirstmateRules(project) {
+  const files = new Set([
+    path.join(home(), ".claude", "CLAUDE.md"),
+    path.join(home(), ".codex", "AGENTS.md"),
+  ]);
+  if (project) {
+    files.add(path.join(project, "CLAUDE.md"));
+    files.add(path.join(project, "AGENTS.md"));
+  }
+  for (const agent of Object.values(EXTRA_AGENTS)) {
+    if (agent.user.rules && agent.user.rulesKind !== "aider") files.add(expandHome(agent.user.rules));
+    if (project && agent.project.rules && agent.project.rulesKind !== "aider") files.add(path.join(project, agent.project.rules));
+  }
+  for (const file of files) {
+    if (!fs.existsSync(file)) continue;
+    let content = fs.readFileSync(file, "utf8");
+    let changed = false;
+    while (true) {
+      const afterNewline = content.indexOf(`\n${FM_MARKER}`);
+      const start = content.startsWith(FM_MARKER) ? 0 : afterNewline < 0 ? -1 : afterNewline + 1;
+      if (start < 0) break;
+      const next = content.indexOf("\n## ", start + FM_MARKER.length);
+      content = content.slice(0, start) + (next < 0 ? "" : content.slice(next + 1));
+      changed = true;
+    }
+    if (changed) fs.writeFileSync(file, content);
+  }
+}
 
 async function installGithubFlow() {
   report.section("GitHub work tracking (optional)");
@@ -1800,6 +1778,7 @@ function fixForReason(p, st, cfg) {
 // ---- uninstall ------------------------------------------------------------
 async function uninstall() {
   report.section("Uninstall");
+  stripLegacyFirstmateRules(projectDir);
   if (targets.claude) {
     await run("claude", ["mcp", "remove", "--scope", "user", LEGACY_CLAUDE_SERVER], { timeoutMs: 30_000 });
     const r = await run("claude", ["mcp", "remove", "--scope", "user", CLAUDE_SERVER], { timeoutMs: 30_000 });
@@ -1811,9 +1790,6 @@ async function uninstall() {
     }
     stripBlock(path.join(home(), ".claude", "CLAUDE.md"), GF_MARKER);
     stripBlock(path.join(home(), ".claude", "CLAUDE.md"), GW_MARKER);
-    // Leaving this behind would point an agent at a distro that is no longer there, which is
-    // worse than never having written it: the rule reads as an instruction, not a suggestion.
-    stripBlock(path.join(home(), ".claude", "CLAUDE.md"), FM_MARKER);
     try { upsertStopHook(path.join(home(), ".claude", "settings.json"), true); report.pass("removed turn-end guard (Stop hook)"); }
     catch (e) { report.warn("could not remove turn-end guard (Stop hook)", String(e.message).slice(0, 160)); }
     report.pass("removed Claude skills (model-gateway, github-flow) + commands + CLAUDE.md rule");
@@ -1822,7 +1798,6 @@ async function uninstall() {
     const toml = path.join(home(), ".codex", "config.toml");
     if (fs.existsSync(toml)) { backup(toml); fs.writeFileSync(toml, removeTomlTable(removeTomlTable(fs.readFileSync(toml, "utf8"), `mcp_servers.${CODEX_SERVER}`), `mcp_servers.${LEGACY_CODEX_SERVER}`)); report.pass(`removed ${CODEX_SERVER} table from ~/.codex/config.toml`); }
     for (const sk of [GW_SKILL, GF_SKILL, ...LEGACY_SKILLS]) fs.rmSync(path.join(home(), ".agents", "skills", sk), { recursive: true, force: true });
-    stripBlock(path.join(home(), ".codex", "AGENTS.md"), FM_MARKER);
     stripBlock(path.join(home(), ".codex", "AGENTS.md"), GF_MARKER);
     stripBlock(path.join(home(), ".codex", "AGENTS.md"), GW_MARKER);
     report.pass("removed Codex skills + AGENTS.md rules");
@@ -2022,6 +1997,7 @@ function finish() {
     if (!(await prompter.confirm("continue_after_preflight_fail", "Preflight has failures. Continue anyway?", false))) return finish();
   }
   await chooseScope();
+  stripLegacyFirstmateRules(scope.project);
   if (scope.claude === "none" && scope.codex === "none") report.warn("nothing selected for Claude Code or Codex", "only the gateway itself will be built and configured");
   await removeLegacyNames();
   const built = await build();
