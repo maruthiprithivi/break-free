@@ -1,0 +1,1 @@
+- **The Stop hook defers to Firstmate.** Firstmate worker and primary sessions can end turns without break-free blocking on fleet events; standalone sessions keep their existing guard.

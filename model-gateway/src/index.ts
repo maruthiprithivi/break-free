@@ -1808,6 +1808,14 @@ async function main() {
 
   if (argv.includes("--fleet-check")) {
     if (argv.includes("--hook")) {
+      // Firstmate owns turn-end decisions in its workers and primary homes.
+      const primary = (() => {
+        try {
+          return fs.existsSync(path.join(ctx.workspace.root, "bin", "fm-spawn.sh"))
+            && fs.readFileSync(path.join(ctx.workspace.root, "AGENTS.md"), "utf8").startsWith("# Firstmate");
+        } catch { return false; }
+      })();
+      if (process.env.FM_TASK_ID !== undefined || primary) process.exit(0);
       // Claude Code Stop-hook contract: block -> one line of JSON on stdout;
       // allow -> no output at all. Nothing may be written to stderr.
       const stderrWrite = process.stderr.write;

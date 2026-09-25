@@ -336,6 +336,11 @@ liveness, not failure) so the two hooks cannot both hold a turn over "something 
 running". Deciding this needs firstmate's hook contract read first; until then, do not remove
 break-free's hook, because a missing guard is worse than a redundant one.
 
+**Status (#121):** partly resolved. `--fleet-check --hook` now prints nothing and exits 0 in a
+Firstmate worker (`FM_TASK_ID` set) or primary home (`bin/fm-spawn.sh` plus an `AGENTS.md`
+starting `# Firstmate`), even with `ci.pending` queued, so firstmate's hook is the sole arbiter
+there. Standalone sessions keep the full blocking guard.
+
 ### 4b. Two project-mode vocabularies
 
 firstmate: `no-mistakes` / `direct-PR` / `local-only` (+ `yolo`) **[given]**. break-free:
@@ -384,8 +389,8 @@ Honest list, no recommendations smuggled in.
 3. **Who may approve a pin, and where the approval is recorded.** One developer, or a CI job?
    Is approval a commit to a pin file, a ledger note, or an interactive prompt?
 4. **Whether break-free's Stop hook keeps any blocking power at all** — needs firstmate's hook
-   contract read first (§4a). Also unresolved: what happens when firstmate's hook is absent
-   (a repo where the distro was never installed) — does break-free's hook then block alone?
+   contract read first (§4a). Firstmate sessions are settled by #121 (break-free's hook stands
+   down); standalone sessions still block alone, and whether that blocking should narrow is open.
 5. **The `merge-tree` output parse.** Exact form of the conflicted-path list on the installed
    git, and whether a tree oid may be passed where a commit-ish is expected (needed for the
    cumulative simulation in §3b). Not verified here; it is a one-test question before
