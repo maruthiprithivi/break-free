@@ -1,16 +1,5 @@
 /**
- * Keeping break-free and firstmate current.
- *
- * Both are git checkouts, so "is there a new version" is a question about origin, and taking
- * one is a fast-forward. The two are not the same kind of thing, though, and the difference
- * decides the design:
- *
- *   break-free is a PROGRAM. Its new bytes do nothing until the next process starts, so
- *   updating the source under a running gateway is safe and simply lands next session.
- *
- *   firstmate is INSTRUCTIONS. Its new bytes are read by an agent during the session, so an
- *   update changes what the agent does, in flight. That is why the previous pin is recorded
- *   before anything moves: rolling back has to be one command, not an archaeology exercise.
+ * Checking whether break-free is current.
  *
  * Checking is cheap but not free — it talks to a remote — so the result is cached and a check
  * is skipped while that cache is warm. A session start must never block on the network.
@@ -20,11 +9,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 export interface ComponentUpdate {
-  name: "break-free" | "firstmate";
+  name: "break-free";
   root: string;
   /** Commits behind origin. 0 means current; undefined means the question could not be asked. */
   behind?: number;
-  /** Files that steer an agent, when this is firstmate. Empty for a program. */
+  /** Kept for compatibility with existing update cache files. */
   instructionChanges: string[];
   /** Why no answer, when there is none. */
   reason?: string;
@@ -35,7 +24,7 @@ export interface ComponentUpdate {
 export interface UpdateState {
   checkedAt: string;
   components: ComponentUpdate[];
-  /** Applied in this check, with the pin each one moved from, so a rollback is one command. */
+  /** Kept for compatibility with existing update cache files. */
   applied: { name: string; from: string; to: string }[];
 }
 
@@ -143,29 +132,11 @@ export function cacheIsWarm(state: UpdateState | undefined, intervalHours: numbe
  */
 export function notice(state: UpdateState | undefined): string | undefined {
   if (!state) return undefined;
-  const applied = state.applied ?? [];
-  const waiting = (state.components ?? []).filter((c) => (c.behind ?? 0) > 0);
+  const waiting = (state.components ?? []).filter((c) => c.name === "break-free" && (c.behind ?? 0) > 0);
   const parts: string[] = [];
-
-  for (const a of applied) {
-    const c = state.components.find((x) => x.name === a.name);
-    const changed = c?.instructionChanges.length
-      ? ` — it changed ${c.instructionChanges.length} file(s) that steer an agent: ${c.instructionChanges.slice(0, 3).join(", ")}`
-      : "";
-    parts.push(`${a.name} updated ${a.from.slice(0, 8)} -> ${a.to.slice(0, 8)}${changed}. Roll back with: git -C ${c?.root ?? "<root>"} reset --hard ${a.from.slice(0, 12)}`);
-  }
   for (const c of waiting) {
-    const touching = c.name === "firstmate" && c.instructionChanges.length ? `, touching ${c.instructionChanges.length} instruction file(s)` : "";
-    if (c.name === "break-free") {
-      // A program, not instructions: new source does nothing until it is rebuilt, and only the
-      // installer rebuilds it. Moving the source alone - what the background update used to do -
-      // changed nothing that runs and then reported "updated".
-      parts.push(`break-free is ${c.behind} commit(s) behind origin. Update with: node ${path.join(c.root, "setup.mjs")} --update (it rebuilds; new sessions use it, open ones keep the old version until restarted)`);
-    } else if (c.applyFailed) {
-      parts.push(`${c.name} is ${c.behind} commit(s) behind origin${touching}, and could not be fast-forwarded: ${c.root} has local changes. Nothing was touched.`);
-    } else {
-      parts.push(`${c.name} is ${c.behind} commit(s) behind origin${touching}. Take it with: node setup.mjs --update`);
-    }
+    // New source does nothing until the installer rebuilds it.
+    parts.push(`break-free is ${c.behind} commit(s) behind origin. Update with: node ${path.join(c.root, "setup.mjs")} --update (it rebuilds; new sessions use it, open ones keep the old version until restarted)`);
   }
   return parts.length ? parts.join("\n") : undefined;
 }

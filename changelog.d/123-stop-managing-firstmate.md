@@ -1,0 +1,1 @@
+- Stop cloning, pinning, updating, and launching Firstmate; direct users to their Firstmate home and future dispatch profiles.

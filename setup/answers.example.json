@@ -34,6 +34,5 @@
   "harness_profiles": true,
   "harness_shell_rc": true,
   "extra_agents": "detected",
-  "extra_scope": "user",
-  "firstmate": false
+  "extra_scope": "user"
 }
