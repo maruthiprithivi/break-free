@@ -50,6 +50,7 @@ import { PROVIDER_CATALOG, isLocalEndpoint } from "./providers.js";
 import { LANES, LANE_SPEC, effectiveLaneMap, routePlanTasks, resolveEngine } from "./routing.js";
 import { listModels as listJevModels, probe as probeJev } from "./jev.js";
 import { Logger, analyze, callContext, setLogger, summarizeArgs, log as rlog, type LogEvent } from "./logger.js";
+import { detectFirstmateMode } from "./fmmode.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -96,6 +97,7 @@ function reload(): Ctx {
 }
 
 let ctx = reload();
+const sessionMode = detectFirstmateMode(ctx.workspace.root, ctx.config.firstmate.mode);
 
 // ------------------------------------------------------------ fleet
 
@@ -408,6 +410,10 @@ const SERVER_INSTRUCTIONS = [
   "Give workers least privilege: capabilities are explicit, and 'github' and 'run' are not defaults.",
   "Long-horizon work: call ledger_resume first. The board and the notes live in .break-free/ and are committed with the repo, so decisions and gotchas reach every worker and survive this session.",
 ];
+const FIRSTMATE_WORKER_INSTRUCTIONS = "You are a Firstmate crewmate; do the work yourself. break-free is only your model transport; use panel or review only when your brief asks.";
+const FIRSTMATE_PRIMARY_INSTRUCTIONS = "Firstmate owns intake, dispatch, supervision, and delivery. Use break-free for model configuration and cost visibility; dispatch a crewmate on break-free/<alias> for project work.";
+const sessionInstructions = sessionMode === "worker" ? FIRSTMATE_WORKER_INSTRUCTIONS
+  : sessionMode === "primary" ? FIRSTMATE_PRIMARY_INSTRUCTIONS : SERVER_INSTRUCTIONS.join("\n");
 
 const toolSchemaCost: { name: string; tokens: number }[] = [];
 
@@ -425,7 +431,7 @@ function schemaText(shape: Record<string, unknown> | undefined): string {
 }
 
 const server = new McpServer({ name: "break-free-gateway", version: VERSION }, {
-  instructions: SERVER_INSTRUCTIONS.join("\n"),
+  instructions: sessionInstructions,
 });
 
 /**
@@ -451,6 +457,19 @@ const RESIDENT_TOOLS = new Set([
   ...HOOK_TOOLS,
   "bf_discover", "bf_invoke",
 ]);
+const FIRSTMATE_RESIDENT_TOOLS = new Set(["bf_discover", "bf_invoke"]);
+const WORKER_OPERATIONS = new Set(["panel", "review", "list_models"]);
+const PRIMARY_OPERATIONS = new Set([
+  "cost_report", "list_models", "list_providers", "test_provider", "configure_alias",
+  "configure_provider", "configure_fallback", "configure_budget", "gateway_logs", "context_report",
+]);
+const allowedOperations = sessionMode === "worker" ? WORKER_OPERATIONS
+  : sessionMode === "primary" ? PRIMARY_OPERATIONS : undefined;
+function operationRefusal(operation: string): string {
+  return sessionMode === "worker"
+    ? `Firstmate owns this crewmate's work; ${operation} is unavailable here. Report to your Firstmate owner.`
+    : `Firstmate owns dispatch; ${operation} is unavailable here. Dispatch a crewmate on break-free/<alias>.`;
+}
 
 /** Every registered operation, whether or not its schema is advertised. */
 const operations = new Map<string, { def: Record<string, unknown>; handler: (a: Record<string, unknown>) => unknown }>();
@@ -460,7 +479,9 @@ const operations = new Map<string, { def: Record<string, unknown>; handler: (a: 
 const registerToolRaw = server.registerTool.bind(server);
 (server as unknown as { registerTool: typeof registerToolRaw }).registerTool = ((name: string, def: Record<string, unknown>, handler: unknown) => {
   operations.set(name, { def, handler: handler as (a: Record<string, unknown>) => unknown });
-  const compact = ctx.config.context.toolProfile === "compact" && !RESIDENT_TOOLS.has(name);
+  const compact = sessionMode === "standalone"
+    ? ctx.config.context.toolProfile === "compact" && !RESIDENT_TOOLS.has(name)
+    : !FIRSTMATE_RESIDENT_TOOLS.has(name);
   if (compact) return undefined as unknown as ReturnType<typeof registerToolRaw>;
   const text = `${name}${def.title ?? ""}${def.description ?? ""}${schemaText(def.inputSchema as Record<string, unknown> | undefined)}`;
   toolSchemaCost.push({ name, tokens: estimateTokens(text) });
@@ -1423,11 +1444,13 @@ function contextLines(): ContextLine[] {
   const toolTokens = toolSchemaCost.reduce((n, t) => n + t.tokens, 0);
   const heaviest = toolSchemaCost.slice().sort((a, b) => b.tokens - a.tokens).slice(0, 3).map((t) => `${t.name} ${t.tokens}`).join(", ");
   lines.push({ surface: "mcp tool schemas", bytes: toolTokens * 3, tokens: toolTokens, always: true, detail: `${toolSchemaCost.length} tools; heaviest: ${heaviest}` });
-  lines.push(ctxLine("server instructions", SERVER_INSTRUCTIONS.join(" "), true));
-  try {
-    const brief = ctx.ledger.exists() ? ctx.ledger.resumeBrief() : "";
-    lines.push(ctxLine("ledger resume brief", brief, true, "injected into the lead and every worker"));
-  } catch { /* a ledger that will not render is a separate problem, not a budget one */ }
+  lines.push(ctxLine("server instructions", sessionMode === "standalone" ? SERVER_INSTRUCTIONS.join(" ") : sessionInstructions, true));
+  if (sessionMode === "standalone") {
+    try {
+      const brief = ctx.ledger.exists() ? ctx.ledger.resumeBrief() : "";
+      lines.push(ctxLine("ledger resume brief", brief, true, "injected into the lead and every worker"));
+    } catch { /* a ledger that will not render is a separate problem, not a budget one */ }
+  }
   return lines;
 }
 
@@ -1689,14 +1712,18 @@ server.registerTool("harness_list", {
  */
 server.registerTool("bf_discover", {
   title: "List the operations that are not advertised permanently",
-  description: "break-free keeps execution and its lifecycle typed and resident, and moves everything else — worktrees, the ledger and its tasks and notes, provider and alias configuration, sessions, harnesses, cost, routing, the steward, firstmate — behind this. Call it with no argument for the list, or with `operation` for that one's full schema, then call it through bf_invoke. Nothing is unreachable; it is simply not spent on every turn.",
+  description: sessionMode === "standalone"
+    ? "break-free keeps execution and its lifecycle typed and resident, and moves everything else — worktrees, the ledger and its tasks and notes, provider and alias configuration, sessions, harnesses, cost, routing, the steward, firstmate — behind this. Call it with no argument for the list, or with `operation` for that one's full schema, then call it through bf_invoke. Nothing is unreachable; it is simply not spent on every turn."
+    : "List the operations available to this Firstmate session, or request one operation's schema.",
   inputSchema: {
     operation: z.string().optional().describe("Return this operation's full input schema instead of the list."),
     match: z.string().optional().describe("Substring filter over names and titles, e.g. 'worktree' or 'note'."),
   },
 }, async (a) => {
-  const hidden = [...operations.entries()].filter(([n]) => !RESIDENT_TOOLS.has(n));
+  const hidden = [...operations.entries()].filter(([n]) =>
+    allowedOperations ? allowedOperations.has(n) : !RESIDENT_TOOLS.has(n));
   if (a.operation) {
+    if (allowedOperations && !allowedOperations.has(a.operation)) return fail(new Error(operationRefusal(a.operation)));
     const op = operations.get(a.operation);
     if (!op) return fail(new Error(`no operation "${a.operation}". Call bf_discover with no argument for the list.`));
     return json({ operation: a.operation, title: op.def.title, description: op.def.description, input_schema: zodToJsonSchema(z.object((op.def.inputSchema ?? {}) as z.ZodRawShape)) });
@@ -1710,12 +1737,15 @@ server.registerTool("bf_discover", {
 
 server.registerTool("bf_invoke", {
   title: "Call an operation returned by bf_discover",
-  description: "Run one of the operations bf_discover lists. Arguments are validated against that operation's own schema by the same code path a permanently advertised tool uses, so an invalid call fails the same way rather than reaching the handler.",
+  description: sessionMode === "standalone"
+    ? "Run one of the operations bf_discover lists. Arguments are validated against that operation's own schema by the same code path a permanently advertised tool uses, so an invalid call fails the same way rather than reaching the handler."
+    : "Run an operation allowed for this Firstmate session, with its validated arguments.",
   inputSchema: {
     operation: z.string().describe("Name from bf_discover."),
     arguments: z.record(z.unknown()).optional().describe("That operation's arguments. Get its schema from bf_discover {operation}."),
   },
 }, async (a) => {
+  if (allowedOperations && !allowedOperations.has(a.operation)) return fail(new Error(operationRefusal(a.operation)));
   const op = operations.get(a.operation);
   if (!op) return fail(new Error(`no operation "${a.operation}". Call bf_discover for the list.`));
   if (RESIDENT_TOOLS.has(a.operation) && a.operation.startsWith("bf_")) return fail(new Error(`${a.operation} cannot invoke itself`));
